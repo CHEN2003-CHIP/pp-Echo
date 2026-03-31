@@ -40,6 +40,7 @@ app = typer.Typer(help="Personal Python coding agent for Windows 10.") if typer 
 
 PLAN_MARKERS = {
     "pending": "[ ]",
+    "awaiting_approval": "[?]",
     "in_progress": "[~]",
     "completed": "[x]",
     "failed": "[!]",
@@ -58,6 +59,9 @@ def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentSessi
         system_prompt=record.system_prompt,
         confirm_callback=confirm_tool_call,
         initial_compaction=record.compaction,
+        initial_pending_tool_calls=record.pending_tool_calls,
+        initial_pending_plan_token=record.pending_plan_token,
+        require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
     )
     agent.state.messages = list(record.messages)
     return agent
@@ -86,6 +90,10 @@ def format_plan_step(step: PlanStep) -> str:
     return f"{marker} {step.title}{tool_part}"
 
 
+def load_pending_action(workspace: Path, token: str) -> dict:
+    return pending_action_store_for(workspace).load(token)
+
+
 def render_event(event: AgentEvent) -> None:
     if event.type == "message_delta" and event.delta:
         console.print(event.delta, end="")
@@ -98,7 +106,11 @@ def render_event(event: AgentEvent) -> None:
         else:
             console.print(f"Planner update: {format_plan_step(event.plan_step)}")
     elif event.type == "planner_end":
-        console.print("=== Executor ===")
+        token = event.details.get("token")
+        if event.details.get("requires_approval"):
+            console.print(f"Planner paused. Approve with /approve {token} or reject with /reject {token}")
+        else:
+            console.print("=== Executor ===")
     elif event.type == "tool_start":
         console.print(f"Start {event.tool_name} {event.tool_args}")
     elif event.type == "tool_end":
@@ -119,6 +131,9 @@ def render_settings(agent: AgentSession, workspace: Path) -> None:
         "model": agent.llm_client.model.model,
         "enable_thinking": agent.llm_client.model.enable_thinking,
         "shell_timeout_seconds": settings.tool_policy.shell_timeout_seconds,
+        "confirm_high_risk_plan": settings.tool_policy.confirm_high_risk_plan,
+        "pending_plan_token": agent.state.pending_plan_token,
+        "pending_tool_call_count": len(agent.state.pending_tool_calls),
         "summary_length": len(agent.state.compaction.summary),
         "summarized_message_count": agent.state.compaction.summarized_message_count,
     }
@@ -145,12 +160,17 @@ def compact_text(value: str, limit: int = 90) -> str:
 
 
 def action_target(item: dict) -> str:
+    if item["action_type"] == "planner_approval":
+        return f"session={item.get('details', {}).get('session_id', '')}"
     return item.get("target_path") or item.get("command") or ""
 
 
 def approval_preview(item: dict, limit: int = 8) -> str:
     if item["action_type"] == "run_shell":
         return compact_text(item.get("command") or "")
+    if item["action_type"] == "planner_approval":
+        summary = item.get("details", {}).get("summary", []) or []
+        return "\n".join(summary[:limit]) if summary else "Planner approval with no summary available."
     diff_text = item.get("details", {}).get("diff", "") or ""
     lines = [line for line in diff_text.splitlines() if line.strip()]
     return "\n".join(lines[:limit]) if lines else "No diff preview."
@@ -176,6 +196,46 @@ def render_approval_panel(workspace: Path) -> None:
     console.print("\n".join(lines))
 
 
+def approve_or_execute_pending_action(workspace: Path, token: str, render: bool = True) -> dict:
+    payload = load_pending_action(workspace, token)
+    if payload["action_type"] == "planner_approval":
+        session_id = payload.get("details", {}).get("session_id")
+        if not session_id:
+            raise ValueError("planner_approval token is missing session_id")
+        agent = build_agent(workspace, session_id=session_id)
+        agent.subscribe(render_event)
+        events = agent.approve_pending_plan(token)
+        if render:
+            console.print()
+        return {"token": token, "action_type": payload["action_type"], "session_id": session_id, "event_count": len(events), "result": "approved_and_executed"}
+    registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
+    result = registry.execute("approve_pending_action", {"token": token})
+    if render:
+        console.print(result.content)
+        if result.details:
+            console.print(json.dumps(result.details, ensure_ascii=False, indent=2))
+    return {"token": token, "action_type": payload["action_type"], "result": result.content}
+
+
+def reject_pending_action(workspace: Path, token: str, render: bool = True) -> dict:
+    payload = load_pending_action(workspace, token)
+    if payload["action_type"] == "planner_approval":
+        session_id = payload.get("details", {}).get("session_id")
+        if not session_id:
+            raise ValueError("planner_approval token is missing session_id")
+        agent = build_agent(workspace, session_id=session_id)
+        agent.reject_pending_plan(token)
+        message = f"Rejected planner approval {token} for session {session_id}"
+        if render:
+            console.print(message)
+        return {"token": token, "action_type": payload["action_type"], "result": message}
+    registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
+    result = registry.execute("reject_pending_action", {"token": token})
+    if render:
+        console.print(result.content)
+    return {"token": token, "action_type": payload["action_type"], "result": result.content}
+
+
 def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
     if raw == "/quit":
         return "quit"
@@ -189,6 +249,32 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
         return "handled"
     if raw == "/approvals":
         render_approval_panel(workspace)
+        return "handled"
+    if raw.startswith("/approve "):
+        token = raw.split(" ", 1)[1].strip()
+        payload = load_pending_action(workspace, token)
+        if payload["action_type"] == "planner_approval":
+            session_id = payload.get("details", {}).get("session_id")
+            if session_id != agent.session_id:
+                console.print(f"Planner token belongs to session {session_id}. Use /resume {session_id} first.")
+                return "handled"
+            agent.approve_pending_plan(token)
+            console.print()
+        else:
+            approve_or_execute_pending_action(workspace, token, render=True)
+        return "handled"
+    if raw.startswith("/reject "):
+        token = raw.split(" ", 1)[1].strip()
+        payload = load_pending_action(workspace, token)
+        if payload["action_type"] == "planner_approval":
+            session_id = payload.get("details", {}).get("session_id")
+            if session_id != agent.session_id:
+                console.print(f"Planner token belongs to session {session_id}. Use /resume {session_id} first.")
+                return "handled"
+            agent.reject_pending_plan(token)
+            console.print(f"Rejected planner approval {token}")
+        else:
+            reject_pending_action(workspace, token, render=True)
         return "handled"
     if raw.startswith("/model "):
         agent.llm_client.model.model = raw.split(" ", 1)[1].strip()
@@ -206,6 +292,8 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
         agent = build_agent(workspace, session_id=session_id)
         agent.subscribe(render_event)
         console.print(f"pp-agent session={agent.session_id} model={agent.llm_client.model.model}")
+        if agent.state.pending_plan_token:
+            console.print(f"Pending planner gate: {agent.state.pending_plan_token}. Use /approve {agent.state.pending_plan_token} or /reject {agent.state.pending_plan_token}.")
         while True:
             raw = prompt_session.prompt("\n> ").strip() if prompt_session else input("\n> ").strip()
             if not raw:
@@ -235,7 +323,7 @@ def run_main(prompt: str, workspace: Path, session_id: Optional[str] = None) -> 
 
 def sessions_list_main(workspace: Path) -> None:
     store = session_store_for(workspace)
-    payload = [{"id": session.id, "parent_id": session.parent_id, "model": session.model.model, "updated_at": session.updated_at, "summarized_message_count": session.compaction.summarized_message_count} for session in store.list()]
+    payload = [{"id": session.id, "parent_id": session.parent_id, "model": session.model.model, "updated_at": session.updated_at, "summarized_message_count": session.compaction.summarized_message_count, "pending_plan_token": session.pending_plan_token, "pending_tool_call_count": len(session.pending_tool_calls)} for session in store.list()]
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
@@ -264,36 +352,24 @@ def approvals_show_main(workspace: Path, token: str) -> None:
 
 
 def approvals_approve_main(workspace: Path, token: str) -> None:
-    registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
-    result = registry.execute("approve_pending_action", {"token": token})
-    console.print(result.content)
-    if result.details:
-        console.print(json.dumps(result.details, ensure_ascii=False, indent=2))
+    approve_or_execute_pending_action(workspace, token, render=True)
 
 
 def approvals_reject_main(workspace: Path, token: str) -> None:
-    registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
-    result = registry.execute("reject_pending_action", {"token": token})
-    console.print(result.content)
+    reject_pending_action(workspace, token, render=True)
 
 
 def approvals_approve_all_main(workspace: Path) -> None:
     store = pending_action_store_for(workspace)
     tokens = [item["token"] for item in store.list()]
-    registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
-    results = []
-    for token in tokens:
-        results.append({"token": token, "result": registry.execute("approve_pending_action", {"token": token}).content})
+    results = [approve_or_execute_pending_action(workspace, token, render=False) for token in tokens]
     console.print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
 def approvals_reject_all_main(workspace: Path) -> None:
     store = pending_action_store_for(workspace)
     tokens = [item["token"] for item in store.list()]
-    registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
-    results = []
-    for token in tokens:
-        results.append({"token": token, "result": registry.execute("reject_pending_action", {"token": token}).content})
+    results = [reject_pending_action(workspace, token, render=False) for token in tokens]
     console.print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
@@ -317,11 +393,11 @@ def workflow_repo_main(workspace: Path, query: Optional[str] = None, token: Opti
         preview = registry.execute("preview_pending_action", {"token": token})
         target_path = preview.details.get("target_path") or target_path
         payload["executor"].append({"step": "Preview staged action", "status": "done", "content": preview.content, "details": preview.details})
-        payload["next_actions"].append("Check the preview diff or command before approving it.")
+        payload["next_actions"].append("Check the preview diff, shell command, or planner summary before approving it.")
         if auto_apply:
-            payload["planner"].append({"step": "Apply the approved action after preview passes review.", "status": "planned"})
-            applied = registry.execute("approve_pending_action", {"token": token})
-            payload["executor"].append({"step": "Apply staged action", "status": "done", "content": applied.content, "details": applied.details})
+            payload["planner"].append({"step": "Approve the token and let execution continue.", "status": "planned"})
+            applied = approve_or_execute_pending_action(workspace, token, render=False)
+            payload["executor"].append({"step": "Approve and execute staged action", "status": "done", "details": applied})
             payload["next_actions"].append("Inspect git status and git diff after applying the action.")
         else:
             payload["planner"].append({"step": f"Approve token {token} when the preview looks correct.", "status": "pending"})
@@ -336,7 +412,7 @@ def workflow_repo_main(workspace: Path, query: Optional[str] = None, token: Opti
     payload["executor"].append({"step": "Inspect git status", "status": "done", "content": status.content, "details": status.details})
     payload["executor"].append({"step": "Inspect git diff", "status": "done", "content": diff.content, "details": diff.details})
     if not token:
-        payload["next_actions"].append("Stage an edit or shell action, then re-run workflow repo with --token.")
+        payload["next_actions"].append("Stage an edit, shell action, or planner approval, then re-run workflow repo with --token.")
     if staged_only and not target_path:
         payload["next_actions"].append("No target path found for staged-only diff; provide --path-filter or a token tied to a file action.")
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -344,7 +420,21 @@ def workflow_repo_main(workspace: Path, query: Optional[str] = None, token: Opti
 
 def config_show_main(workspace: Path) -> None:
     settings = Settings.load(workspace)
-    payload = {"workspace": str(settings.workspace), "global_dir": str(settings.global_dir), "project_dir": str(settings.project_dir), "base_url": settings.provider.base_url, "model": settings.model.model, "enable_thinking": settings.model.enable_thinking, "shell_timeout_seconds": settings.tool_policy.shell_timeout_seconds, "tool_confirmation": {"write_file": settings.tool_policy.confirm_write_file, "edit_file": settings.tool_policy.confirm_edit_file, "run_shell": settings.tool_policy.confirm_run_shell}}
+    payload = {
+        "workspace": str(settings.workspace),
+        "global_dir": str(settings.global_dir),
+        "project_dir": str(settings.project_dir),
+        "base_url": settings.provider.base_url,
+        "model": settings.model.model,
+        "enable_thinking": settings.model.enable_thinking,
+        "shell_timeout_seconds": settings.tool_policy.shell_timeout_seconds,
+        "tool_confirmation": {
+            "write_file": settings.tool_policy.confirm_write_file,
+            "edit_file": settings.tool_policy.confirm_edit_file,
+            "run_shell": settings.tool_policy.confirm_run_shell,
+            "high_risk_plan": settings.tool_policy.confirm_high_risk_plan,
+        },
+    }
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

@@ -1,8 +1,9 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 import pytest
 
 from storage.settings import ToolPolicyConfig
+from tools.pending_actions import PendingActionStore
 from tools.registry import ToolRegistry
 
 
@@ -64,6 +65,23 @@ def test_staged_shell_and_reject_flow(tmp_path: Path) -> None:
 
     rejected = registry.execute("reject_pending_action", {"token": token})
     assert token in rejected.content
+
+
+def test_preview_pending_planner_approval(tmp_path: Path) -> None:
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = store.stage(
+        action_type="planner_approval",
+        details={
+            "session_id": "session-1",
+            "summary": ["Stage or execute write_file [write_file]", "Apply approved action via approve_pending_action [approve_pending_action]"],
+        },
+    )
+    registry = ToolRegistry(tmp_path)
+
+    preview = registry.execute("preview_pending_action", {"token": staged["token"]})
+
+    assert "write_file" in preview.content
+    assert "approve_pending_action" in preview.content
 
 
 def test_repo_aware_tools_on_non_git_repo(tmp_path: Path) -> None:

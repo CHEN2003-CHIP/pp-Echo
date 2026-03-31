@@ -9,6 +9,7 @@
 - Transport | 接口: Alibaba Bailian OpenAI-compatible `chat/completions`
 - Thinking | 思考模式: disabled by default, `enable_thinking=false`
 - Runtime style | 运行时风格: session-based runtime, staged approvals, repo-aware workflow, planner -> executor split
+- Safety style | 安全风格: high-risk plans pause for approval before executor continues
 - CLI style | 命令行风格: chat-first, approval-first, Windows-friendly
 
 ## Architecture | 架构
@@ -21,11 +22,12 @@ flowchart LR
   PLAN --> CTX["System Prompt + Summary + Recent Messages / 系统提示 + 摘要 + 最近消息"]
   CTX --> LLM["Qwen3.5-Plus"]
   LLM --> DECIDE["Text Response or Tool Calls / 文本回复或工具调用"]
-  DECIDE --> EXEC["Executor / 执行层"]
-  EXEC --> TOOLS["Read Search Grep Stage Edit Shell Git"]
-  TOOLS --> APPROVALS["Pending Approvals / 待审批队列"]
+  DECIDE --> GATE{"High-risk plan? / 是否高风险计划?"}
+  GATE -->|"No"| EXEC["Executor / 执行层"]
+  GATE -->|"Yes"| APPROVALS["Planner Approval Queue / Planner 审批队列"]
   APPROVALS --> EXEC
-  EXEC --> REPO["Git Status + Diff / Git 状态与 Diff"]
+  EXEC --> TOOLS["Read Search Grep Stage Edit Shell Git"]
+  TOOLS --> REPO["Git Status + Diff / Git 状态与 Diff"]
   REPO --> CLI
 ```
 
@@ -38,22 +40,27 @@ flowchart LR
 - 计划层：先展示准备做什么。
 - Executor: shows actual tool starts, results, and failures.
 - 执行层：再展示工具真正开始执行、成功或失败。
-- This makes chat output easier to review before and during action.
-- 这样在 chat 模式里更容易看清“计划”和“落地动作”是不是一致。
+- High-risk plans can now pause at the planner layer and wait for approval.
+- 高风险计划现在可以在 planner 层暂停，等待批准后再进入 executor。
 
-Example chat output:
-示例输出：
+### Planner Approval Gate | Planner 审批门
+
+When the model proposes a high-risk tool call such as `write_file`, `edit_file`, `run_shell`, or `approve_pending_action`, the planner can pause first.
+当模型提出高风险工具调用，比如 `write_file`、`edit_file`、`run_shell` 或 `approve_pending_action` 时，planner 会先暂停。
+
+In chat mode, you will see a planner token and can explicitly continue or stop:
+在 chat 模式里，你会看到 planner token，可以显式继续或终止：
 
 ```text
 === Planner ===
 Planned steps:
   [ ] Stage or execute write_file [write_file]
-=== Executor ===
-Planner update: [~] Stage or execute write_file [write_file]
-Start write_file {'path': 'a.txt', 'content': 'hi'}
-DONE write_file: Staged file write for approval.
-Planner update: [x] Stage or execute write_file [write_file]
+Planner update: [?] Stage or execute write_file [write_file]
+Planner paused. Approve with /approve 1234... or reject with /reject 1234...
 ```
+
+After approval, the same session resumes and the executor runs the pending tool calls.
+批准后，会由同一个 session 恢复，并继续执行挂起的工具调用。
 
 ## Quick Start | 快速开始
 
@@ -98,7 +105,8 @@ Create `.pp-agent/config.json` if you want project-level overrides.
   "tool_confirmation": {
     "write_file": true,
     "edit_file": true,
-    "run_shell": true
+    "run_shell": true,
+    "high_risk_plan": true
   }
 }
 ```
@@ -108,6 +116,8 @@ Create `.pp-agent/config.json` if you want project-level overrides.
 - `/settings`: show active runtime settings / 查看当前运行配置
 - `/session`: show current session id / 查看当前 session id
 - `/approvals`: show a friendly approval queue panel / 查看友好的审批面板
+- `/approve <token>`: approve a pending planner gate or staged action / 批准 planner gate 或 staged action
+- `/reject <token>`: reject a pending planner gate or staged action / 拒绝 planner gate 或 staged action
 - `/model <name>`: switch model / 切换模型
 - `/new`: start a new session / 新建会话
 - `/resume <id>`: resume a session / 恢复会话
@@ -115,8 +125,8 @@ Create `.pp-agent/config.json` if you want project-level overrides.
 
 ## Approval Queue | 审批队列
 
-The approval queue supports summary view, preview, and batch actions.
-审批队列支持摘要、预览和批量处理。
+The approval queue supports summary view, preview, planner gates, and batch actions.
+审批队列支持摘要、预览、planner gate 和批量处理。
 
 ```powershell
 set PYTHONPATH=src
@@ -131,9 +141,19 @@ python -m agent_cli.main approvals reject-all
 
 ### What Goes Into the Queue | 哪些动作会进入审批队列
 
+- planner approvals for high-risk plans / 高风险计划的 planner 审批
 - staged file writes / staged 文件写入
 - staged file edits / staged 文件编辑
 - staged shell commands / staged shell 命令
+
+### Approval Behavior | 审批行为
+
+- Approving a `planner_approval` token resumes the original session and then runs the pending tool calls.
+- 批准 `planner_approval` token 会恢复原始 session，并继续执行挂起的工具调用。
+- Rejecting a `planner_approval` token clears the pending plan without executing it.
+- 拒绝 `planner_approval` token 会清空挂起计划，不执行任何工具。
+- Approving a staged file or shell token behaves the same as before.
+- 批准普通 staged 文件或 shell token 的行为和之前一致。
 
 ## Repo-aware Workflow | 面向仓库的工作流
 
@@ -174,10 +194,10 @@ The workflow output is split into three sections:
   较老的对话会被压缩成摘要，最近消息保留原文。
 - `write_file` and `edit_file` stage by default.
   `write_file` 和 `edit_file` 默认先进入 staged 状态。
-- `preview_pending_action` lets you inspect the staged diff or command.
-  `preview_pending_action` 用于预览 staged diff 或命令。
-- `approve_pending_action` applies file changes or shell commands after approval.
-  `approve_pending_action` 会在审批后真正应用文件修改或执行 shell 命令。
+- `preview_pending_action` lets you inspect the staged diff, shell command, or planner summary.
+  `preview_pending_action` 用于预览 staged diff、shell 命令或 planner 摘要。
+- `approve_pending_action` still applies file changes or shell commands after approval.
+  `approve_pending_action` 仍负责在审批后真正应用文件修改或执行 shell 命令。
 
 ### Diff Format | Diff 编辑格式
 
@@ -193,16 +213,16 @@ new text
 
 1. Run `python -m agent_cli.main config show`.
    运行 `python -m agent_cli.main config show`。
-2. Confirm the model is `qwen3.5-plus`.
-   确认模型是 `qwen3.5-plus`。
-3. Open chat and run `/approvals`.
-   进入 chat 后运行 `/approvals`。
-4. Stage a file edit, preview it, then approve it.
-   先 stage 一个文件修改，再预览，再批准。
-5. Run `workflow repo` with a query or token.
+2. Confirm the model is `qwen3.5-plus` and `high_risk_plan` is enabled.
+   确认模型是 `qwen3.5-plus`，并且 `high_risk_plan` 已启用。
+3. Open chat and trigger a high-risk request.
+   进入 chat 后触发一次高风险请求。
+4. Confirm the planner pauses and shows `/approve <token>` or `/reject <token>`.
+   确认 planner 会暂停，并显示 `/approve <token>` 或 `/reject <token>`。
+5. Approve the token and verify the executor runs afterwards.
+   批准 token，确认 executor 会在之后继续执行。
+6. Run `workflow repo` with a query or token.
    用 query 或 token 跑一次 `workflow repo`。
-6. Verify planner and executor are shown separately.
-   确认 planner 和 executor 已经分开显示。
 
 ## Test | 测试
 
@@ -219,6 +239,7 @@ python -m pytest -q
 python -m agent_cli.main --help
 python -m agent_cli.main approvals summary
 python -m agent_cli.main workflow repo --query "AgentSession"
+python -m agent_cli.main config show
 ```
 
 If `PP_AGENT_API_KEY` is missing or the network is blocked, the CLI should show a clear error instead of a Python stack trace.

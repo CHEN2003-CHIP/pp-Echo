@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -11,7 +11,8 @@ from agent_core.types import ModelConfig, ProviderConfig
 
 DEFAULT_SYSTEM_PROMPT = """You are a careful personal coding agent running on Windows 10.
 Use tools when needed, prefer reading before editing, and explain actions clearly.
-For file changes, prefer staging a diff preview first and only applying it after confirmation."""
+For file changes, prefer staging a diff preview first and only applying it after confirmation.
+For high-risk plans, pause at the planner layer and wait for approval before executing them."""
 
 
 class ToolPolicyConfig(BaseModel):
@@ -19,6 +20,7 @@ class ToolPolicyConfig(BaseModel):
     confirm_write_file: bool = True
     confirm_edit_file: bool = True
     confirm_run_shell: bool = True
+    confirm_high_risk_plan: bool = True
 
 
 class Settings(BaseModel):
@@ -97,3 +99,5 @@ class Settings(BaseModel):
             self.tool_policy.confirm_edit_file = bool(tool_confirm["edit_file"])
         if "run_shell" in tool_confirm:
             self.tool_policy.confirm_run_shell = bool(tool_confirm["run_shell"])
+        if "high_risk_plan" in tool_confirm:
+            self.tool_policy.confirm_high_risk_plan = bool(tool_confirm["high_risk_plan"])

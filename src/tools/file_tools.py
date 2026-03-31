@@ -109,6 +109,9 @@ class PreviewPendingActionTool(BaseTool):
         payload = store.load(arguments["token"])
         if payload["action_type"] == "run_shell":
             content = payload.get("command") or ""
+        elif payload["action_type"] == "planner_approval":
+            summary = payload.get("details", {}).get("summary", []) or []
+            content = "\n".join(summary) or "Planner approval with no summary available."
         else:
             content = payload.get("details", {}).get("diff", "") or "No diff available."
         return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=content, details=payload)

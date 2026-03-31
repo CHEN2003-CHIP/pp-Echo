@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import time
@@ -8,7 +8,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from agent_core.types import ChatMessage, CompactionState, ModelConfig
+from agent_core.types import ChatMessage, CompactionState, ModelConfig, ToolCall
 
 
 class SessionMetadata(BaseModel):
@@ -19,6 +19,8 @@ class SessionMetadata(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     system_prompt: str
     compaction: CompactionState = Field(default_factory=CompactionState)
+    pending_tool_calls: list[ToolCall] = Field(default_factory=list)
+    pending_plan_token: Optional[str] = None
 
 
 class SessionRecord(BaseModel):
@@ -44,6 +46,14 @@ class SessionRecord(BaseModel):
     @property
     def compaction(self) -> CompactionState:
         return self.metadata.compaction
+
+    @property
+    def pending_tool_calls(self) -> list[ToolCall]:
+        return self.metadata.pending_tool_calls
+
+    @property
+    def pending_plan_token(self) -> Optional[str]:
+        return self.metadata.pending_plan_token
 
 
 class SessionStore:
@@ -108,5 +118,7 @@ class SessionStore:
         forked = self.create(source.system_prompt, source.model)
         forked.metadata.parent_id = source.id
         forked.metadata.compaction = source.compaction.model_copy(deep=True)
+        forked.metadata.pending_tool_calls = [call.model_copy(deep=True) for call in source.pending_tool_calls]
+        forked.metadata.pending_plan_token = source.pending_plan_token
         forked.messages = list(source.messages)
         return forked

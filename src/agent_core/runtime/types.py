@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
@@ -12,6 +12,7 @@ class AgentState(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     messages: list[ChatMessage] = Field(default_factory=list)
     pending_tool_calls: list[ToolCall] = Field(default_factory=list)
+    pending_plan_token: Optional[str] = None
     compaction: CompactionState = Field(default_factory=CompactionState)
     is_streaming: bool = False
     error_message: Optional[str] = None
@@ -21,7 +22,7 @@ class PlanStep(BaseModel):
     title: str
     tool_name: Optional[str] = None
     tool_args: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    status: Literal["pending", "awaiting_approval", "in_progress", "completed", "failed"] = "pending"
 
 
 class AgentEvent(BaseModel):
