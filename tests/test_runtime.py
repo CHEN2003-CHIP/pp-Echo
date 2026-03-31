@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+﻿from collections.abc import Iterator
 from pathlib import Path
 
 from agent_core.runtime.session import AgentSession
@@ -41,23 +41,55 @@ class NoopLLMClient:
         yield {"text": "ok", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
-def test_agent_session_executes_tool_loop(tmp_path: Path) -> None:
+class FailingToolLLMClient:
+    def __init__(self) -> None:
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        yield {
+            "text": "",
+            "tool_calls": [{"id": "call-1", "name": "edit_file", "arguments_chunk": '{"path":"missing.txt","diff":"<<<<<<< SEARCH\\nold\\n=======\\nnew\\n>>>>>>> REPLACE","apply":true}'}],
+            "finish_reason": "tool_calls",
+            "raw": {},
+        }
+
+
+def build_agent(tmp_path: Path, llm_client, compact_after_messages: int = 8) -> AgentSession:
     store = SessionStore(tmp_path / "sessions")
     record = store.create("system", ModelConfig())
-    agent = AgentSession(
-        llm_client=FakeLLMClient(),
+    return AgentSession(
+        llm_client=llm_client,
         tool_registry=ToolRegistry(tmp_path),
         session_store=store,
         session_id=record.id,
         system_prompt=record.system_prompt,
         confirm_callback=lambda _name, _args: True,
+        compact_after_messages=compact_after_messages,
     )
+
+
+def test_agent_session_executes_tool_loop(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, FakeLLMClient())
 
     events = agent.prompt("create a file")
 
     assert any(event.type == "tool_start" for event in events)
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hi"
     assert agent.state.messages[-1].role == "assistant"
+
+
+def test_agent_session_emits_planner_events_before_tool_execution(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, FakeLLMClient())
+
+    events = agent.prompt("create a file")
+    event_types = [event.type for event in events]
+    planner_start_index = event_types.index("planner_start")
+    first_tool_start_index = event_types.index("tool_start")
+    plan_updates = [event for event in events if event.type == "planner_step" and event.plan_step is not None]
+    statuses = [event.plan_step.status for event in plan_updates]
+
+    assert planner_start_index < first_tool_start_index
+    assert statuses[:3] == ["pending", "in_progress", "completed"]
 
 
 def test_agent_session_persists_and_resumes(tmp_path: Path) -> None:
@@ -80,34 +112,25 @@ def test_agent_session_persists_and_resumes(tmp_path: Path) -> None:
 
 
 def test_agent_session_emits_error_for_bad_tool_arguments(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path / "sessions")
-    record = store.create("system", ModelConfig())
-    agent = AgentSession(
-        llm_client=BrokenLLMClient(),
-        tool_registry=ToolRegistry(tmp_path),
-        session_store=store,
-        session_id=record.id,
-        system_prompt=record.system_prompt,
-        confirm_callback=lambda _name, _args: True,
-    )
+    agent = build_agent(tmp_path, BrokenLLMClient())
 
     events = agent.prompt("create a file")
 
     assert any(event.type == "error" for event in events)
 
 
+def test_agent_session_marks_plan_step_failed_when_tool_fails(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, FailingToolLLMClient())
+
+    events = agent.prompt("edit a missing file")
+    failed_steps = [event.plan_step for event in events if event.type == "planner_step" and event.plan_step is not None and event.plan_step.status == "failed"]
+
+    assert failed_steps
+    assert any(event.type == "tool_end" and event.is_error for event in events)
+
+
 def test_agent_session_compacts_old_messages(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path / "sessions")
-    record = store.create("system", ModelConfig())
-    agent = AgentSession(
-        llm_client=NoopLLMClient(),
-        tool_registry=ToolRegistry(tmp_path),
-        session_store=store,
-        session_id=record.id,
-        system_prompt=record.system_prompt,
-        confirm_callback=lambda _name, _args: True,
-        compact_after_messages=4,
-    )
+    agent = build_agent(tmp_path, NoopLLMClient(), compact_after_messages=4)
     agent.state.messages = [
         ChatMessage(role="user", content=[TextPart(text=f"user {index}")], timestamp=float(index))
         for index in range(6)

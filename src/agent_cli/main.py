@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
 
 from agent_core.llm.client import LLMClient
 from agent_core.runtime.session import AgentSession
-from agent_core.runtime.types import AgentEvent
+from agent_core.runtime.types import AgentEvent, PlanStep
 from storage.settings import Settings
 from storage.sessions import SessionStore
 from tools.pending_actions import PendingActionStore
@@ -37,6 +37,13 @@ from tools.registry import ToolRegistry
 
 console = Console()
 app = typer.Typer(help="Personal Python coding agent for Windows 10.") if typer else None
+
+PLAN_MARKERS = {
+    "pending": "[ ]",
+    "in_progress": "[~]",
+    "completed": "[x]",
+    "failed": "[!]",
+}
 
 
 def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentSession:
@@ -73,18 +80,34 @@ def confirm_tool_call(tool_name: str, args: dict) -> bool:
     return answer in {"y", "yes"}
 
 
+def format_plan_step(step: PlanStep) -> str:
+    tool_part = f" [{step.tool_name}]" if step.tool_name else ""
+    marker = PLAN_MARKERS.get(step.status, "[-]")
+    return f"{marker} {step.title}{tool_part}"
+
+
 def render_event(event: AgentEvent) -> None:
     if event.type == "message_delta" and event.delta:
         console.print(event.delta, end="")
+    elif event.type == "planner_start":
+        console.print("\n=== Planner ===")
+        console.print("Planned steps:")
+    elif event.type == "planner_step" and event.plan_step is not None:
+        if event.plan_step.status == "pending":
+            console.print(f"  {format_plan_step(event.plan_step)}")
+        else:
+            console.print(f"Planner update: {format_plan_step(event.plan_step)}")
+    elif event.type == "planner_end":
+        console.print("=== Executor ===")
     elif event.type == "tool_start":
-        console.print(f"\ntool start {event.tool_name} {event.tool_args}")
+        console.print(f"Start {event.tool_name} {event.tool_args}")
     elif event.type == "tool_end":
-        label = "tool error" if event.is_error else "tool end"
-        console.print(f"{label} {event.tool_name}: {event.message}")
+        label = "error" if event.is_error else "done"
+        console.print(f"{label.upper()} {event.tool_name}: {event.message}")
     elif event.type == "compaction":
-        console.print(f"context compacted: {event.details}")
+        console.print(f"[Runtime] context compacted: {event.details}")
     elif event.type == "error":
-        console.print(f"error: {event.message}")
+        console.print(f"[Error] {event.message}")
 
 
 def render_settings(agent: AgentSession, workspace: Path) -> None:
@@ -136,16 +159,11 @@ def approval_preview(item: dict, limit: int = 8) -> str:
 def render_approval_panel(workspace: Path) -> None:
     summary = approvals_summary_payload(workspace)
     items = summary["items"]
-    lines = [
-        "Approvals Queue",
-        f"Total: {summary['count']}",
-        f"By type: {summary['by_type']}",
-    ]
+    lines = ["Approvals Queue", f"Total: {summary['count']}", f"By type: {summary['by_type']}"]
     if not items:
         lines.append("No pending actions.")
         console.print("\n".join(lines))
         return
-
     for item in items[:5]:
         lines.append("")
         lines.append(f"[{short_token(item['token'])}] {item['action_type']}")
@@ -279,41 +297,35 @@ def approvals_reject_all_main(workspace: Path) -> None:
     console.print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
-def workflow_repo_main(
-    workspace: Path,
-    query: Optional[str] = None,
-    token: Optional[str] = None,
-    auto_apply: bool = False,
-    path_filter: Optional[str] = None,
-    staged_only: bool = False,
-) -> None:
+def workflow_repo_main(workspace: Path, query: Optional[str] = None, token: Optional[str] = None, auto_apply: bool = False, path_filter: Optional[str] = None, staged_only: bool = False) -> None:
     registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
-    payload = {"guide": [], "next_actions": []}
-
+    payload = {"planner": [], "executor": [], "next_actions": []}
     target_path = path_filter
     if query:
+        payload["planner"].append({"step": "Search the codebase for relevant symbols or text.", "status": "planned"})
         grep_args = {"query": query}
         if path_filter:
             grep_args["path"] = path_filter
         grep = registry.execute("grep_code", grep_args)
-        payload["guide"].append({"title": "1. Search the codebase", "status": "done", "content": grep.content, "details": grep.details})
+        payload["executor"].append({"step": "Run grep_code", "status": "done", "content": grep.content, "details": grep.details})
         payload["next_actions"].append("Review grep results and decide which file to change.")
-
+    payload["planner"].append({"step": "Inspect staged actions before applying anything.", "status": "planned"})
     summary = approvals_summary_payload(workspace)
-    payload["guide"].append({"title": "2. Inspect pending actions", "status": "done", "details": {"count": summary["count"], "by_type": summary["by_type"]}})
-
+    payload["executor"].append({"step": "Inspect pending actions", "status": "done", "details": {"count": summary["count"], "by_type": summary["by_type"]}})
     if token:
+        payload["planner"].append({"step": f"Preview the staged action for token {token}.", "status": "planned"})
         preview = registry.execute("preview_pending_action", {"token": token})
         target_path = preview.details.get("target_path") or target_path
-        payload["guide"].append({"title": "3. Preview staged action", "status": "done", "content": preview.content, "details": preview.details})
+        payload["executor"].append({"step": "Preview staged action", "status": "done", "content": preview.content, "details": preview.details})
         payload["next_actions"].append("Check the preview diff or command before approving it.")
         if auto_apply:
+            payload["planner"].append({"step": "Apply the approved action after preview passes review.", "status": "planned"})
             applied = registry.execute("approve_pending_action", {"token": token})
-            payload["guide"].append({"title": "4. Apply staged action", "status": "done", "content": applied.content, "details": applied.details})
+            payload["executor"].append({"step": "Apply staged action", "status": "done", "content": applied.content, "details": applied.details})
             payload["next_actions"].append("Inspect git status and git diff after applying the action.")
         else:
-            payload["guide"].append({"title": "4. Apply staged action", "status": "pending", "content": f"Approve token {token} when ready."})
-
+            payload["planner"].append({"step": f"Approve token {token} when the preview looks correct.", "status": "pending"})
+    payload["planner"].append({"step": "Inspect repository state after the planned change.", "status": "planned"})
     status = registry.execute("git_status", {})
     diff_args = {}
     if staged_only and target_path:
@@ -321,33 +333,18 @@ def workflow_repo_main(
     elif path_filter:
         diff_args["path"] = path_filter
     diff = registry.execute("git_diff_worktree", diff_args)
-    payload["guide"].append({"title": "5. Inspect git status", "status": "done", "content": status.content, "details": status.details})
-    payload["guide"].append({"title": "6. Inspect git diff", "status": "done", "content": diff.content, "details": diff.details})
-
+    payload["executor"].append({"step": "Inspect git status", "status": "done", "content": status.content, "details": status.details})
+    payload["executor"].append({"step": "Inspect git diff", "status": "done", "content": diff.content, "details": diff.details})
     if not token:
         payload["next_actions"].append("Stage an edit or shell action, then re-run workflow repo with --token.")
     if staged_only and not target_path:
         payload["next_actions"].append("No target path found for staged-only diff; provide --path-filter or a token tied to a file action.")
-
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def config_show_main(workspace: Path) -> None:
     settings = Settings.load(workspace)
-    payload = {
-        "workspace": str(settings.workspace),
-        "global_dir": str(settings.global_dir),
-        "project_dir": str(settings.project_dir),
-        "base_url": settings.provider.base_url,
-        "model": settings.model.model,
-        "enable_thinking": settings.model.enable_thinking,
-        "shell_timeout_seconds": settings.tool_policy.shell_timeout_seconds,
-        "tool_confirmation": {
-            "write_file": settings.tool_policy.confirm_write_file,
-            "edit_file": settings.tool_policy.confirm_edit_file,
-            "run_shell": settings.tool_policy.confirm_run_shell,
-        },
-    }
+    payload = {"workspace": str(settings.workspace), "global_dir": str(settings.global_dir), "project_dir": str(settings.project_dir), "base_url": settings.provider.base_url, "model": settings.model.model, "enable_thinking": settings.model.enable_thinking, "shell_timeout_seconds": settings.tool_policy.shell_timeout_seconds, "tool_confirmation": {"write_file": settings.tool_policy.confirm_write_file, "edit_file": settings.tool_policy.confirm_edit_file, "run_shell": settings.tool_policy.confirm_run_shell}}
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

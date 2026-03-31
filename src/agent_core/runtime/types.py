@@ -17,10 +17,20 @@ class AgentState(BaseModel):
     error_message: Optional[str] = None
 
 
+class PlanStep(BaseModel):
+    title: str
+    tool_name: Optional[str] = None
+    tool_args: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+
+
 class AgentEvent(BaseModel):
     type: Literal[
         "agent_start",
         "turn_start",
+        "planner_start",
+        "planner_step",
+        "planner_end",
         "message_delta",
         "tool_start",
         "tool_end",
@@ -33,5 +43,6 @@ class AgentEvent(BaseModel):
     delta: Optional[str] = None
     tool_name: Optional[str] = None
     tool_args: Optional[dict[str, Any]] = None
+    plan_step: Optional[PlanStep] = None
     details: dict[str, Any] = Field(default_factory=dict)
     is_error: bool = False
