@@ -107,7 +107,55 @@ def approvals_summary_payload(workspace: Path) -> dict:
     by_type: dict[str, int] = {}
     for item in items:
         by_type[item["action_type"]] = by_type.get(item["action_type"], 0) + 1
-    return {"count": len(items), "by_type": by_type, "tokens": [item["token"] for item in items]}
+    return {"count": len(items), "by_type": by_type, "tokens": [item["token"] for item in items], "items": items}
+
+
+def short_token(token: str) -> str:
+    return token[:8]
+
+
+def compact_text(value: str, limit: int = 90) -> str:
+    text = value.replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def action_target(item: dict) -> str:
+    return item.get("target_path") or item.get("command") or ""
+
+
+def approval_preview(item: dict, limit: int = 8) -> str:
+    if item["action_type"] == "run_shell":
+        return compact_text(item.get("command") or "")
+    diff_text = item.get("details", {}).get("diff", "") or ""
+    lines = [line for line in diff_text.splitlines() if line.strip()]
+    return "\n".join(lines[:limit]) if lines else "No diff preview."
+
+
+def render_approval_panel(workspace: Path) -> None:
+    summary = approvals_summary_payload(workspace)
+    items = summary["items"]
+    lines = [
+        "Approvals Queue",
+        f"Total: {summary['count']}",
+        f"By type: {summary['by_type']}",
+    ]
+    if not items:
+        lines.append("No pending actions.")
+        console.print("\n".join(lines))
+        return
+
+    for item in items[:5]:
+        lines.append("")
+        lines.append(f"[{short_token(item['token'])}] {item['action_type']}")
+        lines.append(f"Target: {compact_text(action_target(item), 110)}")
+        lines.append("Preview:")
+        lines.append(approval_preview(item, limit=6))
+    if len(items) > 5:
+        lines.append("")
+        lines.append(f"... {len(items) - 5} more pending actions")
+    console.print("\n".join(lines))
 
 
 def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
@@ -122,7 +170,7 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
         render_settings(agent, workspace)
         return "handled"
     if raw == "/approvals":
-        console.print(json.dumps(approvals_summary_payload(workspace), ensure_ascii=False, indent=2))
+        render_approval_panel(workspace)
         return "handled"
     if raw.startswith("/model "):
         agent.llm_client.model.model = raw.split(" ", 1)[1].strip()
@@ -186,12 +234,13 @@ def approvals_list_main(workspace: Path) -> None:
 
 
 def approvals_summary_main(workspace: Path) -> None:
-    console.print(json.dumps(approvals_summary_payload(workspace), ensure_ascii=False, indent=2))
+    render_approval_panel(workspace)
 
 
 def approvals_show_main(workspace: Path, token: str) -> None:
     registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
     result = registry.execute("preview_pending_action", {"token": token})
+    console.print(f"Token: {token}")
     console.print(result.content)
     console.print(json.dumps(result.details, ensure_ascii=False, indent=2))
 
@@ -216,7 +265,7 @@ def approvals_approve_all_main(workspace: Path) -> None:
     registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
     results = []
     for token in tokens:
-        results.append(registry.execute("approve_pending_action", {"token": token}).content)
+        results.append({"token": token, "result": registry.execute("approve_pending_action", {"token": token}).content})
     console.print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
@@ -226,28 +275,60 @@ def approvals_reject_all_main(workspace: Path) -> None:
     registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
     results = []
     for token in tokens:
-        results.append(registry.execute("reject_pending_action", {"token": token}).content)
+        results.append({"token": token, "result": registry.execute("reject_pending_action", {"token": token}).content})
     console.print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
-def workflow_repo_main(workspace: Path, query: Optional[str] = None, token: Optional[str] = None, auto_apply: bool = False) -> None:
+def workflow_repo_main(
+    workspace: Path,
+    query: Optional[str] = None,
+    token: Optional[str] = None,
+    auto_apply: bool = False,
+    path_filter: Optional[str] = None,
+    staged_only: bool = False,
+) -> None:
     registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
-    payload = {"steps": []}
+    payload = {"guide": [], "next_actions": []}
+
+    target_path = path_filter
     if query:
-        grep = registry.execute("grep_code", {"query": query})
-        payload["steps"].append({"step": "grep_code", "content": grep.content, "details": grep.details})
+        grep_args = {"query": query}
+        if path_filter:
+            grep_args["path"] = path_filter
+        grep = registry.execute("grep_code", grep_args)
+        payload["guide"].append({"title": "1. Search the codebase", "status": "done", "content": grep.content, "details": grep.details})
+        payload["next_actions"].append("Review grep results and decide which file to change.")
+
     summary = approvals_summary_payload(workspace)
-    payload["steps"].append({"step": "approvals_summary", "details": summary})
+    payload["guide"].append({"title": "2. Inspect pending actions", "status": "done", "details": {"count": summary["count"], "by_type": summary["by_type"]}})
+
     if token:
         preview = registry.execute("preview_pending_action", {"token": token})
-        payload["steps"].append({"step": "preview_pending_action", "content": preview.content, "details": preview.details})
+        target_path = preview.details.get("target_path") or target_path
+        payload["guide"].append({"title": "3. Preview staged action", "status": "done", "content": preview.content, "details": preview.details})
+        payload["next_actions"].append("Check the preview diff or command before approving it.")
         if auto_apply:
             applied = registry.execute("approve_pending_action", {"token": token})
-            payload["steps"].append({"step": "approve_pending_action", "content": applied.content, "details": applied.details})
+            payload["guide"].append({"title": "4. Apply staged action", "status": "done", "content": applied.content, "details": applied.details})
+            payload["next_actions"].append("Inspect git status and git diff after applying the action.")
+        else:
+            payload["guide"].append({"title": "4. Apply staged action", "status": "pending", "content": f"Approve token {token} when ready."})
+
     status = registry.execute("git_status", {})
-    diff = registry.execute("git_diff_worktree", {})
-    payload["steps"].append({"step": "git_status", "content": status.content, "details": status.details})
-    payload["steps"].append({"step": "git_diff_worktree", "content": diff.content, "details": diff.details})
+    diff_args = {}
+    if staged_only and target_path:
+        diff_args["path"] = target_path
+    elif path_filter:
+        diff_args["path"] = path_filter
+    diff = registry.execute("git_diff_worktree", diff_args)
+    payload["guide"].append({"title": "5. Inspect git status", "status": "done", "content": status.content, "details": status.details})
+    payload["guide"].append({"title": "6. Inspect git diff", "status": "done", "content": diff.content, "details": diff.details})
+
+    if not token:
+        payload["next_actions"].append("Stage an edit or shell action, then re-run workflow repo with --token.")
+    if staged_only and not target_path:
+        payload["next_actions"].append("No target path found for staged-only diff; provide --path-filter or a token tied to a file action.")
+
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
@@ -336,8 +417,8 @@ if app:
 
 
     @workflow_app.command("repo")
-    def workflow_repo(query: Optional[str] = typer.Option(None, "--query"), token: Optional[str] = typer.Option(None, "--token"), auto_apply: bool = typer.Option(False, "--auto-apply"), workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
-        workflow_repo_main(workspace, query=query, token=token, auto_apply=auto_apply)
+    def workflow_repo(query: Optional[str] = typer.Option(None, "--query"), token: Optional[str] = typer.Option(None, "--token"), auto_apply: bool = typer.Option(False, "--auto-apply"), path_filter: Optional[str] = typer.Option(None, "--path-filter"), staged_only: bool = typer.Option(False, "--staged-only"), workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        workflow_repo_main(workspace, query=query, token=token, auto_apply=auto_apply, path_filter=path_filter, staged_only=staged_only)
 
 
     @config_app.command("show")
@@ -386,6 +467,8 @@ def main() -> None:
     workflow_repo_parser.add_argument("--query", default=None)
     workflow_repo_parser.add_argument("--token", default=None)
     workflow_repo_parser.add_argument("--auto-apply", action="store_true")
+    workflow_repo_parser.add_argument("--path-filter", default=None)
+    workflow_repo_parser.add_argument("--staged-only", action="store_true")
     workflow_repo_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     config_parser = subparsers.add_parser("config")
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
@@ -417,7 +500,7 @@ def main() -> None:
     elif command == "approvals" and args.approvals_command == "reject-all":
         approvals_reject_all_main(Path(args.workspace))
     elif command == "workflow" and args.workflow_command == "repo":
-        workflow_repo_main(Path(args.workspace), query=args.query, token=args.token, auto_apply=args.auto_apply)
+        workflow_repo_main(Path(args.workspace), query=args.query, token=args.token, auto_apply=args.auto_apply, path_filter=args.path_filter, staged_only=args.staged_only)
     elif command == "config" and args.config_command == "show":
         config_show_main(Path(args.workspace))
 
