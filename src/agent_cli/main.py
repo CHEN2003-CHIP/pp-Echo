@@ -36,7 +36,7 @@ from agent_core.runtime.monitor import RuntimeMonitor, RuntimeStatusSnapshot
 from agent_core.runtime.session import AgentSession
 from agent_core.runtime.types import AgentEvent, PlanStep
 from storage.settings import Settings
-from storage.sessions import SessionStore, SessionTreeEntry
+from storage.sessions import SessionStore, SessionTreeEntry, SessionTurnEntry
 from storage.timeline import TimelineStore
 from tools.pending_actions import PendingActionStore
 from tools.registry import ToolRegistry
@@ -74,7 +74,7 @@ def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentSessi
         require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
         timeline_store=timeline_store_for(workspace),
     )
-    agent.state.messages = list(record.messages)
+    agent.restore_session_record(record)
     return agent
 
 
@@ -269,6 +269,48 @@ def resolve_session_id(workspace: Path, session_ref: str) -> str:
     raise ValueError(f"Session prefix is ambiguous: {session_ref}")
 
 
+def split_session_turn_ref(ref: str, current_session_id: Optional[str] = None) -> tuple[str, Optional[str]]:
+    if "@" not in ref:
+        return ref, None
+    session_ref, turn_ref = ref.split("@", 1)
+    session_ref = session_ref or (current_session_id or "")
+    turn_ref = turn_ref.strip() or None
+    return session_ref.strip(), turn_ref
+
+
+def resolve_turn_id(workspace: Path, session_id: str, turn_ref: str) -> str:
+    store = session_store_for(workspace)
+    record = store.load(session_id)
+    turn_ids = [node.id for node in record.turn_nodes]
+    exact = next((turn_id for turn_id in turn_ids if turn_id == turn_ref), None)
+    if exact:
+        return exact
+    matches = [turn_id for turn_id in turn_ids if turn_id.startswith(turn_ref)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise FileNotFoundError(f"Turn not found: {turn_ref}")
+    raise ValueError(f"Turn prefix is ambiguous: {turn_ref}")
+
+
+def resolve_session_turn_ref(workspace: Path, ref: str, current_session_id: Optional[str] = None) -> tuple[str, Optional[str]]:
+    session_ref, turn_ref = split_session_turn_ref(ref, current_session_id=current_session_id)
+    session_id = resolve_session_id(workspace, session_ref)
+    turn_id = resolve_turn_id(workspace, session_id, turn_ref) if turn_ref else None
+    return session_id, turn_id
+
+
+def resume_target(workspace: Path, ref: str, current_session_id: Optional[str] = None) -> str:
+    session_id, turn_id = resolve_session_turn_ref(workspace, ref, current_session_id=current_session_id)
+    if turn_id is not None:
+        session_store_for(workspace).set_active_head(session_id, turn_id)
+    return session_id
+
+
+def short_turn(turn_id: str) -> str:
+    return turn_id[:8]
+
+
 def tree_style_for(entry_id: str, current_session_id: Optional[str], active_ids: set[str]) -> Optional[str]:
     if not RICH_AVAILABLE:
         return None
@@ -396,6 +438,26 @@ def render_tree_entry_preview(label: str, entry: Optional[dict]) -> list[str]:
     return lines
 
 
+def render_turn_entry_preview(label: str, entry: Optional[dict]) -> list[str]:
+    if not entry:
+        return [f"{label}: none"]
+    created = datetime.fromtimestamp(entry["created_at"]).strftime("%m-%d %H:%M") if entry.get("created_at") else "unknown"
+    status = entry.get("status", "committed")
+    entry_type = entry.get("entry_type", "turn")
+    kind = f"compact@{entry.get('summarized_message_count', 0)}" if entry_type == "compaction" else f"turn-{entry.get('turn_number', 0)}"
+    lines = [
+        f"{label}: {short_turn(entry['id'])}  [{kind}]  {status}",
+        f"  messages: {entry.get('message_count', 0)}  total: {entry.get('total_message_count', 0)}  created: {created}",
+    ]
+    if entry.get("user_preview"):
+        lines.append(f"  user: {entry['user_preview']}")
+    if entry.get("assistant_preview"):
+        lines.append(f"  assistant: {entry['assistant_preview']}")
+    elif entry.get("summary_preview"):
+        lines.append(f"  summary: {entry['summary_preview']}")
+    return lines
+
+
 def _message_preview_for_agent(agent: AgentSession, role: str, limit: int = 96) -> str:
     for message in reversed(agent.state.messages):
         if message.role != role:
@@ -444,6 +506,25 @@ def _tree_line(entry: SessionTreeEntry, current_session_id: Optional[str], activ
         f"  msgs={entry.message_count}  updated={updated}{pending}{summary}"
     )
     return line, tree_style_for(entry.id, current_session_id, active_ids)
+
+
+def _active_turn_ids(turn_entries: list[SessionTurnEntry], active_head_id: Optional[str]) -> set[str]:
+    index = {entry.id: entry for entry in turn_entries}
+    active: set[str] = set()
+    current = active_head_id
+    while current and current in index:
+        active.add(current)
+        current = index[current].parent_id
+    return active
+
+
+def _turn_line(entry: SessionTurnEntry, active_turn_id: Optional[str], active_turn_ids: set[str]) -> str:
+    current_marker = ">>" if entry.id == active_turn_id else "  "
+    branch_marker = "*" if entry.id in active_turn_ids else " "
+    summary = entry.assistant_preview or entry.summary_preview or entry.user_preview
+    status = f" {entry.status}" if entry.status != "committed" else ""
+    kind = f"compact@{entry.summarized_message_count}" if entry.entry_type == "compaction" else f"turn-{entry.turn_number}"
+    return f"{current_marker}{branch_marker} {short_turn(entry.id)}  [{kind}]  msgs={entry.message_count}{status}  {summary}".rstrip()
 
 
 def render_session_tree(
@@ -503,20 +584,28 @@ def render_session_tree(
         elif current_agent is not None:
             lines.append(("\- >>* unsaved current session", tree_style_for(current_agent.session_id, current_session_id, {current_agent.session_id})))
 
-    focus_id = focus_session_id or current_session_id
-    description: Optional[dict[str, object]] = None
-    if focus_id:
+    focus_ref = focus_session_id or current_session_id
+    focus_id: Optional[str] = None
+    focus_turn_id: Optional[str] = None
+    if focus_ref:
         try:
-            focus_id = resolve_session_id(workspace, focus_id)
+            session_ref, turn_ref = split_session_turn_ref(focus_ref, current_session_id=current_session_id)
+            focus_id = resolve_session_id(workspace, session_ref)
+            focus_turn_id = resolve_turn_id(workspace, focus_id, turn_ref) if turn_ref else None
         except (FileNotFoundError, ValueError):
-            pass
+            focus_id = None
+            focus_turn_id = None
+    description: Optional[dict[str, object]] = None
     if focus_id and focus_id in entry_index:
         description = store.describe(focus_id)
+        if focus_turn_id:
+            description["turn_focus"] = store.describe_turn(focus_id, focus_turn_id)
     elif current_agent is not None and current_session_id and current_session_id not in entry_index:
-        description = {"current": _transient_tree_entry(current_agent), "parent": None, "children": []}
-    elif current_agent is not None and focus_id == current_agent.session_id:
-        description = {"current": _transient_tree_entry(current_agent), "parent": None, "children": []}
+        description = {"current": _transient_tree_entry(current_agent), "parent": None, "children": [], "turns": [], "turn_focus": None}
+    elif current_agent is not None and focus_ref == current_agent.session_id:
+        description = {"current": _transient_tree_entry(current_agent), "parent": None, "children": [], "turns": [], "turn_focus": None}
     elif recent_entries:
+        focus_id = recent_entries[0].id
         description = store.describe(recent_entries[0].id)
 
     if description is not None:
@@ -535,21 +624,83 @@ def render_session_tree(
         else:
             lines.append(("Children: none", None))
 
+        if focus_id:
+            turn_entries = store.turn_tree(focus_id)
+            session_entry = entry_index.get(focus_id)
+            active_turn_id = focus_turn_id or (session_entry.active_head_id if session_entry is not None else None)
+            active_turn_ids = _active_turn_ids(turn_entries, active_turn_id)
+            turn_children: dict[Optional[str], list[SessionTurnEntry]] = {}
+            for entry in turn_entries:
+                turn_children.setdefault(entry.parent_id, []).append(entry)
+            for item in turn_children.values():
+                item.sort(key=lambda node: (node.created_at, node.id), reverse=True)
+            lines.append(("", None))
+            lines.append(("Turn Tree", None))
+
+            def walk_turns(parent_id: Optional[str], prefix: str = "") -> None:
+                nodes = turn_children.get(parent_id, [])
+                for index, entry in enumerate(nodes):
+                    branch = "\-" if index == len(nodes) - 1 else "|-"
+                    lines.append((f"{prefix}{branch} {_turn_line(entry, active_turn_id, active_turn_ids)}", None))
+                    walk_turns(entry.id, prefix + ("   " if index == len(nodes) - 1 else "|  "))
+
+            if turn_children:
+                walk_turns(None)
+            else:
+                lines.append(("No turns yet.", None))
+
+            turn_focus = description.get("turn_focus")
+            if focus_turn_id and turn_focus is not None:
+                lines.append(("", None))
+                lines.append(("Turn Focus", None))
+                for item in render_turn_entry_preview("Current", turn_focus.get("current") if isinstance(turn_focus, dict) else None):
+                    lines.append((item, None))
+                for item in render_turn_entry_preview("Parent", turn_focus.get("parent") if isinstance(turn_focus, dict) else None):
+                    lines.append((item, None))
+                child_turns = turn_focus.get("children") if isinstance(turn_focus, dict) else []
+                if child_turns:
+                    lines.append(("Children:", None))
+                    for child in child_turns[:3]:
+                        for item in render_turn_entry_preview("Child", child):
+                            lines.append((f"  {item}", None))
+                else:
+                    lines.append(("Children: none", None))
+                current_turn = turn_focus.get("current") if isinstance(turn_focus, dict) else None
+                parent_turn = turn_focus.get("parent") if isinstance(turn_focus, dict) else None
+                if isinstance(current_turn, dict):
+                    current_ref = f"{focus_id}@{current_turn['id']}"
+                    lines.append(("Turn Actions", None))
+                    lines.append((f"  /resume {current_ref}      continue exactly from this history point", None))
+                    lines.append((f"  /branch {current_ref}      fork a new session from this history point", None))
+                    if isinstance(parent_turn, dict):
+                        parent_ref = f"{focus_id}@{parent_turn['id']}"
+                        lines.append((f"  /resume {parent_ref}      move one node earlier", None))
+                        lines.append((f"  /branch {parent_ref}      fork from the parent node", None))
+                    if child_turns:
+                        first_child = child_turns[0]
+                        if isinstance(first_child, dict):
+                            child_ref = f"{focus_id}@{first_child['id']}"
+                            lines.append((f"  /resume {child_ref}      jump into the newest child branch", None))
+
     focus_short = short_session(focus_id) if focus_id else "current"
+    turn_hint = f"{focus_short}@{short_turn(focus_turn_id)}" if focus_id and focus_turn_id else None
     lines.append(("", None))
     lines.append(("Branch Navigation", None))
     lines.append(("  Active branch lines are green when rich output is available.", None))
     lines.append((f"  /tree updated                 switch to the recent-first view", None))
     lines.append((f"  /tree focus {focus_short}           move the tree focus without changing chat", None))
-    lines.append((f"  /resume {focus_short}               switch chat to the focused node", None))
-    lines.append((f"  /branch {focus_short}               branch from the focused node", None))
+    lines.append((f"  /resume {focus_short}               switch chat to the focused session head", None))
+    if turn_hint:
+        lines.append((f"  /resume {turn_hint}       switch chat to that historical turn and continue", None))
+    lines.append((f"  /branch {focus_short}               branch from the focused session head", None))
     lines.append((f"  /rewind-turn {focus_short} 1        branch from one full turn earlier", None))
+    lines.append(("  /compact                      write a compaction node for the current branch", None))
     print_tree_lines(lines)
 
 
-def branch_session(workspace: Path, source_session_id: str) -> str:
+def branch_session(workspace: Path, source_session_id: str, source_turn_id: Optional[str] = None) -> str:
     store = session_store_for(workspace)
-    forked = store.fork(source_session_id)
+    forked = store.fork_from_head(source_session_id, source_turn_id) if source_turn_id is not None else store.fork(source_session_id)
     store.save(forked)
     return forked.id
 
@@ -628,6 +779,11 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
     if raw == "/timeline":
         timeline_show_main(workspace, session_id=agent.session_id, limit=30)
         return "handled"
+    if raw == "/compact":
+        events = agent.compact_now()
+        if not events:
+            console.print("No new messages to compact.")
+        return "handled"
     if raw.startswith("/tree"):
         parts = raw.split()
         sort_mode = "branch"
@@ -643,7 +799,8 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
                 focus_session_id = parts[1]
         if focus_session_id:
             try:
-                focus_session_id = resolve_session_id(workspace, focus_session_id)
+                focus_session_id, focus_turn_id = resolve_session_turn_ref(workspace, focus_session_id, current_session_id=agent.session_id)
+                focus_session_id = f"{focus_session_id}@{focus_turn_id}" if focus_turn_id else focus_session_id
             except (FileNotFoundError, ValueError) as exc:
                 console.print(f"[Error] {exc}")
                 return "handled"
@@ -656,14 +813,15 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
         )
         return "handled"
     if raw.startswith("/branch "):
-        source_session_id = raw.split(" ", 1)[1].strip()
+        source_ref = raw.split(" ", 1)[1].strip()
         try:
-            source_session_id = resolve_session_id(workspace, source_session_id)
+            source_session_id, source_turn_id = resolve_session_turn_ref(workspace, source_ref, current_session_id=agent.session_id)
         except (FileNotFoundError, ValueError) as exc:
             console.print(f"[Error] {exc}")
             return "handled"
-        new_session_id = branch_session(workspace, source_session_id)
-        console.print(f"Branched {source_session_id} -> {new_session_id}")
+        new_session_id = branch_session(workspace, source_session_id, source_turn_id)
+        source_label = f"{source_session_id}@{source_turn_id}" if source_turn_id else source_session_id
+        console.print(f"Branched {source_label} -> {new_session_id}")
         return new_session_id
     if raw.startswith("/rewind-turn "):
         parts = raw.split()
@@ -741,7 +899,7 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
     if raw.startswith("/resume "):
         session_ref = raw.split(" ", 1)[1].strip()
         try:
-            return resolve_session_id(workspace, session_ref)
+            return resume_target(workspace, session_ref, current_session_id=agent.session_id)
         except (FileNotFoundError, ValueError) as exc:
             console.print(f"[Error] {exc}")
             return "handled"

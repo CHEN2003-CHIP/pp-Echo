@@ -1,4 +1,4 @@
-﻿from collections.abc import Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 from agent_core.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks
@@ -97,7 +97,7 @@ class FailingToolLLMClient:
 def build_agent(tmp_path: Path, llm_client, compact_after_messages: int = 8, require_plan_approval: bool = True) -> AgentSession:
     store = SessionStore(tmp_path / "sessions")
     record = store.create("system", ModelConfig())
-    return AgentSession(
+    agent = AgentSession(
         llm_client=llm_client,
         tool_registry=ToolRegistry(tmp_path),
         session_store=store,
@@ -107,6 +107,8 @@ def build_agent(tmp_path: Path, llm_client, compact_after_messages: int = 8, req
         compact_after_messages=compact_after_messages,
         require_plan_approval=require_plan_approval,
     )
+    agent.restore_session_record(record)
+    return agent
 
 
 def test_agent_session_pauses_high_risk_plan_until_approved(tmp_path: Path) -> None:
@@ -382,3 +384,133 @@ def test_agent_session_persists_queryable_timeline_entries(tmp_path: Path) -> No
     assert "tool_start" in event_types
     assert "tool_end" in event_types
     assert any(entry.runtime is not None for entry in entries if entry.event_type == "turn_state")
+
+
+def test_agent_session_timeline_entries_share_runtime_snapshot_contract(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    timeline = TimelineStore(tmp_path / "timelines")
+    record = store.create("system", ModelConfig())
+    agent = AgentSession(
+        llm_client=ToolThenRecordLLMClient(),
+        tool_registry=ToolRegistry(tmp_path),
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=True,
+        timeline_store=timeline,
+    )
+    agent.enqueue_message("steer now", delivery="steering")
+
+    agent.prompt("start here")
+    token = agent.state.pending_plan_token
+    assert token is not None
+    agent.approve_pending_plan(token)
+
+    entries = timeline.list_session(record.id, limit=100)
+    persisted = [entry for entry in entries if entry.event_type != "message_delta"]
+
+    assert persisted
+    assert all(entry.runtime is not None for entry in persisted)
+    assert all(entry.phase == entry.runtime.phase for entry in persisted if entry.runtime is not None)
+    assert all(entry.turn_id == entry.runtime.turn_id for entry in persisted if entry.runtime is not None)
+
+    zero_turn_events = {entry.event_type for entry in persisted if entry.turn_id == 0}
+    assert zero_turn_events == {"agent_start"}
+
+    expected_event_types = {"agent_start", "turn_start", "planner_start", "planner_step", "planner_end", "tool_start", "tool_end", "turn_end", "queue_update", "compaction", "agent_end", "error", "turn_state"}
+    formal_phases = {"idle", "planning", "awaiting_approval", "executing", "draining_queue"}
+    checked = [entry for entry in persisted if entry.event_type in expected_event_types]
+    assert checked
+    assert all(entry.phase in formal_phases for entry in checked)
+
+
+def test_agent_session_restore_uses_active_head_branch_messages(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+        ChatMessage(role="user", content=[TextPart(text="u2")], timestamp=3.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a2")], timestamp=4.0),
+    ]
+    store.save(record)
+    saved = store.load(record.id)
+    historical_head = saved.turn_nodes[0].id
+    switched = store.set_active_head(saved.id, historical_head)
+
+    agent = AgentSession(
+        llm_client=NoopLLMClient(),
+        tool_registry=ToolRegistry(tmp_path),
+        session_store=store,
+        session_id=switched.id,
+        system_prompt=switched.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=False,
+    )
+    agent.restore_session_record(switched)
+
+    assert [message.role for message in agent.state.messages] == ["user", "assistant"]
+    assert agent.state.turn.turn_id == 1
+
+
+def test_agent_session_persists_compaction_as_session_tree_entry(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    agent = AgentSession(
+        llm_client=NoopLLMClient(),
+        tool_registry=ToolRegistry(tmp_path),
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        compact_after_messages=4,
+        require_plan_approval=False,
+    )
+    agent.restore_session_record(record)
+    agent.state.messages = [
+        ChatMessage(role="user", content=[TextPart(text=f"user {index}")], timestamp=float(index))
+        for index in range(6)
+    ]
+
+    agent.prompt("trigger compaction")
+    saved = store.load(record.id)
+    compaction_nodes = [node for node in saved.turn_nodes if node.entry_type == "compaction"]
+
+    assert compaction_nodes
+    assert compaction_nodes[-1].summary == saved.compaction.summary
+    assert compaction_nodes[-1].summarized_message_count == saved.compaction.summarized_message_count
+
+
+def test_agent_session_manual_compact_persists_compaction_entry(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    agent = AgentSession(
+        llm_client=NoopLLMClient(),
+        tool_registry=ToolRegistry(tmp_path),
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        compact_after_messages=4,
+        require_plan_approval=False,
+    )
+    agent.restore_session_record(record)
+    agent.state.messages = [
+        ChatMessage(role="user", content=[TextPart(text=f"user {index}")], timestamp=float(index))
+        for index in range(6)
+    ]
+
+    events = agent.compact_now()
+    saved = store.load(record.id)
+
+    assert any(event.type == "compaction" for event in events)
+    assert any(node.entry_type == "compaction" for node in saved.turn_nodes)
+
+
+def test_agent_session_manual_compact_noops_when_nothing_new_to_compact(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), compact_after_messages=4, require_plan_approval=False)
+
+    events = agent.compact_now()
+
+    assert events == []

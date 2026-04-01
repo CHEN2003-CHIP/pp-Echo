@@ -70,6 +70,9 @@ class AgentSession:
         self._queue_lock = threading.RLock()
         self.runtime_monitor = RuntimeMonitor()
         self.timeline_store = timeline_store
+        self._session_record: Optional[SessionRecord] = None
+        self._base_head_id: Optional[str] = None
+        self._base_branch_messages: list[ChatMessage] = []
         self.runtime_hooks = runtime_hooks or RuntimeHooks(
             transform_context=[self._default_transform_context],
             before_tool_call=[self._default_before_tool_call],
@@ -79,6 +82,15 @@ class AgentSession:
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
+
+    def restore_session_record(self, record: SessionRecord) -> None:
+        normalized = self.session_store.load(record.id) if self._session_exists() else self.session_store._normalized_record(record)
+        self._session_record = normalized.model_copy(deep=True)
+        active_head = self.session_store.turn_node(normalized, normalized.active_head_id)
+        self._base_head_id = active_head.parent_id if active_head is not None and active_head.status == "draft" else normalized.active_head_id
+        self._base_branch_messages = self.session_store.branch_messages(normalized, self._base_head_id)
+        self.state.messages = self.session_store.branch_messages(normalized, normalized.active_head_id)
+        self.state.turn.turn_id = sum(1 for message in self.state.messages if message.role == "user")
 
     def prompt(self, text: str) -> list[AgentEvent]:
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
@@ -97,7 +109,7 @@ class AgentSession:
         with self._queue_lock:
             self.state.queued_messages.append(item)
         self._persist()
-        list(self._emit(AgentEvent(type="queue_update", message=f"Queued {delivery} message", details=self.runtime_monitor.attach({"action": "enqueued", "delivery": delivery, "queued_id": item.id, "text": text}, self.state, queue_action="enqueued", queue_delivery=delivery))))
+        list(self._emit(AgentEvent(type="queue_update", message=f"Queued {delivery} message", details={"action": "enqueued", "delivery": delivery, "queued_id": item.id, "text": text, "queue_action": "enqueued", "queue_delivery": delivery})))
         return item
 
     def list_queued_messages(self) -> list[QueuedMessage]:
@@ -118,6 +130,12 @@ class AgentSession:
         self.state.pending_plan_token = None
         self.state.pending_tool_calls = []
         self._persist()
+
+    def compact_now(self) -> list[AgentEvent]:
+        events = list(self._emit_compaction_if_needed())
+        if events:
+            self._persist()
+        return events
 
     def _run_loop(self) -> Iterator[AgentEvent]:
         self.state.is_streaming = True
@@ -330,6 +348,7 @@ class AgentSession:
             )
 
     def _emit(self, event: AgentEvent) -> Iterator[AgentEvent]:
+        event = self.runtime_monitor.attach_event(event, self.state)
         if self.timeline_store is not None and event.type != "message_delta":
             self.timeline_store.append(self.session_id, event)
         for callback in self._subscribers:
@@ -342,7 +361,7 @@ class AgentSession:
         yield from self._emit(
             AgentEvent(
                 type="turn_state",
-                details=self.runtime_monitor.attach({"turn_id": self.state.turn.turn_id, "phase": phase, "reason": reason}, self.state),
+                details={"reason": reason},
             )
         )
 
@@ -356,16 +375,17 @@ class AgentSession:
             AgentEvent(
                 type="queue_update",
                 message=f"Dequeued {queued.delivery} message",
-                details=self.runtime_monitor.attach({"action": "dequeued", "delivery": queued.delivery, "queued_id": queued.id, "text": queued.text, "phase": phase, "reason": decision.reason}, self.state, queue_action="dequeued", queue_delivery=queued.delivery),
+                details={"action": "dequeued", "delivery": queued.delivery, "queued_id": queued.id, "text": queued.text, "controller_phase": phase, "reason": decision.reason, "queue_action": "dequeued", "queue_delivery": queued.delivery},
             )
         )
         yield from self._run_loop()
 
     def _persist(self) -> None:
-        record = SessionRecord(
-            metadata=self.session_store.load(self.session_id).metadata if self._session_exists() else self.session_store.create(self.state.system_prompt, self.state.model).metadata,
-            messages=self.state.messages,
-        )
+        if self._session_record is None:
+            self._session_record = self.session_store.load(self.session_id) if self._session_exists() else self.session_store.create(self.state.system_prompt, self.state.model)
+            self._base_head_id = self._session_record.active_head_id
+            self._base_branch_messages = self.session_store.branch_messages(self._session_record, self._base_head_id)
+        record = self._session_record.model_copy(deep=True)
         record.metadata.id = self.session_id
         record.metadata.model = self.state.model.model_copy(deep=True)
         record.metadata.system_prompt = self.state.system_prompt
@@ -373,7 +393,18 @@ class AgentSession:
         record.metadata.pending_tool_calls = [call.model_copy(deep=True) for call in self.state.pending_tool_calls]
         record.metadata.pending_plan_token = self.state.pending_plan_token
         record.metadata.queued_messages = [item.model_copy(deep=True) for item in self.state.queued_messages]
+        record = self.session_store.sync_branch_state(
+            record,
+            base_head_id=self._base_head_id,
+            branch_messages=self.state.messages,
+            pending_plan_token=self.state.pending_plan_token,
+            pending_tool_calls=self.state.pending_tool_calls,
+        )
         self.session_store.save(record)
+        self._session_record = record.model_copy(deep=True)
+        active_head = self.session_store.turn_node(record, record.active_head_id)
+        self._base_head_id = active_head.parent_id if active_head is not None and active_head.status == "draft" else record.active_head_id
+        self._base_branch_messages = self.session_store.branch_messages(record, self._base_head_id)
 
     def _session_exists(self) -> bool:
         try:

@@ -120,3 +120,133 @@ def test_session_store_children_of_returns_direct_children(tmp_path: Path) -> No
 
     assert len(children) == 1
     assert children[0].id == child.id
+
+
+def test_session_store_load_builds_turn_index_and_active_head(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+        ChatMessage(role="user", content=[TextPart(text="u2")], timestamp=3.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a2")], timestamp=4.0),
+    ]
+    store.save(record)
+
+    loaded = store.load(record.id)
+
+    assert len(loaded.turn_nodes) == 2
+    assert loaded.active_head_id == loaded.turn_nodes[-1].id
+    assert [message.role for message in store.branch_messages(loaded, loaded.active_head_id)] == ["user", "assistant", "user", "assistant"]
+
+
+def test_session_store_can_switch_active_head_to_historical_turn(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+        ChatMessage(role="user", content=[TextPart(text="u2")], timestamp=3.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a2")], timestamp=4.0),
+    ]
+    store.save(record)
+    loaded = store.load(record.id)
+
+    historical_head = loaded.turn_nodes[0].id
+    store.set_active_head(loaded.id, historical_head)
+    switched = store.load(loaded.id)
+
+    assert switched.active_head_id == historical_head
+    assert [message.role for message in store.branch_messages(switched, switched.active_head_id)] == ["user", "assistant"]
+
+
+def test_session_store_sync_branch_state_appends_turn_branch_from_historical_head(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+        ChatMessage(role="user", content=[TextPart(text="u2")], timestamp=3.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a2")], timestamp=4.0),
+    ]
+    store.save(record)
+    loaded = store.load(record.id)
+    historical_head = loaded.turn_nodes[0].id
+
+    new_branch_messages = store.branch_messages(loaded, historical_head) + [
+        ChatMessage(role="user", content=[TextPart(text="branch user")], timestamp=5.0),
+        ChatMessage(role="assistant", content=[TextPart(text="branch answer")], timestamp=6.0),
+    ]
+    updated = store.sync_branch_state(
+        loaded,
+        base_head_id=historical_head,
+        branch_messages=new_branch_messages,
+        pending_plan_token=None,
+        pending_tool_calls=[],
+    )
+    store.save(updated)
+    saved = store.load(record.id)
+
+    assert len(saved.turn_nodes) == 3
+    assert saved.active_head_id == saved.turn_nodes[-1].id
+    assert saved.turn_nodes[-1].parent_id == historical_head
+    assert [message.role for message in store.branch_messages(saved, saved.active_head_id)] == ["user", "assistant", "user", "assistant"]
+    assert any(node.parent_id == historical_head and node.id != loaded.turn_nodes[1].id for node in saved.turn_nodes)
+
+
+def test_session_store_migrates_compaction_metadata_into_turn_tree_entry(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+    ]
+    record.metadata.compaction.summary = "old summary"
+    record.metadata.compaction.summarized_message_count = 2
+    store.save(record)
+
+    loaded = store.load(record.id)
+    compaction_nodes = [node for node in loaded.turn_nodes if node.entry_type == "compaction"]
+
+    assert loaded.compaction.summary == "old summary"
+    assert loaded.active_head_id == compaction_nodes[-1].id
+    assert compaction_nodes[-1].summary == "old summary"
+    assert compaction_nodes[-1].summarized_message_count == 2
+
+
+def test_session_store_turn_entries_include_compaction_entries(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+    ]
+    record.metadata.compaction.summary = "summary line"
+    record.metadata.compaction.summarized_message_count = 2
+    store.save(record)
+
+    entries = store.turn_entries(record.id)
+
+    assert [entry.entry_type for entry in entries] == ["turn", "compaction"]
+    assert entries[-1].summary_preview == "summary line"
+    assert entries[-1].summarized_message_count == 2
+
+
+def test_session_store_fork_from_compaction_head_uses_head_branch(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+    ]
+    record.metadata.compaction.summary = "summary line"
+    record.metadata.compaction.summarized_message_count = 2
+    store.save(record)
+    saved = store.load(record.id)
+    compaction_head = next(node.id for node in saved.turn_nodes if node.entry_type == "compaction")
+
+    forked = store.fork_from_head(saved.id, compaction_head)
+
+    assert forked.compaction.summary == "summary line"
+    assert forked.messages == saved.messages
+    assert forked.active_head_id is not None

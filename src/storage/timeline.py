@@ -8,7 +8,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from agent_core.runtime.monitor import RuntimeStatusSnapshot
+from agent_core.runtime.monitor import FORMAL_TURN_PHASES, RuntimeStatusSnapshot
 from agent_core.runtime.types import AgentEvent, PlanStep
 
 
@@ -40,8 +40,8 @@ class TimelineStore:
             session_id=session_id,
             created_at=time.time(),
             event_type=event.type,
-            turn_id=int(event.details.get("turn_id") or (runtime or {}).get("turn_id") or 0),
-            phase=event.details.get("phase") or (runtime or {}).get("phase"),
+            turn_id=self._turn_id_from_runtime(runtime),
+            phase=self._phase_from_runtime(runtime),
             tool_name=event.tool_name,
             message=event.message,
             is_error=event.is_error,
@@ -82,3 +82,20 @@ class TimelineStore:
         payload = dict(details)
         payload.pop("runtime", None)
         return payload
+
+    @staticmethod
+    def _turn_id_from_runtime(runtime: object) -> int:
+        if not isinstance(runtime, dict):
+            return 0
+        value = runtime.get("turn_id")
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _phase_from_runtime(runtime: object) -> Optional[str]:
+        if not isinstance(runtime, dict):
+            return None
+        value = runtime.get("phase")
+        return value if isinstance(value, str) and value in FORMAL_TURN_PHASES else None

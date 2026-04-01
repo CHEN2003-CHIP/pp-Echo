@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
 from agent_core.runtime.types import AgentEvent, AgentState
 
+FORMAL_TURN_PHASES = {"idle", "planning", "awaiting_approval", "executing", "draining_queue"}
+
 
 class RuntimeStatusSnapshot(BaseModel):
     turn_id: int = 0
-    phase: str = "idle"
+    phase: Literal["idle", "planning", "awaiting_approval", "executing", "draining_queue"] = "idle"
     queue_count: int = 0
     pending_plan: bool = False
     pending_tool_count: int = 0
@@ -35,8 +37,19 @@ class RuntimeMonitor:
 
     def attach(self, details: dict[str, Any], state: AgentState, **overrides: Any) -> dict[str, Any]:
         enriched = dict(details)
-        enriched["runtime"] = self.snapshot_from_state(state, **overrides).model_dump(mode="json")
+        snapshot = self.snapshot_from_state(state, **overrides)
+        enriched["turn_id"] = snapshot.turn_id
+        enriched["phase"] = snapshot.phase
+        enriched["runtime"] = snapshot.model_dump(mode="json")
         return enriched
+
+    def attach_event(self, event: AgentEvent, state: AgentState, **overrides: Any) -> AgentEvent:
+        if event.type == "message_delta":
+            return event
+        if state.turn.turn_id == 0 and event.type not in {"agent_start", "agent_end"}:
+            overrides.setdefault("turn_id", 1)
+        event.details = self.attach(event.details, state, **overrides)
+        return event
 
     def snapshot_from_event(self, event: AgentEvent) -> Optional[RuntimeStatusSnapshot]:
         runtime = event.details.get("runtime")
