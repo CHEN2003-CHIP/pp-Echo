@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -17,8 +19,10 @@ except ImportError:  # pragma: no cover
 
 try:
     from rich.console import Console
+    RICH_AVAILABLE = True
 except ImportError:  # pragma: no cover
     import sys
+    RICH_AVAILABLE = False
 
     class Console:  # type: ignore[override]
         def print(self, *args, end="\n", **kwargs):
@@ -28,10 +32,12 @@ except ImportError:  # pragma: no cover
             print(safe, end=end)
 
 from agent_core.llm.client import LLMClient
+from agent_core.runtime.monitor import RuntimeMonitor, RuntimeStatusSnapshot
 from agent_core.runtime.session import AgentSession
 from agent_core.runtime.types import AgentEvent, PlanStep
 from storage.settings import Settings
-from storage.sessions import SessionStore
+from storage.sessions import SessionStore, SessionTreeEntry
+from storage.timeline import TimelineStore
 from tools.pending_actions import PendingActionStore
 from tools.registry import ToolRegistry
 
@@ -47,9 +53,12 @@ PLAN_MARKERS = {
 }
 
 
+RUNTIME_MONITOR = RuntimeMonitor()
+
+
 def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentSession:
     settings = Settings.load(workspace)
-    session_store = SessionStore(settings.global_dir / "sessions")
+    session_store = create_session_store(settings)
     record = session_store.load(session_id) if session_id else session_store.create(settings.system_prompt, settings.model)
     agent = AgentSession(
         llm_client=LLMClient(provider=settings.provider, model=record.model),
@@ -61,15 +70,46 @@ def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentSessi
         initial_compaction=record.compaction,
         initial_pending_tool_calls=record.pending_tool_calls,
         initial_pending_plan_token=record.pending_plan_token,
+        initial_queued_messages=record.queued_messages,
         require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
+        timeline_store=timeline_store_for(workspace),
     )
     agent.state.messages = list(record.messages)
     return agent
 
 
+def create_session_store(settings: Settings) -> SessionStore:
+    candidates = [settings.global_dir / "sessions", settings.project_dir / "global" / "sessions"]
+    last_error: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            return SessionStore(candidate)
+        except PermissionError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise PermissionError("Unable to create a writable session tree store")
+
+
 def session_store_for(workspace: Path) -> SessionStore:
     settings = Settings.load(workspace)
-    return SessionStore(settings.global_dir / "sessions")
+    return create_session_store(settings)
+
+
+def timeline_store_for(workspace: Path) -> TimelineStore:
+    settings = Settings.load(workspace)
+    candidates = [settings.global_dir / "timelines", settings.project_dir / "global" / "timelines"]
+    last_error: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            return TimelineStore(candidate)
+        except PermissionError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise PermissionError("Unable to create a writable timeline store")
 
 
 def pending_action_store_for(workspace: Path) -> PendingActionStore:
@@ -92,6 +132,49 @@ def format_plan_step(step: PlanStep) -> str:
 
 def load_pending_action(workspace: Path, token: str) -> dict:
     return pending_action_store_for(workspace).load(token)
+
+
+def format_runtime_status(snapshot: RuntimeStatusSnapshot) -> str:
+    return RUNTIME_MONITOR.format(snapshot)
+
+
+def render_runtime_status(agent: AgentSession) -> None:
+    snapshot = agent.runtime_monitor.snapshot_from_state(agent.state)
+    console.print(format_runtime_status(snapshot))
+
+
+def render_timeline(entries) -> None:
+    lines = ["Agent Timeline", f"Total: {len(entries)}"]
+    if not entries:
+        lines.append("No timeline entries yet.")
+        console.print("\n".join(lines))
+        return
+    for entry in entries:
+        timestamp = datetime.fromtimestamp(entry.created_at).strftime("%H:%M:%S")
+        phase = entry.phase or (entry.runtime.phase if entry.runtime is not None else "-")
+        tool = f" tool={entry.tool_name}" if entry.tool_name else ""
+        message = compact_text(entry.message or "", limit=100)
+        lines.append(f"{timestamp} turn={entry.turn_id} {entry.event_type} phase={phase}{tool}")
+        if message:
+            lines.append(f"  message: {message}")
+        if entry.plan_step is not None:
+            lines.append(f"  plan: {entry.plan_step.title} [{entry.plan_step.status}]")
+        if entry.details.get("action"):
+            lines.append(f"  action: {entry.details.get('action')} {entry.details.get('delivery', '')}".rstrip())
+    console.print("\n".join(lines))
+
+
+def timeline_show_main(workspace: Path, session_id: Optional[str] = None, limit: int = 30) -> None:
+    store = timeline_store_for(workspace)
+    if session_id:
+        try:
+            session_id = resolve_session_id(workspace, session_id)
+        except (FileNotFoundError, ValueError):
+            pass
+        entries = store.list_session(session_id, limit=limit)
+    else:
+        entries = store.list_recent(limit=limit)
+    render_timeline(entries)
 
 
 def render_event(event: AgentEvent) -> None:
@@ -118,6 +201,18 @@ def render_event(event: AgentEvent) -> None:
         console.print(f"{label.upper()} {event.tool_name}: {event.message}")
     elif event.type == "compaction":
         console.print(f"[Runtime] context compacted: {event.details}")
+    elif event.type == "queue_update":
+        action = event.details.get("action")
+        delivery = event.details.get("delivery")
+        text_value = compact_text(event.details.get("text", ""), limit=80)
+        console.print(f"[Queue] {action} {delivery}: {text_value}")
+        snapshot = RUNTIME_MONITOR.snapshot_from_event(event)
+        if snapshot is not None:
+            console.print(format_runtime_status(snapshot))
+    elif event.type == "turn_state":
+        snapshot = RUNTIME_MONITOR.snapshot_from_event(event)
+        if snapshot is not None:
+            console.print(format_runtime_status(snapshot))
     elif event.type == "error":
         console.print(f"[Error] {event.message}")
 
@@ -126,6 +221,7 @@ def render_settings(agent: AgentSession, workspace: Path) -> None:
     settings = Settings.load(workspace)
     payload = {
         "workspace": str(settings.workspace),
+        "timeline_dir": str(timeline_store_for(workspace).root),
         "session_id": agent.session_id,
         "base_url": agent.llm_client.provider.base_url,
         "model": agent.llm_client.model.model,
@@ -134,6 +230,7 @@ def render_settings(agent: AgentSession, workspace: Path) -> None:
         "confirm_high_risk_plan": settings.tool_policy.confirm_high_risk_plan,
         "pending_plan_token": agent.state.pending_plan_token,
         "pending_tool_call_count": len(agent.state.pending_tool_calls),
+        "queued_message_count": len(agent.state.queued_messages),
         "summary_length": len(agent.state.compaction.summary),
         "summarized_message_count": agent.state.compaction.summarized_message_count,
     }
@@ -150,6 +247,90 @@ def approvals_summary_payload(workspace: Path) -> dict:
 
 def short_token(token: str) -> str:
     return token[:8]
+
+
+def short_session(session_id: str) -> str:
+    return session_id[:8]
+
+
+def resolve_session_id(workspace: Path, session_ref: str) -> str:
+    store = session_store_for(workspace)
+    entries = store.tree()
+    if not session_ref:
+        raise FileNotFoundError("Session id is required")
+    exact = next((entry.id for entry in entries if entry.id == session_ref), None)
+    if exact:
+        return exact
+    matches = [entry.id for entry in entries if entry.id.startswith(session_ref)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise FileNotFoundError(f"Session not found: {session_ref}")
+    raise ValueError(f"Session prefix is ambiguous: {session_ref}")
+
+
+def tree_style_for(entry_id: str, current_session_id: Optional[str], active_ids: set[str]) -> Optional[str]:
+    if not RICH_AVAILABLE:
+        return None
+    if entry_id == current_session_id:
+        return "bold black on green"
+    if entry_id in active_ids:
+        return "green"
+    return None
+
+
+def print_tree_lines(lines: list[tuple[str, Optional[str]]]) -> None:
+    for line, style in lines:
+        if style and RICH_AVAILABLE:
+            console.print(line, style=style)
+        else:
+            console.print(line)
+
+
+def render_queue_panel(agent: AgentSession) -> None:
+    items = agent.list_queued_messages()
+    lines = ["Message Queue", f"Total: {len(items)}"]
+    if not items:
+        lines.append("No queued steering or follow-up messages.")
+        console.print("\n".join(lines))
+        return
+    for item in items[:8]:
+        lines.append("")
+        lines.append(f"[{item.delivery}] {item.id[:8]}")
+        lines.append(compact_text(item.text, limit=120))
+    if len(items) > 8:
+        lines.append("")
+        lines.append(f"... {len(items) - 8} more queued messages")
+    console.print("\n".join(lines))
+
+
+def handle_queue_command(agent: AgentSession, raw: str) -> bool:
+    if raw in {"/queue", "/queue list"}:
+        render_queue_panel(agent)
+        return True
+    if raw.startswith("/queue steering "):
+        text = raw.split(" ", 2)[2].strip()
+        if not text:
+            console.print("Usage: /queue steering <message>")
+            return True
+        agent.enqueue_message(text, delivery="steering")
+        return True
+    if raw.startswith("/queue follow-up "):
+        text = raw.split(" ", 2)[2].strip()
+        if not text:
+            console.print("Usage: /queue follow-up <message>")
+            return True
+        agent.enqueue_message(text, delivery="follow_up")
+        return True
+    if raw.startswith("/queue followup "):
+        text = raw.split(" ", 2)[2].strip()
+        if not text:
+            console.print("Usage: /queue followup <message>")
+            return True
+        agent.enqueue_message(text, delivery="follow_up")
+        return True
+    console.print("Usage: /queue | /queue list | /queue steering <message> | /queue follow-up <message>")
+    return True
 
 
 def compact_text(value: str, limit: int = 90) -> str:
@@ -194,6 +375,197 @@ def render_approval_panel(workspace: Path) -> None:
         lines.append("")
         lines.append(f"... {len(items) - 5} more pending actions")
     console.print("\n".join(lines))
+
+def render_tree_entry_preview(label: str, entry: Optional[dict]) -> list[str]:
+    if not entry:
+        return [f"{label}: none"]
+    updated = datetime.fromtimestamp(entry["updated_at"]).strftime("%m-%d %H:%M") if entry.get("updated_at") else "unknown"
+    turn_id = f"turn-{entry.get('turn_count', 0)}"
+    lines = [
+        f"{label}: {short_session(entry['id'])}  [{turn_id}]",
+        f"  model: {entry['model']}  messages: {entry['message_count']}  turns: {entry.get('turn_count', 0)}  updated: {updated}",
+    ]
+    if entry.get("summary_preview"):
+        lines.append(f"  summary: {entry['summary_preview']}")
+    if entry.get("last_user_preview"):
+        lines.append(f"  user: {entry['last_user_preview']}")
+    if entry.get("last_assistant_preview"):
+        lines.append(f"  assistant: {entry['last_assistant_preview']}")
+    if entry.get("pending_plan_token"):
+        lines.append(f"  pending-plan: {entry['pending_plan_token']}")
+    return lines
+
+
+def _message_preview_for_agent(agent: AgentSession, role: str, limit: int = 96) -> str:
+    for message in reversed(agent.state.messages):
+        if message.role != role:
+            continue
+        parts = [part.text.strip() for part in message.content if isinstance(part, TextPart) and part.text.strip()]
+        text = " ".join(parts)
+        return compact_text(text, limit=limit) if text else ""
+    return ""
+
+
+def _transient_tree_entry(agent: AgentSession) -> dict:
+    summary = compact_text(agent.state.compaction.summary, limit=96) if agent.state.compaction.summary else ""
+    if not summary and agent.state.messages:
+        summary = _message_preview_for_agent(agent, agent.state.messages[-1].role, limit=96)
+    return {
+        "id": agent.session_id,
+        "parent_id": None,
+        "updated_at": 0.0,
+        "model": agent.llm_client.model.model,
+        "message_count": len(agent.state.messages),
+        "turn_count": sum(1 for message in agent.state.messages if message.role == "user"),
+        "pending_plan_token": agent.state.pending_plan_token,
+        "summary_preview": summary,
+        "last_user_preview": _message_preview_for_agent(agent, "user"),
+        "last_assistant_preview": _message_preview_for_agent(agent, "assistant"),
+    }
+
+
+def _active_branch_ids(entry_index: dict[str, SessionTreeEntry], session_id: Optional[str]) -> set[str]:
+    active: set[str] = set()
+    current = session_id
+    while current and current in entry_index:
+        active.add(current)
+        current = entry_index[current].parent_id
+    return active
+
+
+def _tree_line(entry: SessionTreeEntry, current_session_id: Optional[str], active_ids: set[str]) -> tuple[str, Optional[str]]:
+    current_marker = ">>" if entry.id == current_session_id else "  "
+    branch_marker = "*" if entry.id in active_ids else " "
+    updated = datetime.fromtimestamp(entry.updated_at).strftime("%m-%d %H:%M")
+    pending = "  pending-plan" if entry.pending_plan_token else ""
+    summary = f"  {entry.summary_preview}" if entry.summary_preview else ""
+    line = (
+        f"{current_marker}{branch_marker} {short_session(entry.id)}  [turn-{entry.turn_count}]  {entry.model}"
+        f"  msgs={entry.message_count}  updated={updated}{pending}{summary}"
+    )
+    return line, tree_style_for(entry.id, current_session_id, active_ids)
+
+
+def render_session_tree(
+    workspace: Path,
+    current_session_id: Optional[str] = None,
+    current_agent: Optional[AgentSession] = None,
+    focus_session_id: Optional[str] = None,
+    sort_mode: str = "branch",
+) -> None:
+    if sort_mode not in {"branch", "updated"}:
+        sort_mode = "branch"
+    store = session_store_for(workspace)
+    entries = store.tree()
+    entry_index = {entry.id: entry for entry in entries}
+    active_ids = _active_branch_ids(entry_index, current_session_id)
+    lines: list[tuple[str, Optional[str]]] = [("Session Tree", None), (f"View: {sort_mode}", None)]
+
+    if not entries and current_agent is None:
+        print_tree_lines([("Session Tree", None), ("No sessions yet.", None)])
+        return
+
+    recent_entries = sorted(entries, key=lambda item: item.updated_at, reverse=True)
+    lines.append(("", None))
+    lines.append(("Recent Nodes", None))
+    if recent_entries:
+        for entry in recent_entries[:5]:
+            line, style = _tree_line(entry, current_session_id, active_ids)
+            lines.append((f"  {line}", style))
+    elif current_agent is not None:
+        for item in render_tree_entry_preview("Current (unsaved)", _transient_tree_entry(current_agent)):
+            lines.append((item, None))
+
+    lines.append(("", None))
+    if sort_mode == "updated":
+        lines.append(("Updated View", None))
+        if recent_entries:
+            for entry in recent_entries[:12]:
+                lines.append(_tree_line(entry, current_session_id, active_ids))
+    else:
+        children: dict[Optional[str], list[SessionTreeEntry]] = {}
+        for entry in entries:
+            children.setdefault(entry.parent_id, []).append(entry)
+        for item in children.values():
+            item.sort(key=lambda node: (node.updated_at, node.id), reverse=True)
+        lines.append(("Branch View", None))
+
+        def walk(parent_id: Optional[str], prefix: str = "") -> None:
+            nodes = children.get(parent_id, [])
+            for index, entry in enumerate(nodes):
+                branch = "\-" if index == len(nodes) - 1 else "|-"
+                line, style = _tree_line(entry, current_session_id, active_ids)
+                lines.append((f"{prefix}{branch} {line}", style))
+                walk(entry.id, prefix + ("   " if index == len(nodes) - 1 else "|  "))
+
+        if children:
+            walk(None)
+        elif current_agent is not None:
+            lines.append(("\- >>* unsaved current session", tree_style_for(current_agent.session_id, current_session_id, {current_agent.session_id})))
+
+    focus_id = focus_session_id or current_session_id
+    description: Optional[dict[str, object]] = None
+    if focus_id:
+        try:
+            focus_id = resolve_session_id(workspace, focus_id)
+        except (FileNotFoundError, ValueError):
+            pass
+    if focus_id and focus_id in entry_index:
+        description = store.describe(focus_id)
+    elif current_agent is not None and current_session_id and current_session_id not in entry_index:
+        description = {"current": _transient_tree_entry(current_agent), "parent": None, "children": []}
+    elif current_agent is not None and focus_id == current_agent.session_id:
+        description = {"current": _transient_tree_entry(current_agent), "parent": None, "children": []}
+    elif recent_entries:
+        description = store.describe(recent_entries[0].id)
+
+    if description is not None:
+        lines.append(("", None))
+        lines.append(("Focus", None))
+        for item in render_tree_entry_preview("Current", description.get("current")):
+            lines.append((item, None))
+        for item in render_tree_entry_preview("Parent", description.get("parent")):
+            lines.append((item, None))
+        children_preview = description.get("children") or []
+        if children_preview:
+            lines.append(("Children:", None))
+            for child in children_preview[:3]:
+                for item in render_tree_entry_preview("Child", child):
+                    lines.append((f"  {item}", None))
+        else:
+            lines.append(("Children: none", None))
+
+    focus_short = short_session(focus_id) if focus_id else "current"
+    lines.append(("", None))
+    lines.append(("Branch Navigation", None))
+    lines.append(("  Active branch lines are green when rich output is available.", None))
+    lines.append((f"  /tree updated                 switch to the recent-first view", None))
+    lines.append((f"  /tree focus {focus_short}           move the tree focus without changing chat", None))
+    lines.append((f"  /resume {focus_short}               switch chat to the focused node", None))
+    lines.append((f"  /branch {focus_short}               branch from the focused node", None))
+    lines.append((f"  /rewind-turn {focus_short} 1        branch from one full turn earlier", None))
+    print_tree_lines(lines)
+
+
+def branch_session(workspace: Path, source_session_id: str) -> str:
+    store = session_store_for(workspace)
+    forked = store.fork(source_session_id)
+    store.save(forked)
+    return forked.id
+
+
+def rewind_session(workspace: Path, source_session_id: str, message_count: int) -> str:
+    store = session_store_for(workspace)
+    rewound = store.rewind(source_session_id, message_count)
+    store.save(rewound)
+    return rewound.id
+
+
+def rewind_session_turns(workspace: Path, source_session_id: str, turn_count: int) -> str:
+    store = session_store_for(workspace)
+    rewound = store.rewind_turns(source_session_id, turn_count)
+    store.save(rewound)
+    return rewound.id
 
 
 def approve_or_execute_pending_action(workspace: Path, token: str, render: bool = True) -> dict:
@@ -247,9 +619,94 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
     if raw == "/settings":
         render_settings(agent, workspace)
         return "handled"
+    if raw == "/status":
+        render_runtime_status(agent)
+        return "handled"
     if raw == "/approvals":
         render_approval_panel(workspace)
         return "handled"
+    if raw == "/timeline":
+        timeline_show_main(workspace, session_id=agent.session_id, limit=30)
+        return "handled"
+    if raw.startswith("/tree"):
+        parts = raw.split()
+        sort_mode = "branch"
+        focus_session_id: Optional[str] = None
+        if len(parts) >= 2:
+            if parts[1] in {"branch", "updated"}:
+                sort_mode = parts[1]
+                if len(parts) >= 3:
+                    focus_session_id = parts[2]
+            elif parts[1] == "focus" and len(parts) >= 3:
+                focus_session_id = parts[2]
+            else:
+                focus_session_id = parts[1]
+        if focus_session_id:
+            try:
+                focus_session_id = resolve_session_id(workspace, focus_session_id)
+            except (FileNotFoundError, ValueError) as exc:
+                console.print(f"[Error] {exc}")
+                return "handled"
+        render_session_tree(
+            workspace,
+            current_session_id=agent.session_id,
+            current_agent=agent,
+            focus_session_id=focus_session_id,
+            sort_mode=sort_mode,
+        )
+        return "handled"
+    if raw.startswith("/branch "):
+        source_session_id = raw.split(" ", 1)[1].strip()
+        try:
+            source_session_id = resolve_session_id(workspace, source_session_id)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[Error] {exc}")
+            return "handled"
+        new_session_id = branch_session(workspace, source_session_id)
+        console.print(f"Branched {source_session_id} -> {new_session_id}")
+        return new_session_id
+    if raw.startswith("/rewind-turn "):
+        parts = raw.split()
+        try:
+            if len(parts) == 2:
+                source_session_id = agent.session_id
+                turn_count = int(parts[1])
+            elif len(parts) == 3:
+                source_session_id = resolve_session_id(workspace, parts[1])
+                turn_count = int(parts[2])
+            else:
+                raise ValueError
+        except ValueError:
+            console.print("Usage: /rewind-turn <turn_count> or /rewind-turn <session_id> <turn_count>")
+            return "handled"
+        try:
+            new_session_id = rewind_session_turns(workspace, source_session_id, turn_count)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[Error] {exc}")
+            return "handled"
+        console.print(f"Turn-rewound {source_session_id} at turn_count={turn_count} -> {new_session_id}")
+        return new_session_id
+    if raw.startswith("/rewind "):
+        parts = raw.split()
+        try:
+            if len(parts) == 2:
+                source_session_id = agent.session_id
+                message_count = int(parts[1])
+            elif len(parts) == 3:
+                source_session_id = resolve_session_id(workspace, parts[1])
+                message_count = int(parts[2])
+            else:
+                raise ValueError
+        except ValueError:
+            console.print("Usage: /rewind <message_count> or /rewind <session_id> <message_count>")
+            return "handled"
+        try:
+            new_session_id = rewind_session(workspace, source_session_id, message_count)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[Error] {exc}")
+            return "handled"
+        console.print(f"Rewound {source_session_id} at message_count={message_count} -> {new_session_id}")
+        return new_session_id
     if raw.startswith("/approve "):
         token = raw.split(" ", 1)[1].strip()
         payload = load_pending_action(workspace, token)
@@ -282,36 +739,124 @@ def handle_command(agent: AgentSession, raw: str, workspace: Path) -> str:
         console.print(f"model set to {agent.llm_client.model.model}")
         return "handled"
     if raw.startswith("/resume "):
-        return raw.split(" ", 1)[1].strip()
+        session_ref = raw.split(" ", 1)[1].strip()
+        try:
+            return resolve_session_id(workspace, session_ref)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[Error] {exc}")
+            return "handled"
     return "run"
 
 
 def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
-    prompt_session = PromptSession() if PromptSession else None
+    prompt_session = None
+    if PromptSession:
+        try:
+            prompt_session = PromptSession()
+        except Exception:
+            prompt_session = None
     while True:
         agent = build_agent(workspace, session_id=session_id)
         agent.subscribe(render_event)
+        worker: Optional[threading.Thread] = None
+
+        def is_busy() -> bool:
+            return worker is not None and worker.is_alive()
+
+        def start_worker(action: str, fn) -> None:
+            nonlocal worker
+
+            def runner() -> None:
+                try:
+                    fn()
+                finally:
+                    console.print()
+
+            worker = threading.Thread(target=runner, name=f"pp-agent-{action}", daemon=True)
+            worker.start()
+
         console.print(f"pp-agent session={agent.session_id} model={agent.llm_client.model.model}")
         if agent.state.pending_plan_token:
             console.print(f"Pending planner gate: {agent.state.pending_plan_token}. Use /approve {agent.state.pending_plan_token} or /reject {agent.state.pending_plan_token}.")
+        if agent.state.queued_messages:
+            console.print(f"Queued messages: {len(agent.state.queued_messages)}. Use /queue to inspect them.")
+        render_runtime_status(agent)
+        console.print("Tips: /status shows runtime state. Plain text while busy becomes follow-up queue. Use /queue steering <msg> for higher-priority guidance.")
+
         while True:
-            raw = prompt_session.prompt("\n> ").strip() if prompt_session else input("\n> ").strip()
+            try:
+                raw = prompt_session.prompt("\n> ").strip() if prompt_session else input("\n> ").strip()
+            except EOFError:
+                return
             if not raw:
                 continue
-            if raw.startswith("/"):
-                result = handle_command(agent, raw, workspace)
-                if result == "handled":
+
+            if raw.startswith("/queue"):
+                handle_queue_command(agent, raw)
+                if not is_busy() and not agent.state.pending_plan_token and agent.state.queued_messages:
+                    start_worker("queue", agent.continue_)
+                continue
+
+            if is_busy():
+                if raw.startswith("/"):
+                    if raw in {"/session", "/settings", "/status", "/approvals", "/timeline"} or raw.startswith("/tree"):
+                        result = handle_command(agent, raw, workspace)
+                        if result == "quit":
+                            console.print("Wait for the current task to finish before quitting.")
+                        continue
+                    console.print("Agent is busy. Use /queue steering <message>, /queue, or wait for the current task to finish.")
                     continue
+                agent.enqueue_message(raw, delivery="follow_up")
+                continue
+
+            if raw.startswith("/approve "):
+                token = raw.split(" ", 1)[1].strip()
+                payload = load_pending_action(workspace, token)
+                if payload["action_type"] == "planner_approval":
+                    session_for_token = payload.get("details", {}).get("session_id")
+                    if session_for_token != agent.session_id:
+                        console.print(f"Planner token belongs to session {session_for_token}. Use /resume {session_for_token} first.")
+                        continue
+                    start_worker("approve", lambda: agent.approve_pending_plan(token))
+                else:
+                    approve_or_execute_pending_action(workspace, token, render=True)
+                continue
+
+            if raw.startswith("/reject "):
+                result = handle_command(agent, raw, workspace)
                 if result == "quit":
                     return
                 if result == "new":
                     session_id = None
                     break
-                if result != "run":
+                if result != "handled":
                     session_id = result
                     break
-            agent.prompt(raw)
-            console.print()
+                continue
+
+            if raw.startswith("/"):
+                result = handle_command(agent, raw, workspace)
+                if result == "handled":
+                    continue
+                if result == "quit":
+                    if is_busy():
+                        console.print("Wait for the current task to finish before quitting.")
+                        continue
+                    return
+                if result == "new":
+                    if is_busy():
+                        console.print("Wait for the current task to finish before creating a new session.")
+                        continue
+                    session_id = None
+                    break
+                if result != "run":
+                    if is_busy():
+                        console.print("Wait for the current task to finish before switching sessions.")
+                        continue
+                    session_id = result
+                    break
+
+            start_worker("prompt", lambda value=raw: agent.prompt(value))
 
 
 def run_main(prompt: str, workspace: Path, session_id: Optional[str] = None) -> None:
@@ -323,15 +868,35 @@ def run_main(prompt: str, workspace: Path, session_id: Optional[str] = None) -> 
 
 def sessions_list_main(workspace: Path) -> None:
     store = session_store_for(workspace)
-    payload = [{"id": session.id, "parent_id": session.parent_id, "model": session.model.model, "updated_at": session.updated_at, "summarized_message_count": session.compaction.summarized_message_count, "pending_plan_token": session.pending_plan_token, "pending_tool_call_count": len(session.pending_tool_calls)} for session in store.list()]
+    payload = [{"id": session.id, "parent_id": session.parent_id, "model": session.model.model, "updated_at": session.updated_at, "summarized_message_count": session.compaction.summarized_message_count, "pending_plan_token": session.pending_plan_token, "pending_tool_call_count": len(session.pending_tool_calls), "queued_message_count": len(session.queued_messages)} for session in store.list()]
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def sessions_tree_main(workspace: Path, session_id: Optional[str] = None, sort_mode: str = "branch") -> None:
+    render_session_tree(workspace, current_session_id=session_id, focus_session_id=session_id, sort_mode=sort_mode)
+
+
 def sessions_fork_main(workspace: Path, session_id: str) -> None:
-    store = session_store_for(workspace)
-    forked = store.fork(session_id)
-    store.save(forked)
-    console.print(f"forked session: {forked.id} parent={forked.parent_id}")
+    new_session_id = branch_session(workspace, session_id)
+    console.print(f"forked session: {new_session_id} parent={session_id}")
+
+
+def sessions_rewind_main(workspace: Path, session_id: str, message_count: int) -> None:
+    try:
+        new_session_id = rewind_session(workspace, session_id, message_count)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[Error] {exc}")
+        return
+    console.print(f"rewound session: {new_session_id} parent={session_id} message_count={message_count}")
+
+
+def sessions_rewind_turn_main(workspace: Path, session_id: str, turn_count: int) -> None:
+    try:
+        new_session_id = rewind_session_turns(workspace, session_id, turn_count)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[Error] {exc}")
+        return
+    console.print(f"turn-rewound session: {new_session_id} parent={session_id} turn_count={turn_count}")
 
 
 def approvals_list_main(workspace: Path) -> None:
@@ -371,7 +936,6 @@ def approvals_reject_all_main(workspace: Path) -> None:
     tokens = [item["token"] for item in store.list()]
     results = [reject_pending_action(workspace, token, render=False) for token in tokens]
     console.print(json.dumps(results, ensure_ascii=False, indent=2))
-
 
 def workflow_repo_main(workspace: Path, query: Optional[str] = None, token: Optional[str] = None, auto_apply: bool = False, path_filter: Optional[str] = None, staged_only: bool = False) -> None:
     registry = ToolRegistry(workspace, policy=Settings.load(workspace).tool_policy)
@@ -422,6 +986,7 @@ def config_show_main(workspace: Path) -> None:
     settings = Settings.load(workspace)
     payload = {
         "workspace": str(settings.workspace),
+        "timeline_dir": str(timeline_store_for(workspace).root),
         "global_dir": str(settings.global_dir),
         "project_dir": str(settings.project_dir),
         "base_url": settings.provider.base_url,
@@ -453,19 +1018,41 @@ if app:
     approvals_app = typer.Typer(help="Manage staged approvals.")
     workflow_app = typer.Typer(help="Guided repo-aware workflows.")
     config_app = typer.Typer(help="Show active configuration.")
+    timeline_app = typer.Typer(help="Inspect persisted agent timeline history.")
     app.add_typer(sessions_app, name="sessions")
     app.add_typer(approvals_app, name="approvals")
     app.add_typer(workflow_app, name="workflow")
     app.add_typer(config_app, name="config")
+    app.add_typer(timeline_app, name="timeline")
 
     @sessions_app.command("list")
     def sessions_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
         sessions_list_main(workspace)
 
 
+    @sessions_app.command("tree")
+    def sessions_tree(sort_mode: str = typer.Option("branch", "--sort"), session_id: Optional[str] = typer.Option(None, "--session"), workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        sessions_tree_main(workspace, session_id=session_id, sort_mode=sort_mode)
+
+
     @sessions_app.command("fork")
     def sessions_fork(session_id: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
         sessions_fork_main(workspace, session_id)
+
+
+    @sessions_app.command("branch")
+    def sessions_branch(session_id: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        sessions_fork_main(workspace, session_id)
+
+
+    @sessions_app.command("rewind")
+    def sessions_rewind(session_id: str, message_count: int, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        sessions_rewind_main(workspace, session_id, message_count)
+
+
+    @sessions_app.command("rewind-turn")
+    def sessions_rewind_turn(session_id: str, turn_count: int, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        sessions_rewind_turn_main(workspace, session_id, turn_count)
 
 
     @approvals_app.command("list")
@@ -513,6 +1100,10 @@ if app:
         config_show_main(workspace)
 
 
+    @timeline_app.command("show")
+    def timeline_show(session_id: Optional[str] = typer.Option(None, "--session"), limit: int = typer.Option(30, "--limit"), workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        timeline_show_main(workspace, session_id=session_id, limit=limit)
+
 def main() -> None:
     if app and typer:
         app()
@@ -531,9 +1122,22 @@ def main() -> None:
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_command", required=True)
     sessions_list_parser = sessions_subparsers.add_parser("list")
     sessions_list_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
-    sessions_fork_parser = sessions_subparsers.add_parser("fork")
-    sessions_fork_parser.add_argument("session_id")
-    sessions_fork_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    sessions_tree_parser = sessions_subparsers.add_parser("tree")
+    sessions_tree_parser.add_argument("--sort", default="branch")
+    sessions_tree_parser.add_argument("--session", default=None)
+    sessions_tree_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    for name in ["fork", "branch"]:
+        p = sessions_subparsers.add_parser(name)
+        p.add_argument("session_id")
+        p.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    sessions_rewind_parser = sessions_subparsers.add_parser("rewind")
+    sessions_rewind_parser.add_argument("session_id")
+    sessions_rewind_parser.add_argument("message_count", type=int)
+    sessions_rewind_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    sessions_rewind_turn_parser = sessions_subparsers.add_parser("rewind-turn")
+    sessions_rewind_turn_parser.add_argument("session_id")
+    sessions_rewind_turn_parser.add_argument("turn_count", type=int)
+    sessions_rewind_turn_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     approvals_parser = subparsers.add_parser("approvals")
     approvals_subparsers = approvals_parser.add_subparsers(dest="approvals_command", required=True)
     for name in ["list", "summary", "approve-all", "reject-all"]:
@@ -561,6 +1165,12 @@ def main() -> None:
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
     config_show_parser = config_subparsers.add_parser("show")
     config_show_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    timeline_parser = subparsers.add_parser("timeline")
+    timeline_subparsers = timeline_parser.add_subparsers(dest="timeline_command", required=True)
+    timeline_show_parser = timeline_subparsers.add_parser("show")
+    timeline_show_parser.add_argument("--session", default=None)
+    timeline_show_parser.add_argument("--limit", type=int, default=30)
+    timeline_show_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
 
     args = parser.parse_args()
     command = getattr(args, "command")
@@ -570,8 +1180,14 @@ def main() -> None:
         run_main(args.prompt, Path(args.workspace), args.session)
     elif command == "sessions" and args.sessions_command == "list":
         sessions_list_main(Path(args.workspace))
-    elif command == "sessions" and args.sessions_command == "fork":
+    elif command == "sessions" and args.sessions_command == "tree":
+        sessions_tree_main(Path(args.workspace), session_id=args.session, sort_mode=args.sort)
+    elif command == "sessions" and args.sessions_command in {"fork", "branch"}:
         sessions_fork_main(Path(args.workspace), args.session_id)
+    elif command == "sessions" and args.sessions_command == "rewind":
+        sessions_rewind_main(Path(args.workspace), args.session_id, args.message_count)
+    elif command == "sessions" and args.sessions_command == "rewind-turn":
+        sessions_rewind_turn_main(Path(args.workspace), args.session_id, args.turn_count)
     elif command == "approvals" and args.approvals_command == "list":
         approvals_list_main(Path(args.workspace))
     elif command == "approvals" and args.approvals_command == "summary":
@@ -590,6 +1206,8 @@ def main() -> None:
         workflow_repo_main(Path(args.workspace), query=args.query, token=args.token, auto_apply=args.auto_apply, path_filter=args.path_filter, staged_only=args.staged_only)
     elif command == "config" and args.config_command == "show":
         config_show_main(Path(args.workspace))
+    elif command == "timeline" and args.timeline_command == "show":
+        timeline_show_main(Path(args.workspace), session_id=args.session, limit=args.limit)
 
 
 if __name__ == "__main__":

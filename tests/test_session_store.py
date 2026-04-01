@@ -1,10 +1,10 @@
-from pathlib import Path
+﻿from pathlib import Path
 
-from agent_core.types import ModelConfig
+from agent_core.types import ChatMessage, ModelConfig, TextPart
 from storage.sessions import SessionStore
 
 
-def test_session_store_save_and_load(tmp_path: Path) -> None:
+def test_session_store_save_and_load_uses_single_tree_file(tmp_path: Path) -> None:
     store = SessionStore(tmp_path)
     record = store.create("hello", ModelConfig())
     record.metadata.compaction.summary = "old messages"
@@ -12,6 +12,7 @@ def test_session_store_save_and_load(tmp_path: Path) -> None:
     saved_path = store.save(record)
 
     assert saved_path.exists()
+    assert saved_path.name == "session-tree.jsonl"
     loaded = store.load(record.id)
     assert loaded.id == record.id
     assert loaded.system_prompt == "hello"
@@ -19,10 +20,11 @@ def test_session_store_save_and_load(tmp_path: Path) -> None:
     assert loaded.compaction.summary == "old messages"
 
 
-def test_session_store_fork(tmp_path: Path) -> None:
+def test_session_store_fork_creates_parent_child_link(tmp_path: Path) -> None:
     store = SessionStore(tmp_path)
     source = store.create("hello", ModelConfig())
     source.metadata.compaction.summary = "summary"
+    source.messages = [ChatMessage(role="user", content=[TextPart(text="root question")], timestamp=1.0)]
     store.save(source)
 
     forked = store.fork(source.id)
@@ -31,6 +33,69 @@ def test_session_store_fork(tmp_path: Path) -> None:
     assert forked.parent_id == source.id
     assert forked.id != source.id
     assert forked.compaction.summary == "summary"
+    assert len(forked.messages) == 1
+
+
+def test_session_store_tree_returns_branch_structure_and_previews(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    root = store.create("hello", ModelConfig())
+    root.metadata.compaction.summary = "root summary preview"
+    root.messages = [
+        ChatMessage(role="user", content=[TextPart(text="user asks about planner")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="assistant answers briefly")], timestamp=2.0),
+    ]
+    store.save(root)
+    branch = store.fork(root.id)
+    branch.messages.append(ChatMessage(role="user", content=[TextPart(text="branch follow-up")], timestamp=3.0))
+    store.save(branch)
+
+    tree = store.tree()
+    description = store.describe(root.id)
+
+    assert len(tree) == 2
+    assert any(node.id == root.id and node.parent_id is None and node.summary_preview and node.turn_count == 1 for node in tree)
+    assert any(node.id == branch.id and node.parent_id == root.id and node.last_user_preview == "branch follow-up" and node.turn_count == 2 for node in tree)
+    assert description["current"]["id"] == root.id
+    assert description["children"][0]["id"] == branch.id
+
+
+def test_session_store_rewind_creates_truncated_branch(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    source = store.create("hello", ModelConfig())
+    source.metadata.compaction.summary = "summary"
+    source.metadata.pending_plan_token = "token-1"
+    source.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+        ChatMessage(role="user", content=[TextPart(text="u2")], timestamp=3.0),
+    ]
+    store.save(source)
+
+    rewound = store.rewind(source.id, 2)
+    store.save(rewound)
+
+    assert rewound.parent_id == source.id
+    assert len(rewound.messages) == 2
+    assert rewound.messages[-1].role == "assistant"
+    assert rewound.compaction.summary == ""
+    assert rewound.pending_plan_token is None
+
+
+def test_session_store_rewind_turns_uses_complete_turns(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    source = store.create("hello", ModelConfig())
+    source.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+        ChatMessage(role="tool", content=[TextPart(text="t1")], timestamp=3.0),
+        ChatMessage(role="user", content=[TextPart(text="u2")], timestamp=4.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a2")], timestamp=5.0),
+    ]
+    store.save(source)
+
+    rewound = store.rewind_turns(source.id, 1)
+
+    assert [message.role for message in rewound.messages] == ["user", "assistant", "tool"]
 
 
 def test_session_store_list_returns_metadata(tmp_path: Path) -> None:
@@ -42,3 +107,16 @@ def test_session_store_list_returns_metadata(tmp_path: Path) -> None:
 
     assert len(sessions) == 1
     assert sessions[0].id == record.id
+
+
+def test_session_store_children_of_returns_direct_children(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    root = store.create("hello", ModelConfig())
+    store.save(root)
+    child = store.fork(root.id)
+    store.save(child)
+
+    children = store.children_of(root.id)
+
+    assert len(children) == 1
+    assert children[0].id == child.id

@@ -7,13 +7,28 @@ from pydantic import BaseModel, Field
 from agent_core.types import ChatMessage, CompactionState, ModelConfig, ToolCall
 
 
+class TurnSnapshot(BaseModel):
+    turn_id: int = 0
+    phase: Literal["idle", "planning", "awaiting_approval", "executing", "draining_queue"] = "idle"
+    reason: str = ""
+
+
+class QueuedMessage(BaseModel):
+    id: str
+    delivery: Literal["steering", "follow_up"] = "follow_up"
+    text: str
+    created_at: float
+
+
 class AgentState(BaseModel):
     system_prompt: str
     model: ModelConfig = Field(default_factory=ModelConfig)
     messages: list[ChatMessage] = Field(default_factory=list)
     pending_tool_calls: list[ToolCall] = Field(default_factory=list)
     pending_plan_token: Optional[str] = None
+    queued_messages: list[QueuedMessage] = Field(default_factory=list)
     compaction: CompactionState = Field(default_factory=CompactionState)
+    turn: TurnSnapshot = Field(default_factory=TurnSnapshot)
     is_streaming: bool = False
     error_message: Optional[str] = None
 
@@ -39,6 +54,8 @@ class AgentEvent(BaseModel):
         "agent_end",
         "error",
         "compaction",
+        "queue_update",
+        "turn_state",
     ]
     message: Optional[str] = None
     delta: Optional[str] = None
