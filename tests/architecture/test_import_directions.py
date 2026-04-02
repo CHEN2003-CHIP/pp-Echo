@@ -88,3 +88,12 @@ def test_api_and_programmatic_modes_do_not_depend_on_cli_rendering() -> None:
 
     text = (PACKAGE_ROOT / "runtime" / "session_host.py").read_text(encoding="utf-8-sig")
     assert "pp_agent.cli" not in text
+
+
+def test_cli_boundary_guards_for_run_and_sessions_commands() -> None:
+    run_text = (PACKAGE_ROOT / "cli" / "commands" / "run.py").read_text(encoding="utf-8-sig")
+    sessions_text = (PACKAGE_ROOT / "cli" / "commands" / "sessions.py").read_text(encoding="utf-8-sig")
+
+    assert "import build_agent" not in run_text
+    assert "from pp_agent.storage.sessions import SessionStore" not in sessions_text
+    assert "import SessionStore" not in sessions_text

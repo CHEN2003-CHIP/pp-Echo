@@ -9,7 +9,7 @@ from pp_agent.api import rpc_mode
 def test_rpc_mode_emits_events_and_result(monkeypatch, tmp_path) -> None:
     def fake_run(prompt, workspace, **kwargs):
         kwargs["subscriber"](type("Event", (), {"model_dump": lambda self, mode="json": {"type": "agent_start"}})())
-        return {"session_id": "session-1", "event_count": 1, "assistant": "ok", "pending_plan_token": None, "pending_tool_call_count": 0, "queued_message_count": 0}
+        return {"session_id": "session-1", "event_count": 1, "assistant": "ok", "pending_plan_token": None}
 
     monkeypatch.setattr(rpc_mode.sdk, "run", fake_run)
     stdin = io.StringIO('{"protocol_version":"1","id":"1","method":"run","params":{"prompt":"hello"}}\n')

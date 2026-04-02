@@ -6,8 +6,6 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from pp_agent.llm.models import ModelConfig, ProviderConfig
-from pp_agent.llm.registry import create_llm_client
 from pp_agent.runtime.lifecycle import (
     SESSION_BEFORE_FORK,
     SESSION_BEFORE_SWITCH,
@@ -15,7 +13,6 @@ from pp_agent.runtime.lifecycle import (
     SESSION_FORKED,
     SESSION_RESTORE,
     SESSION_REWOUND,
-    SESSION_SHUTDOWN,
     SESSION_START,
     SESSION_SWITCHED,
     SESSION_TREE_NAVIGATED,
@@ -24,112 +21,13 @@ from pp_agent.runtime.lifecycle import (
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.approvals import PendingActionStore
-from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
-from pp_agent.storage.settings import Settings
 from pp_agent.storage.sessions import SessionRecord, SessionStore, SessionTreeEntry
-from pp_agent.storage.timeline import TimelineStore
-from pp_agent.tools.registry import ToolRegistry
 
 LifecycleSubscriber = Callable[[AgentEvent], None]
 RuntimeFactory = Callable[[Path, SessionRecord, Optional[list[LifecycleSubscriber]]], AgentRuntime]
 SessionStoreFactory = Callable[[Path], SessionStore]
 PendingActionStoreFactory = Callable[[Path], PendingActionStore]
-SettingsLoader = Callable[[Path], Any]
-
-
-def load_settings(workspace: Path) -> Settings:
-    return Settings.load(workspace)
-
-
-def create_session_store(workspace: Path) -> SessionStore:
-    settings = load_settings(workspace)
-    candidates = [settings.global_dir / "sessions", settings.project_dir / "global" / "sessions"]
-    last_error: Optional[Exception] = None
-    for candidate in candidates:
-        try:
-            return SessionStore(candidate)
-        except PermissionError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise last_error
-    raise PermissionError("Unable to create a writable session tree store")
-
-
-def create_timeline_store(workspace: Path) -> TimelineStore:
-    settings = load_settings(workspace)
-    candidates = [settings.global_dir / "timelines", settings.project_dir / "global" / "timelines"]
-    last_error: Optional[Exception] = None
-    for candidate in candidates:
-        try:
-            return TimelineStore(candidate)
-        except PermissionError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise last_error
-    raise PermissionError("Unable to create a writable timeline store")
-
-
-def create_pending_action_store(workspace: Path) -> PendingActionStore:
-    return PendingActionStore(workspace.resolve() / ".pp-agent" / "pending-edits")
-
-
-def provider_config_for_llm(config: StoredProviderConfig) -> ProviderConfig:
-    return ProviderConfig(**config.model_dump(mode="python"))
-
-
-def model_config_for_llm(config: StoredModelConfig) -> ModelConfig:
-    return ModelConfig(**config.model_dump(mode="python"))
-
-
-def confirm_tool_call(tool_name: str, args: dict) -> bool:
-    try:
-        import typer
-    except ImportError:  # pragma: no cover
-        typer = None
-    preview = ", ".join(f"{key}={value!r}" for key, value in args.items())
-    if typer:
-        return typer.confirm(f"Allow tool `{tool_name}` with args: {preview}?", default=False)
-    answer = input(f"Allow tool {tool_name} with args: {preview}? [y/N] ").strip().lower()
-    return answer in {"y", "yes"}
-
-
-def create_runtime_from_record(
-    workspace: Path,
-    record: SessionRecord,
-    lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
-) -> AgentRuntime:
-    settings = load_settings(workspace)
-    agent = AgentRuntime(
-        llm_client=create_llm_client(
-            provider=provider_config_for_llm(settings.provider),
-            model=model_config_for_llm(record.model),
-        ),
-        tool_registry=ToolRegistry(workspace, policy=settings.tool_policy),
-        session_store=create_session_store(workspace),
-        session_id=record.id,
-        system_prompt=record.system_prompt,
-        confirm_callback=confirm_tool_call,
-        initial_compaction=record.compaction,
-        initial_pending_tool_calls=record.pending_tool_calls,
-        initial_pending_plan_token=record.pending_plan_token,
-        initial_queued_messages=record.queued_messages,
-        require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
-        timeline_store=create_timeline_store(workspace),
-    )
-    for subscriber in lifecycle_subscribers or []:
-        agent.subscribe(subscriber)
-    return agent
-
-
-def create_default_session_host() -> SessionHost:
-    return SessionHost(
-        runtime_factory=create_runtime_from_record,
-        session_store_factory=create_session_store,
-        pending_action_store_factory=create_pending_action_store,
-        settings_loader=load_settings,
-    )
+SessionDefaultsFactory = Callable[[Path], dict[str, Any]]
 
 
 class SwitchResult(BaseModel):
@@ -178,18 +76,17 @@ class SessionHost:
         runtime_factory: RuntimeFactory,
         session_store_factory: SessionStoreFactory,
         pending_action_store_factory: PendingActionStoreFactory,
-        settings_loader: SettingsLoader,
+        session_defaults_factory: SessionDefaultsFactory,
     ) -> None:
         self._runtime_factory = runtime_factory
         self._session_store_factory = session_store_factory
         self._pending_action_store_factory = pending_action_store_factory
-        self._settings_loader = settings_loader
-        self._active_runtime: Optional[AgentRuntime] = None
+        self._session_defaults_factory = session_defaults_factory
 
     def create_session(self, workspace: Path, *, lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None) -> AgentRuntime:
-        settings = self._settings_loader(workspace)
+        defaults = self._session_defaults_factory(workspace)
         store = self._session_store(workspace)
-        record = store.create(settings.system_prompt, settings.model)
+        record = store.create(defaults["system_prompt"], defaults["model"])
         store.save(record)
         return self._activate_runtime(
             workspace,
@@ -230,7 +127,7 @@ class SessionHost:
         previous_head_id = target_record.active_head_id
         if target_head_id is not None:
             target_record = store.set_active_head(target_session_id, target_head_id)
-        runtime = self._activate_runtime(workspace, target_record, lifecycle_subscribers=lifecycle_subscribers, shutdown_previous=True)
+        runtime = self._activate_runtime(workspace, target_record, lifecycle_subscribers=lifecycle_subscribers)
         self._emit(
             SESSION_SWITCHED,
             session_id=runtime.session_id,
@@ -357,16 +254,11 @@ class SessionHost:
         lifecycle_subscribers: Optional[list[LifecycleSubscriber]],
         event_type: Optional[str] = None,
         event_details: Optional[dict[str, object]] = None,
-        shutdown_previous: bool = False,
     ) -> AgentRuntime:
-        previous = self._active_runtime if shutdown_previous else None
-        if previous is not None and previous.session_id != record.id:
-            self._emit(SESSION_SHUTDOWN, session_id=previous.session_id, subscribers=lifecycle_subscribers, details={"replaced_by_session_id": record.id})
         runtime = self._runtime_factory(workspace, record, lifecycle_subscribers)
         runtime.restore_session_record(record, emit_event=False)
         if event_type is not None:
             runtime._queue_lifecycle_event(runtime._event(event_type, details=event_details or {}))
-        self._active_runtime = runtime
         return runtime
 
     def _emit(

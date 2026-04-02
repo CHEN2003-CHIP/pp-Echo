@@ -49,7 +49,7 @@ def _host(tmp_path: Path) -> SessionHost:
         runtime_factory=runtime_factory,
         session_store_factory=lambda workspace: SessionStore(workspace / "sessions"),
         pending_action_store_factory=lambda workspace: PendingActionStore(workspace / "pending"),
-        settings_loader=lambda workspace: type("Settings", (), {"system_prompt": "system", "model": ModelConfig()})(),
+        session_defaults_factory=lambda workspace: {"system_prompt": "system", "model": ModelConfig()},
     )
 
 
@@ -76,6 +76,15 @@ def test_session_host_events(tmp_path: Path) -> None:
     assert SESSION_TREE_VIEWED in types
     assert SESSION_BEFORE_SWITCH in types
     assert SESSION_SWITCHED in types
+
+
+def test_session_host_create_and_restore_session(tmp_path: Path) -> None:
+    host = _host(tmp_path)
+
+    created = host.create_session(tmp_path)
+    restored = host.restore_session(tmp_path, created.session_id)
+
+    assert created.session_id == restored.session_id
 
 
 def test_session_host_navigate_tree_emits_navigation(tmp_path: Path) -> None:

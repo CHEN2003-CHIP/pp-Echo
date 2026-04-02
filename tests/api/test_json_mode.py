@@ -19,7 +19,7 @@ def test_run_json_outputs_protocol_versioned_json_lines(monkeypatch, tmp_path) -
             "agent_end",
         ]:
             kwargs["subscriber"](type("Event", (), {"model_dump": lambda self, mode="json", event_type=event_type: {"type": event_type}})())
-        return {"session_id": "session-1", "assistant": "ok", "pending_plan_token": None, "pending_tool_call_count": 0, "queued_message_count": 0, "event_count": 7}
+        return {"session_id": "session-1", "assistant": "ok", "pending_plan_token": None, "event_count": 7}
 
     monkeypatch.setattr(run_command.sdk, "run", fake_run)
     monkeypatch.setattr(run_command.console, "print", lambda line="", **kwargs: emitted.append(line))

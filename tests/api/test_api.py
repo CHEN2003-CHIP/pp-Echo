@@ -16,8 +16,6 @@ def test_api_run_returns_payload(monkeypatch, tmp_path: Path) -> None:
             "session_id": "session-1",
             "assistant": "",
             "pending_plan_token": None,
-            "pending_tool_call_count": 0,
-            "queued_message_count": 0,
             "event_count": 1,
         },
     )

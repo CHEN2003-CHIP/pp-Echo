@@ -1,20 +1,16 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
 
 from pp_agent.extensions.hooks import LifecycleSubscriber
+from pp_agent.llm.registry import create_llm_client
 from pp_agent.llm.models import ModelConfig, ProviderConfig
 from pp_agent.runtime.runtime import AgentRuntime
-from pp_agent.runtime.session_host import (
-    SessionHost,
-    confirm_tool_call,
-    create_default_session_host,
-    create_runtime_from_record,
-)
+from pp_agent.runtime.session_host import SessionHost
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
-from pp_agent.storage.sessions import SessionStore
+from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.settings import Settings
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.registry import ToolRegistry
@@ -39,12 +35,11 @@ def create_session_store(settings: Settings) -> SessionStore:
 
 
 def session_store_for(workspace: Path) -> SessionStore:
-    settings = Settings.load(workspace)
-    return create_session_store(settings)
+    return create_session_store(load_settings(workspace))
 
 
 def timeline_store_for(workspace: Path) -> TimelineStore:
-    settings = Settings.load(workspace)
+    settings = load_settings(workspace)
     candidates = [settings.global_dir / "timelines", settings.project_dir / "global" / "timelines"]
     last_error: Optional[Exception] = None
     for candidate in candidates:
@@ -59,7 +54,7 @@ def timeline_store_for(workspace: Path) -> TimelineStore:
 
 
 def pending_action_store_for(workspace: Path) -> PendingActionStore:
-    return PendingActionStore((workspace.resolve() / ".pp-agent" / "pending-edits"))
+    return PendingActionStore(workspace.resolve() / ".pp-agent" / "pending-edits")
 
 
 def create_tool_registry(workspace: Path) -> ToolRegistry:
@@ -75,6 +70,61 @@ def model_config_for_llm(config: StoredModelConfig) -> ModelConfig:
     return ModelConfig(**config.model_dump(mode="python"))
 
 
+def confirm_tool_call(tool_name: str, args: dict) -> bool:
+    try:
+        import typer
+    except ImportError:  # pragma: no cover
+        typer = None
+    preview = ", ".join(f"{key}={value!r}" for key, value in args.items())
+    if typer:
+        return typer.confirm(f"Allow tool `{tool_name}` with args: {preview}?", default=False)
+    answer = input(f"Allow tool {tool_name} with args: {preview}? [y/N] ").strip().lower()
+    return answer in {"y", "yes"}
+
+
+def create_runtime_from_record(
+    workspace: Path,
+    record: SessionRecord,
+    lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
+) -> AgentRuntime:
+    settings = load_settings(workspace)
+    agent = AgentRuntime(
+        llm_client=create_llm_client(
+            provider=provider_config_for_llm(settings.provider),
+            model=model_config_for_llm(record.model),
+        ),
+        tool_registry=ToolRegistry(workspace, policy=settings.tool_policy),
+        session_store=session_store_for(workspace),
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=confirm_tool_call,
+        initial_compaction=record.compaction,
+        initial_pending_tool_calls=record.pending_tool_calls,
+        initial_pending_plan_token=record.pending_plan_token,
+        initial_queued_messages=record.queued_messages,
+        require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
+        timeline_store=timeline_store_for(workspace),
+    )
+    for subscriber in lifecycle_subscribers or []:
+        agent.subscribe(subscriber)
+    return agent
+
+
+def session_defaults_for(workspace: Path) -> dict[str, object]:
+    settings = load_settings(workspace)
+    return {"system_prompt": settings.system_prompt, "model": settings.model.model_copy(deep=True)}
+
+
+def create_session_host(workspace: Path) -> SessionHost:
+    _ = workspace
+    return SessionHost(
+        runtime_factory=create_runtime_from_record,
+        session_store_factory=session_store_for,
+        pending_action_store_factory=pending_action_store_for,
+        session_defaults_factory=session_defaults_for,
+    )
+
+
 def build_agent(
     workspace: Path,
     session_id: Optional[str] = None,
@@ -84,11 +134,6 @@ def build_agent(
     if session_id:
         return host.restore_session(workspace, session_id, lifecycle_subscribers=lifecycle_subscribers)
     return host.create_session(workspace, lifecycle_subscribers=lifecycle_subscribers)
-
-
-def create_session_host(workspace: Path) -> SessionHost:
-    _ = workspace
-    return create_default_session_host()
 
 
 def switch_session_head(workspace: Path, session_id: str, head_id: Optional[str], subscribers: Optional[list[LifecycleSubscriber]] = None) -> str:
@@ -104,8 +149,7 @@ def fork_session(workspace: Path, source_session_id: str, source_turn_id: Option
 
 
 def view_session_tree(workspace: Path, session_id: Optional[str] = None, subscribers: Optional[list[LifecycleSubscriber]] = None) -> None:
-    host = create_session_host(workspace)
-    host.get_tree(workspace, session_id=session_id, lifecycle_subscribers=subscribers)
+    create_session_host(workspace).get_tree(workspace, session_id=session_id, lifecycle_subscribers=subscribers)
 
 
 def rewind_session_with_events(
@@ -116,8 +160,7 @@ def rewind_session_with_events(
     turn_count: Optional[int] = None,
     subscribers: Optional[list[LifecycleSubscriber]] = None,
 ) -> str:
-    host = create_session_host(workspace)
-    result = host.rewind_session(
+    result = create_session_host(workspace).rewind_session(
         workspace,
         source_session_id,
         message_count=message_count,

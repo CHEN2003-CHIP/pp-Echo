@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
 from typing import Optional
 
 from pp_agent.runtime import AgentEvent, AgentRuntime, SessionHost
-from pp_agent.runtime.session_host import create_default_session_host
 
 Subscriber = Callable[[AgentEvent], None]
 
@@ -17,14 +17,14 @@ def create_runtime(
     lifecycle_subscribers: Optional[list[Subscriber]] = None,
     host: Optional[SessionHost] = None,
 ) -> AgentRuntime:
-    session_host = host or create_default_session_host()
+    session_host = host or _default_host(workspace)
     if session_id:
         return session_host.restore_session(workspace, session_id, lifecycle_subscribers=lifecycle_subscribers)
     return session_host.create_session(workspace, lifecycle_subscribers=lifecycle_subscribers)
 
 
 def create_session(workspace: Path, *, lifecycle_subscribers: Optional[list[Subscriber]] = None, host: Optional[SessionHost] = None) -> AgentRuntime:
-    return (host or create_default_session_host()).create_session(workspace, lifecycle_subscribers=lifecycle_subscribers)
+    return (host or _default_host(workspace)).create_session(workspace, lifecycle_subscribers=lifecycle_subscribers)
 
 
 def restore_session(
@@ -34,7 +34,7 @@ def restore_session(
     lifecycle_subscribers: Optional[list[Subscriber]] = None,
     host: Optional[SessionHost] = None,
 ) -> AgentRuntime:
-    return (host or create_default_session_host()).restore_session(workspace, session_id, lifecycle_subscribers=lifecycle_subscribers)
+    return (host or _default_host(workspace)).restore_session(workspace, session_id, lifecycle_subscribers=lifecycle_subscribers)
 
 
 def run(
@@ -83,7 +83,7 @@ def enqueue_message(
 
 
 def list_sessions(workspace: Path, *, host: Optional[SessionHost] = None) -> list[dict]:
-    return [entry.model_dump(mode="json") for entry in (host or create_default_session_host()).list_sessions(workspace)]
+    return [entry.model_dump(mode="json") for entry in (host or _default_host(workspace)).list_sessions(workspace)]
 
 
 def get_session_tree(
@@ -94,7 +94,7 @@ def get_session_tree(
     lifecycle_subscribers: Optional[list[Subscriber]] = None,
     host: Optional[SessionHost] = None,
 ) -> dict:
-    view = (host or create_default_session_host()).get_tree(
+    view = (host or _default_host(workspace)).get_tree(
         workspace,
         session_id=session_id,
         sort_mode=sort_mode,
@@ -111,7 +111,7 @@ def fork_session(
     lifecycle_subscribers: Optional[list[Subscriber]] = None,
     host: Optional[SessionHost] = None,
 ) -> dict:
-    return (host or create_default_session_host()).fork_session(
+    return (host or _default_host(workspace)).fork_session(
         workspace,
         session_id,
         head_id=head_id,
@@ -128,7 +128,7 @@ def rewind_session(
     lifecycle_subscribers: Optional[list[Subscriber]] = None,
     host: Optional[SessionHost] = None,
 ) -> dict:
-    return (host or create_default_session_host()).rewind_session(
+    return (host or _default_host(workspace)).rewind_session(
         workspace,
         session_id,
         turn_count=turn_count,
@@ -138,7 +138,7 @@ def rewind_session(
 
 
 def approvals_summary(workspace: Path, *, host: Optional[SessionHost] = None) -> dict:
-    return (host or create_default_session_host()).approvals_summary(workspace)
+    return (host or _default_host(workspace)).approvals_summary(workspace)
 
 
 def subscribe(runtime: AgentRuntime, callback: Subscriber) -> AgentRuntime:
@@ -154,6 +154,11 @@ def chat(
     host: Optional[SessionHost] = None,
 ) -> AgentRuntime:
     return create_runtime(workspace, session_id=session_id, lifecycle_subscribers=lifecycle_subscribers, host=host)
+
+
+def _default_host(workspace: Path) -> SessionHost:
+    bootstrap = import_module("pp_agent.app.bootstrap")
+    return bootstrap.create_session_host(workspace)
 
 
 def _merge_subscribers(*, subscriber: Optional[Subscriber], subscribers: Optional[list[Subscriber]]) -> list[Subscriber]:
@@ -182,10 +187,14 @@ def _result_payload(runtime: AgentRuntime, events: list[AgentEvent], *, collect_
         "session_id": runtime.session_id,
         "assistant": _assistant_preview(runtime),
         "pending_plan_token": runtime.state.pending_plan_token,
-        "pending_tool_call_count": len(runtime.state.pending_tool_calls),
-        "queued_message_count": len(runtime.state.queued_messages),
         "event_count": len(events),
     }
+    stats = {
+        "pending_tool_call_count": len(runtime.state.pending_tool_calls),
+        "queued_message_count": len(runtime.state.queued_messages),
+    }
+    if any(value for value in stats.values()):
+        payload["stats"] = stats
     if collect_events:
         payload["events"] = [event.model_dump(mode="json") for event in events]
     return payload

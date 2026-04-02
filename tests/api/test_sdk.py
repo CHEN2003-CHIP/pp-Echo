@@ -56,6 +56,10 @@ def test_sdk_run_does_not_return_events_by_default(tmp_path: Path) -> None:
     result = sdk.run("hello", tmp_path, host=FakeHost())
 
     assert result["session_id"] == "session-1"
+    assert result["pending_plan_token"] is None
+    assert result["event_count"] == 1
+    assert result["assistant"] == "done"
+    assert "stats" not in result
     assert "events" not in result
 
 
@@ -64,3 +68,17 @@ def test_sdk_run_collects_events_only_when_requested(tmp_path: Path) -> None:
 
     assert result["event_count"] == 1
     assert result["events"] == [{"type": "agent_end"}]
+
+
+def test_sdk_run_uses_stats_for_optional_expansion(tmp_path: Path) -> None:
+    runtime = FakeRuntime()
+    runtime.state.pending_tool_calls = [object()]
+    runtime.state.queued_messages = [object()]
+
+    class StatsHost(FakeHost):
+        def create_session(self, workspace: Path, *, lifecycle_subscribers=None):
+            return runtime
+
+    result = sdk.run("hello", tmp_path, host=StatsHost())
+
+    assert result["stats"] == {"pending_tool_call_count": 1, "queued_message_count": 1}

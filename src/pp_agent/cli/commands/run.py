@@ -34,10 +34,14 @@ def run_main(
             "session_id": agent.session_id,
             "assistant": "",
             "pending_plan_token": agent.state.pending_plan_token,
-            "pending_tool_call_count": len(agent.state.pending_tool_calls),
-            "queued_message_count": len(agent.state.queued_messages),
             "event_count": len(events),
         }
+        stats = {
+            "pending_tool_call_count": len(agent.state.pending_tool_calls),
+            "queued_message_count": len(agent.state.queued_messages),
+        }
+        if any(value for value in stats.values()):
+            payload["stats"] = stats
         if json_mode:
             console.print(emit_json_result(payload))
         else:
