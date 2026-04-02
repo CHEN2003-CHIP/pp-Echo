@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-pp-agent = "agent_cli.main:main"
+pp-agent = "pp_agent.cli.main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
