@@ -35,6 +35,8 @@ class RuntimeMonitor:
             return event
         if state.turn.turn_id == 0 and event.type not in {"agent_start", "agent_end"}:
             overrides.setdefault("turn_id", 1)
+        event.turn_id = int(overrides.get("turn_id", event.turn_id if event.turn_id is not None else state.turn.turn_id))
+        event.phase = str(overrides.get("phase", event.phase or state.turn.phase))
         event.details = self.attach(event.details, state, **overrides)
         return event
 

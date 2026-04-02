@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -28,22 +28,11 @@ class AgentState(BaseModel):
 
 
 class AgentEvent(BaseModel):
-    type: Literal[
-        "agent_start",
-        "turn_start",
-        "planner_start",
-        "planner_step",
-        "planner_end",
-        "message_delta",
-        "tool_start",
-        "tool_end",
-        "turn_end",
-        "agent_end",
-        "error",
-        "compaction",
-        "queue_update",
-        "turn_state",
-    ]
+    type: str
+    session_id: str = ""
+    turn_id: Optional[int] = None
+    phase: Optional[str] = None
+    timestamp: float = 0.0
     message: Optional[str] = None
     delta: Optional[str] = None
     tool_name: Optional[str] = None
