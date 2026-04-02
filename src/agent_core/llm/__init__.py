@@ -1,3 +1,3 @@
-﻿from agent_core.llm.client import LLMClient
+﻿from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
 
-__all__ = ["LLMClient"]
+__all__ = ["LLMClient", "LLMClientError"]

@@ -1,0 +1,39 @@
+﻿from __future__ import annotations
+
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+
+TurnPhase = Literal["idle", "planning", "awaiting_approval", "executing", "draining_queue"]
+
+
+class CompactionState(BaseModel):
+    summary: str = ""
+    summarized_message_count: int = 0
+
+
+class QueuedMessage(BaseModel):
+    id: str
+    delivery: Literal["steering", "follow_up"] = "follow_up"
+    text: str
+    created_at: float
+
+
+class PlanStep(BaseModel):
+    title: str
+    tool_name: Optional[str] = None
+    tool_args: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["pending", "awaiting_approval", "in_progress", "completed", "failed"] = "pending"
+
+
+class RuntimeStatusSnapshot(BaseModel):
+    turn_id: int = 0
+    phase: TurnPhase = "idle"
+    queue_count: int = 0
+    pending_plan: bool = False
+    pending_tool_count: int = 0
+    reason: str = ""
+    planner_active: bool = False
+    queue_action: Optional[str] = None
+    queue_delivery: Optional[str] = None
