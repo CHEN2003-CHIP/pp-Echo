@@ -2,16 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pp_agent.app.bootstrap import pending_action_store_for
+from pp_agent.api import sdk
 from pp_agent.cli.render.runtime import compact_text, console
 
 
 def approvals_summary_payload(workspace: Path) -> dict:
-    items = pending_action_store_for(workspace).list()
-    by_type: dict[str, int] = {}
-    for item in items:
-        by_type[item["action_type"]] = by_type.get(item["action_type"], 0) + 1
-    return {"count": len(items), "by_type": by_type, "tokens": [item["token"] for item in items], "items": items}
+    return sdk.approvals_summary(workspace)
 
 
 def short_token(token: str) -> str:

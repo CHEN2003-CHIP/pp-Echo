@@ -31,6 +31,7 @@ from pp_agent.runtime.lifecycle import (
     SESSION_REWOUND,
     SESSION_SHUTDOWN,
     SESSION_START,
+    SESSION_SWITCHED,
     SESSION_TREE_NAVIGATED,
     SESSION_TREE_VIEWED,
     TOOL_CALL,
@@ -44,6 +45,7 @@ from pp_agent.runtime.lifecycle import (
     TURN_STATE,
 )
 from pp_agent.runtime.runtime import AgentRuntime, AgentSession
+from pp_agent.runtime.session_host import ForkResult, NavigateResult, RewindResult, SessionHost, SessionTreeView, SwitchResult
 from pp_agent.runtime.state import AgentEvent, AgentState, TurnSnapshot
 
 __all__ = [
@@ -86,8 +88,15 @@ __all__ = [
     "SESSION_REWOUND",
     "SESSION_SHUTDOWN",
     "SESSION_START",
+    "SESSION_SWITCHED",
     "SESSION_TREE_NAVIGATED",
     "SESSION_TREE_VIEWED",
+    "SessionHost",
+    "SessionTreeView",
+    "SwitchResult",
+    "ForkResult",
+    "NavigateResult",
+    "RewindResult",
     "TOOL_CALL",
     "TOOL_END",
     "TOOL_ERROR",

@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 
-from pp_agent.app.bootstrap import build_agent
-from pp_agent.cli.render.runtime import compact_text, console, render_event
+from pp_agent.api import sdk
+from pp_agent.api.json_mode import emit_json_error, emit_json_event, emit_json_result
+from pp_agent.api.rpc_mode import run_stdio_rpc
+from pp_agent.cli.render.runtime import console, render_event
 
 
-def _assistant_preview(agent, limit: int = 400) -> str:
-    for message in reversed(agent.state.messages):
-        if message.role != "assistant":
-            continue
-        parts = [part.text.strip() for part in message.content if getattr(part, "text", "").strip()]
-        text = " ".join(parts)
-        return compact_text(text, limit=limit) if text else ""
-    return ""
+def build_agent(workspace: Path, session_id: Optional[str] = None):
+    return sdk.create_runtime(workspace, session_id=session_id)
+
+
+_DEFAULT_BUILD_AGENT = build_agent
 
 
 def run_main(
@@ -25,24 +23,41 @@ def run_main(
     json_mode: bool = False,
     mode: str = "default",
 ) -> dict:
-    agent = build_agent(workspace, session_id=session_id)
-    if not json_mode and mode != "rpc":
-        agent.subscribe(render_event)
-    events = agent.prompt(prompt)
-    payload = {
-        "mode": mode,
-        "session_id": agent.session_id,
-        "pending_plan_token": agent.state.pending_plan_token,
-        "pending_tool_call_count": len(agent.state.pending_tool_calls),
-        "queued_message_count": len(agent.state.queued_messages),
-        "event_count": len(events),
-        "assistant": _assistant_preview(agent, limit=400),
-        "events": [event.model_dump(mode="json") for event in events] if mode == "rpc" else None,
-    }
-    if json_mode or mode == "rpc":
-        console.print(json.dumps(payload, ensure_ascii=False, indent=2))
-    else:
-        console.print()
+    if mode == "rpc":
+        run_stdio_rpc(workspace)
+        return {"mode": "rpc"}
+
+    if build_agent is not _DEFAULT_BUILD_AGENT:
+        agent = build_agent(workspace, session_id=session_id)
+        events = agent.prompt(prompt)
+        payload = {
+            "session_id": agent.session_id,
+            "assistant": "",
+            "pending_plan_token": agent.state.pending_plan_token,
+            "pending_tool_call_count": len(agent.state.pending_tool_calls),
+            "queued_message_count": len(agent.state.queued_messages),
+            "event_count": len(events),
+        }
+        if json_mode:
+            console.print(emit_json_result(payload))
+        else:
+            console.print()
+        return payload
+
+    if json_mode:
+        def emit(event) -> None:
+            console.print(emit_json_event(event))
+
+        try:
+            payload = sdk.run(prompt, workspace, session_id=session_id, subscriber=emit)
+        except Exception as exc:  # noqa: BLE001
+            console.print(emit_json_error("run_failed", str(exc)))
+            return {"error": str(exc)}
+        console.print(emit_json_result(payload))
+        return payload
+
+    payload = sdk.run(prompt, workspace, session_id=session_id, subscriber=render_event)
+    console.print()
     return payload
 
 

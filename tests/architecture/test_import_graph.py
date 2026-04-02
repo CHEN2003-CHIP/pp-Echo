@@ -6,14 +6,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / 'src' / 'pp_agent'
 ALLOWED = {
-    'cli': {'cli', 'runtime', 'domain', 'storage', 'app'},
+    'cli': {'cli', 'runtime', 'domain', 'storage', 'app', 'api'},
     'runtime': {'runtime', 'domain', 'llm', 'tools', 'storage'},
     'storage': {'storage', 'domain', 'llm'},
     'llm': {'llm', 'domain'},
     'domain': {'domain'},
     'tools': {'tools', 'domain', 'storage'},
     'app': {'app', 'runtime', 'storage', 'llm', 'tools', 'domain', 'prompts', 'skills', 'extensions'},
-    'api': {'api', 'cli', 'app', 'runtime', 'storage', 'domain'},
+    'api': {'api', 'runtime', 'storage', 'domain'},
     'prompts': {'prompts'},
     'skills': {'skills'},
     'extensions': {'extensions', 'domain', 'runtime'},

@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from pp_agent.app.bootstrap import fork_session, session_store_for, switch_session_head, view_session_tree, rewind_session_with_events
+from pp_agent.api import sdk
+from pp_agent.app.bootstrap import create_session_host, session_store_for
 from pp_agent.cli.render.runtime import console
 from pp_agent.cli.render.sessions import render_session_tree
 
@@ -62,43 +63,32 @@ def resolve_session_turn_ref(
 
 def resume_target(workspace: Path, ref: str, current_session_id: Optional[str] = None) -> str:
     session_id, turn_id = resolve_session_turn_ref(workspace, ref, current_session_id=current_session_id)
-    if turn_id is not None:
-        switch_session_head(workspace, session_id, turn_id)
+    if current_session_id is not None:
+        create_session_host(workspace).switch_session(workspace, current_session_id, session_id, target_head_id=turn_id)
+    elif turn_id is not None:
+        create_session_host(workspace).navigate_tree(workspace, session_id, turn_id)
     return session_id
 
 
 def branch_session(workspace: Path, source_session_id: str, source_turn_id: Optional[str] = None) -> str:
-    return fork_session(workspace, source_session_id, source_turn_id)
+    return sdk.fork_session(workspace, source_session_id, head_id=source_turn_id)["session_id"]
 
 
 def rewind_session(workspace: Path, source_session_id: str, message_count: int) -> str:
-    return rewind_session_with_events(workspace, source_session_id, message_count=message_count)
+    return sdk.rewind_session(workspace, source_session_id, message_count=message_count)["session_id"]
 
 
 def rewind_session_turns(workspace: Path, source_session_id: str, turn_count: int) -> str:
-    return rewind_session_with_events(workspace, source_session_id, turn_count=turn_count)
+    return sdk.rewind_session(workspace, source_session_id, turn_count=turn_count)["session_id"]
 
 
 def sessions_list_main(workspace: Path) -> None:
-    store = session_store_for(workspace)
-    payload = [
-        {
-            "id": session.id,
-            "parent_id": session.parent_id,
-            "model": session.model.model,
-            "updated_at": session.updated_at,
-            "summarized_message_count": session.compaction.summarized_message_count,
-            "pending_plan_token": session.pending_plan_token,
-            "pending_tool_call_count": len(session.pending_tool_calls),
-            "queued_message_count": len(session.queued_messages),
-        }
-        for session in store.list()
-    ]
+    payload = sdk.list_sessions(workspace)
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def sessions_tree_main(workspace: Path, session_id: Optional[str] = None, sort_mode: str = "branch") -> None:
-    view_session_tree(workspace, session_id=session_id)
+    sdk.get_session_tree(workspace, session_id=session_id, sort_mode=sort_mode)
     render_session_tree(workspace, current_session_id=session_id, focus_session_id=session_id, sort_mode=sort_mode)
 
 

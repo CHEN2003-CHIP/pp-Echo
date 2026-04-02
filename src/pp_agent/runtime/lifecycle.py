@@ -10,6 +10,7 @@ from pp_agent.tools.base import ToolExecutionResult
 SESSION_START = "session_start"
 SESSION_RESTORE = "session_restore"
 SESSION_BEFORE_SWITCH = "session_before_switch"
+SESSION_SWITCHED = "session_switched"
 SESSION_BEFORE_FORK = "session_before_fork"
 SESSION_FORKED = "session_forked"
 SESSION_BEFORE_TREE = "session_before_tree"

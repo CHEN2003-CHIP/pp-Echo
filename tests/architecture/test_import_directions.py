@@ -6,15 +6,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / "src" / "pp_agent"
-CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain", "extensions"}
+CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain", "extensions", "api", "tools"}
 ALLOWED = {
-    "cli": {"cli", "app", "runtime", "storage", "domain"},
+    "cli": {"cli", "app", "runtime", "storage", "domain", "api"},
     "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions"},
     "runtime": {"runtime", "storage", "llm", "tools", "domain"},
     "llm": {"llm", "domain"},
     "storage": {"storage", "domain"},
     "domain": {"domain"},
     "extensions": {"extensions", "runtime", "domain"},
+    "tools": {"tools", "storage", "domain"},
+    "api": {"api", "runtime", "storage", "domain"},
 }
 EXCLUDED = {
     PACKAGE_ROOT / "cli" / "_legacy_main_impl.py",
@@ -76,3 +78,13 @@ def test_runtime_and_extensions_do_not_depend_on_cli_rendering() -> None:
     for path in (PACKAGE_ROOT / "extensions").rglob("*.py"):
         text = path.read_text(encoding="utf-8-sig")
         assert "pp_agent.cli" not in text
+
+
+def test_api_and_programmatic_modes_do_not_depend_on_cli_rendering() -> None:
+    for path in (PACKAGE_ROOT / "api").rglob("*.py"):
+        text = path.read_text(encoding="utf-8-sig")
+        assert "pp_agent.cli.commands" not in text
+        assert "pp_agent.cli.render" not in text
+
+    text = (PACKAGE_ROOT / "runtime" / "session_host.py").read_text(encoding="utf-8-sig")
+    assert "pp_agent.cli" not in text

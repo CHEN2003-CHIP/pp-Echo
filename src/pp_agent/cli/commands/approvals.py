@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pp_agent.app.bootstrap import build_agent, create_tool_registry, load_settings, pending_action_store_for
+from pp_agent.api import sdk
+from pp_agent.app.bootstrap import create_tool_registry, pending_action_store_for
 from pp_agent.cli.render.approvals import approvals_summary_payload, render_approval_panel
 from pp_agent.cli.render.runtime import console, render_event
 
@@ -18,7 +19,7 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
         session_id = payload.get("details", {}).get("session_id")
         if not session_id:
             raise ValueError("planner_approval token is missing session_id")
-        agent = build_agent(workspace, session_id=session_id)
+        agent = sdk.restore_session(workspace, session_id)
         agent.subscribe(render_event)
         events = agent.approve_pending_plan(token)
         if render:
@@ -45,7 +46,7 @@ def reject_pending_action(workspace: Path, token: str, render: bool = True) -> d
         session_id = payload.get("details", {}).get("session_id")
         if not session_id:
             raise ValueError("planner_approval token is missing session_id")
-        agent = build_agent(workspace, session_id=session_id)
+        agent = sdk.restore_session(workspace, session_id)
         agent.reject_pending_plan(token)
         message = f"Rejected planner approval {token} for session {session_id}"
         if render:

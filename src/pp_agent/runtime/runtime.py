@@ -131,7 +131,7 @@ class AgentRuntime:
         self._runtime_hooks = value
         self._wire_lifecycle()
 
-    def restore_session_record(self, record: SessionRecord) -> None:
+    def restore_session_record(self, record: SessionRecord, *, emit_event: bool = True) -> None:
         normalized = self.session_store.load(record.id) if self._session_exists() else self.session_store._normalized_record(record)
         self._session_record = normalized.model_copy(deep=True)
         active_head = self.session_store.turn_node(normalized, normalized.active_head_id)
@@ -139,7 +139,8 @@ class AgentRuntime:
         self._base_branch_messages = self.session_store.branch_messages(normalized, self._base_head_id)
         self.state.messages = self.session_store.branch_messages(normalized, normalized.active_head_id)
         self.state.turn.turn_id = sum(1 for message in self.state.messages if message.role == "user")
-        self._queue_lifecycle_event(self._event(SESSION_RESTORE, details={"active_head_id": normalized.active_head_id}))
+        if emit_event:
+            self._queue_lifecycle_event(self._event(SESSION_RESTORE, details={"active_head_id": normalized.active_head_id}))
 
     def prompt(self, text: str) -> list[AgentEvent]:
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
