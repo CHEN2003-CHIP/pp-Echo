@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from pp_agent.app.bootstrap import session_store_for
+from pp_agent.app.bootstrap import fork_session, session_store_for, switch_session_head, view_session_tree, rewind_session_with_events
 from pp_agent.cli.render.runtime import console
 from pp_agent.cli.render.sessions import render_session_tree
 
@@ -63,29 +63,20 @@ def resolve_session_turn_ref(
 def resume_target(workspace: Path, ref: str, current_session_id: Optional[str] = None) -> str:
     session_id, turn_id = resolve_session_turn_ref(workspace, ref, current_session_id=current_session_id)
     if turn_id is not None:
-        session_store_for(workspace).set_active_head(session_id, turn_id)
+        switch_session_head(workspace, session_id, turn_id)
     return session_id
 
 
 def branch_session(workspace: Path, source_session_id: str, source_turn_id: Optional[str] = None) -> str:
-    store = session_store_for(workspace)
-    forked = store.fork_from_head(source_session_id, source_turn_id) if source_turn_id is not None else store.fork(source_session_id)
-    store.save(forked)
-    return forked.id
+    return fork_session(workspace, source_session_id, source_turn_id)
 
 
 def rewind_session(workspace: Path, source_session_id: str, message_count: int) -> str:
-    store = session_store_for(workspace)
-    rewound = store.rewind(source_session_id, message_count)
-    store.save(rewound)
-    return rewound.id
+    return rewind_session_with_events(workspace, source_session_id, message_count=message_count)
 
 
 def rewind_session_turns(workspace: Path, source_session_id: str, turn_count: int) -> str:
-    store = session_store_for(workspace)
-    rewound = store.rewind_turns(source_session_id, turn_count)
-    store.save(rewound)
-    return rewound.id
+    return rewind_session_with_events(workspace, source_session_id, turn_count=turn_count)
 
 
 def sessions_list_main(workspace: Path) -> None:
@@ -107,6 +98,7 @@ def sessions_list_main(workspace: Path) -> None:
 
 
 def sessions_tree_main(workspace: Path, session_id: Optional[str] = None, sort_mode: str = "branch") -> None:
+    view_session_tree(workspace, session_id=session_id)
     render_session_tree(workspace, current_session_id=session_id, focus_session_id=session_id, sort_mode=sort_mode)
 
 

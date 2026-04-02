@@ -97,33 +97,17 @@ class RuntimeHooks:
         emitter.on_tool_result(self._handle_tool_result)
         emitter.on_tool_error(self._handle_tool_error)
 
-    def _handle_context_built(self, event, messages: list[ChatMessage]) -> ContextBuildDecision:
-        state = event.details.get("state")
-        if not isinstance(state, AgentState):
-            return ContextBuildDecision(messages=messages)
+    def _handle_context_built(self, event, state: AgentState, messages: list[ChatMessage]) -> ContextBuildDecision:
         return ContextBuildDecision(messages=self.transform_context(state, messages))
 
-    def _handle_tool_call(self, event) -> LifecycleToolCallDecision:
-        state = event.details.get("state")
-        call = event.details.get("tool_call")
-        registry = event.details.get("tool_registry")
-        if not isinstance(state, AgentState) or not isinstance(call, ToolCall) or not isinstance(registry, ToolRegistry):
-            return LifecycleToolCallDecision()
+    def _handle_tool_call(self, event, state: AgentState, call: ToolCall, registry: ToolRegistry) -> LifecycleToolCallDecision:
         decision = self.before_tool_call(state, call, registry)
         return LifecycleToolCallDecision(action=decision.action, message=decision.message, details=decision.details)
 
-    def _handle_tool_result(self, event, result: ToolExecutionResult) -> LifecycleToolResultDecision:
-        state = event.details.get("state")
-        call = event.details.get("tool_call")
-        if not isinstance(state, AgentState) or not isinstance(call, ToolCall):
-            return LifecycleToolResultDecision(result=result)
+    def _handle_tool_result(self, event, state: AgentState, call: ToolCall, result: ToolExecutionResult) -> LifecycleToolResultDecision:
         decision = self.after_tool_call(state, call, result)
         return LifecycleToolResultDecision(continue_loop=decision.continue_loop, details=decision.details, result=result)
 
-    def _handle_tool_error(self, event, error: Exception) -> LifecycleToolErrorDecision:
-        state = event.details.get("state")
-        call = event.details.get("tool_call")
-        if not isinstance(state, AgentState) or not isinstance(call, ToolCall):
-            return LifecycleToolErrorDecision()
+    def _handle_tool_error(self, event, state: AgentState, call: ToolCall, error: Exception) -> LifecycleToolErrorDecision:
         decision = self.on_tool_error(state, call, error)
         return LifecycleToolErrorDecision(continue_loop=decision.continue_loop, details=decision.details)

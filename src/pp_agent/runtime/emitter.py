@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from pp_agent.domain import ChatMessage, ToolCall
+from pp_agent.runtime.state import AgentState
 from pp_agent.runtime.lifecycle import (
     ContextBuildDecision,
     ProviderRequestDecision,
@@ -18,13 +19,13 @@ from pp_agent.tools.base import ToolExecutionResult
 
 
 LifecycleSubscriber = Callable[[AgentEvent], None]
-ContextBuildHandler = Callable[[AgentEvent, list[ChatMessage]], ContextBuildDecision | list[ChatMessage] | None]
-ProviderRequestHandler = Callable[[AgentEvent, list[ChatMessage], Optional[list[dict[str, Any]]]], ProviderRequestDecision | None]
-ProviderResponseHandler = Callable[[AgentEvent, str, list[ToolCall]], ProviderResponseDecision | None]
-ToolCallHandler = Callable[[AgentEvent], ToolCallDecision | None]
-ToolResultHandler = Callable[[AgentEvent, ToolExecutionResult], ToolResultDecision | None]
-ToolErrorHandler = Callable[[AgentEvent, Exception], ToolErrorDecision | None]
-SessionCompactHandler = Callable[[AgentEvent], SessionCompactDecision | None]
+ContextBuildHandler = Callable[[AgentEvent, AgentState, list[ChatMessage]], Optional[Union[ContextBuildDecision, list[ChatMessage]]]]
+ProviderRequestHandler = Callable[[AgentEvent, AgentState, list[ChatMessage], Optional[list[dict[str, Any]]]], Optional[ProviderRequestDecision]]
+ProviderResponseHandler = Callable[[AgentEvent, str, list[ToolCall]], Optional[ProviderResponseDecision]]
+ToolCallHandler = Callable[[AgentEvent, AgentState, ToolCall, Any], Optional[ToolCallDecision]]
+ToolResultHandler = Callable[[AgentEvent, AgentState, ToolCall, ToolExecutionResult], Optional[ToolResultDecision]]
+ToolErrorHandler = Callable[[AgentEvent, AgentState, ToolCall, Exception], Optional[ToolErrorDecision]]
+SessionCompactHandler = Callable[[AgentEvent], Optional[SessionCompactDecision]]
 
 
 class LifecycleEmitter:
@@ -67,10 +68,10 @@ class LifecycleEmitter:
             callback(event)
         return event
 
-    def emit_context_built(self, event: AgentEvent, messages: list[ChatMessage]) -> ContextBuildDecision:
+    def emit_context_built(self, event: AgentEvent, state: AgentState, messages: list[ChatMessage]) -> ContextBuildDecision:
         final = ContextBuildDecision(messages=messages)
         for callback in self._context_built_handlers:
-            decision = callback(event, final.messages or messages)
+            decision = callback(event, state, final.messages or messages)
             if decision is None:
                 continue
             if isinstance(decision, list):
@@ -85,12 +86,13 @@ class LifecycleEmitter:
     def emit_before_provider_request(
         self,
         event: AgentEvent,
+        state: AgentState,
         messages: list[ChatMessage],
         tools: Optional[list[dict[str, Any]]],
     ) -> ProviderRequestDecision:
         final = ProviderRequestDecision(messages=messages, tools=tools)
         for callback in self._provider_request_handlers:
-            decision = callback(event, final.messages or messages, final.tools if final.tools is not None else tools)
+            decision = callback(event, state, final.messages or messages, final.tools if final.tools is not None else tools)
             if decision is None:
                 continue
             if decision.messages is not None:
@@ -115,10 +117,10 @@ class LifecycleEmitter:
                 final.details.update(decision.details)
         return final
 
-    def emit_tool_call(self, event: AgentEvent) -> ToolCallDecision:
+    def emit_tool_call(self, event: AgentEvent, state: AgentState, call: ToolCall, registry: Any) -> ToolCallDecision:
         final = ToolCallDecision()
         for callback in self._tool_call_handlers:
-            decision = callback(event)
+            decision = callback(event, state, call, registry)
             if decision is None:
                 continue
             if decision.details:
@@ -131,10 +133,10 @@ class LifecycleEmitter:
                 final.message = decision.message
         return final
 
-    def emit_tool_result(self, event: AgentEvent, result: ToolExecutionResult) -> ToolResultDecision:
+    def emit_tool_result(self, event: AgentEvent, state: AgentState, call: ToolCall, result: ToolExecutionResult) -> ToolResultDecision:
         final = ToolResultDecision(result=result)
         for callback in self._tool_result_handlers:
-            decision = callback(event, final.result or result)
+            decision = callback(event, state, call, final.result or result)
             if decision is None:
                 continue
             final.continue_loop = final.continue_loop and decision.continue_loop
@@ -144,10 +146,10 @@ class LifecycleEmitter:
                 final.details.update(decision.details)
         return final
 
-    def emit_tool_error(self, event: AgentEvent, error: Exception) -> ToolErrorDecision:
+    def emit_tool_error(self, event: AgentEvent, state: AgentState, call: ToolCall, error: Exception) -> ToolErrorDecision:
         final = ToolErrorDecision()
         for callback in self._tool_error_handlers:
-            decision = callback(event, error)
+            decision = callback(event, state, call, error)
             if decision is None:
                 continue
             final.continue_loop = final.continue_loop or decision.continue_loop

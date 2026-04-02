@@ -3,9 +3,21 @@
 from pathlib import Path
 from typing import Optional
 
+from pp_agent.extensions.hooks import LifecycleSubscriber
 from pp_agent.llm.registry import create_llm_client
 from pp_agent.llm.models import ModelConfig, ProviderConfig
+from pp_agent.runtime.lifecycle import (
+    SESSION_BEFORE_FORK,
+    SESSION_BEFORE_SWITCH,
+    SESSION_BEFORE_TREE,
+    SESSION_FORKED,
+    SESSION_REWOUND,
+    SESSION_START,
+    SESSION_TREE_NAVIGATED,
+    SESSION_TREE_VIEWED,
+)
 from pp_agent.runtime.runtime import AgentRuntime
+from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 from pp_agent.storage.sessions import SessionStore
@@ -81,9 +93,14 @@ def confirm_tool_call(tool_name: str, args: dict) -> bool:
     return answer in {"y", "yes"}
 
 
-def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentRuntime:
+def build_agent(
+    workspace: Path,
+    session_id: Optional[str] = None,
+    lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
+) -> AgentRuntime:
     settings = load_settings(workspace)
     session_store = create_session_store(settings)
+    is_new_session = session_id is None
     record = session_store.load(session_id) if session_id else session_store.create(settings.system_prompt, settings.model)
     agent = AgentRuntime(
         llm_client=create_llm_client(
@@ -102,5 +119,68 @@ def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentRunti
         require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
         timeline_store=timeline_store_for(workspace),
     )
+    for subscriber in lifecycle_subscribers or []:
+        agent.subscribe(subscriber)
+    if is_new_session:
+        agent._queue_lifecycle_event(agent._event(SESSION_START, details={"new_session": True}))
     agent.restore_session_record(record)
     return agent
+
+
+def _emit_bootstrap_event(
+    event_type: str,
+    *,
+    session_id: str,
+    subscribers: Optional[list[LifecycleSubscriber]] = None,
+    details: Optional[dict[str, object]] = None,
+) -> AgentEvent:
+    event = AgentEvent(type=event_type, session_id=session_id, details=details or {})
+    for subscriber in subscribers or []:
+        subscriber(event)
+    return event
+
+
+def switch_session_head(workspace: Path, session_id: str, head_id: Optional[str], subscribers: Optional[list[LifecycleSubscriber]] = None) -> str:
+    _emit_bootstrap_event(SESSION_BEFORE_SWITCH, session_id=session_id, subscribers=subscribers, details={"target_head_id": head_id})
+    store = session_store_for(workspace)
+    before = store.load(session_id).active_head_id
+    if head_id is not None:
+        store.set_active_head(session_id, head_id)
+    after = store.load(session_id).active_head_id
+    if before != after:
+        _emit_bootstrap_event(SESSION_TREE_NAVIGATED, session_id=session_id, subscribers=subscribers, details={"from_head_id": before, "to_head_id": after})
+    return session_id
+
+
+def fork_session(workspace: Path, source_session_id: str, source_turn_id: Optional[str] = None, subscribers: Optional[list[LifecycleSubscriber]] = None) -> str:
+    _emit_bootstrap_event(SESSION_BEFORE_FORK, session_id=source_session_id, subscribers=subscribers, details={"source_head_id": source_turn_id})
+    store = session_store_for(workspace)
+    forked = store.fork_from_head(source_session_id, source_turn_id) if source_turn_id is not None else store.fork(source_session_id)
+    store.save(forked)
+    _emit_bootstrap_event(SESSION_FORKED, session_id=forked.id, subscribers=subscribers, details={"source_session_id": source_session_id, "target_session_id": forked.id, "source_head_id": source_turn_id})
+    return forked.id
+
+
+def view_session_tree(workspace: Path, session_id: Optional[str] = None, subscribers: Optional[list[LifecycleSubscriber]] = None) -> None:
+    _emit_bootstrap_event(SESSION_BEFORE_TREE, session_id=session_id or "", subscribers=subscribers, details={"view": "tree"})
+    _emit_bootstrap_event(SESSION_TREE_VIEWED, session_id=session_id or "", subscribers=subscribers, details={"view": "tree"})
+
+
+def rewind_session_with_events(
+    workspace: Path,
+    source_session_id: str,
+    *,
+    message_count: Optional[int] = None,
+    turn_count: Optional[int] = None,
+    subscribers: Optional[list[LifecycleSubscriber]] = None,
+) -> str:
+    store = session_store_for(workspace)
+    rewound = store.rewind(source_session_id, message_count) if message_count is not None else store.rewind_turns(source_session_id, turn_count or 0)
+    store.save(rewound)
+    _emit_bootstrap_event(
+        SESSION_REWOUND,
+        session_id=rewound.id,
+        subscribers=subscribers,
+        details={"source_session_id": source_session_id, "target_session_id": rewound.id, "message_count": message_count, "turn_count": turn_count},
+    )
+    return rewound.id
