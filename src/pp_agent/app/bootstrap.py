@@ -12,6 +12,10 @@ from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.registry import ToolRegistry
 
 
+def load_settings(workspace: Path) -> Settings:
+    return Settings.load(workspace)
+
+
 def create_session_store(settings: Settings) -> SessionStore:
     candidates = [settings.global_dir / "sessions", settings.project_dir / "global" / "sessions"]
     last_error: Optional[Exception] = None
@@ -50,6 +54,11 @@ def pending_action_store_for(workspace: Path) -> PendingActionStore:
     return PendingActionStore((workspace.resolve() / ".pp-agent" / "pending-edits"))
 
 
+def create_tool_registry(workspace: Path) -> ToolRegistry:
+    settings = load_settings(workspace)
+    return ToolRegistry(workspace, policy=settings.tool_policy)
+
+
 def confirm_tool_call(tool_name: str, args: dict) -> bool:
     try:
         import typer
@@ -63,7 +72,7 @@ def confirm_tool_call(tool_name: str, args: dict) -> bool:
 
 
 def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentRuntime:
-    settings = Settings.load(workspace)
+    settings = load_settings(workspace)
     session_store = create_session_store(settings)
     record = session_store.load(session_id) if session_id else session_store.create(settings.system_prompt, settings.model)
     agent = AgentRuntime(
