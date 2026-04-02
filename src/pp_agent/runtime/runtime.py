@@ -108,6 +108,7 @@ class AgentRuntime:
         self._base_head_id: Optional[str] = None
         self._base_branch_messages: list[ChatMessage] = []
         self._pending_lifecycle_events: list[AgentEvent] = []
+        self._captured_events: Optional[list[AgentEvent]] = None
         self._runtime_hooks = runtime_hooks or RuntimeHooks(
             transform_context=[self._default_transform_context],
             before_tool_call=[self._default_before_tool_call],
@@ -143,14 +144,14 @@ class AgentRuntime:
     def prompt(self, text: str) -> list[AgentEvent]:
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
         self.state.messages.append(user_message)
-        return list(self._run_loop())
+        return self._collect_runtime_events(self._run_loop())
 
     def continue_(self) -> list[AgentEvent]:
         next_message = self._dequeue_next_message() if not self.state.pending_tool_calls and not self.state.pending_plan_token else None
         decision = self.turn_controller.on_continue_request(self.state, next_message)
         if decision.action == "inject_message" and decision.queued_message is not None:
-            return list(self._inject_controller_message(decision, phase="continue"))
-        return list(self._run_loop())
+            return self._collect_runtime_events(self._inject_controller_message(decision, phase="continue"))
+        return self._collect_runtime_events(self._run_loop())
 
     def enqueue_message(self, text: str, delivery: str = "follow_up") -> QueuedMessage:
         item = QueuedMessage(id=str(uuid.uuid4()), delivery=delivery, text=text, created_at=time.time())
@@ -172,7 +173,7 @@ class AgentRuntime:
         self._pending_action_store().remove(token)
         self._approved_pending_plan = True
         self._queue_lifecycle_event(self._event(PLANNER_GATE_APPROVED, message=f"Approved planner gate {token}", details={"token": token}))
-        return list(self._run_loop())
+        return self._collect_runtime_events(self._run_loop())
 
     def reject_pending_plan(self, token: str) -> None:
         if token != self.state.pending_plan_token:
@@ -184,7 +185,7 @@ class AgentRuntime:
         self._persist()
 
     def compact_now(self) -> list[AgentEvent]:
-        events = list(self._emit_compaction_if_needed())
+        events = self._collect_runtime_events(self._emit_compaction_if_needed())
         if events:
             self._persist()
         return events
@@ -500,6 +501,8 @@ class AgentRuntime:
         if self.timeline_store is not None and event.type != "message_delta":
             self.timeline_store.append(self.session_id, event)
         self.lifecycle.emit(event)
+        if self._captured_events is not None:
+            self._captured_events.append(event)
         yield event
 
     def _set_turn_phase(self, phase: str, reason: str) -> Iterator[AgentEvent]:
@@ -634,6 +637,16 @@ class AgentRuntime:
 
     def _queue_lifecycle_event(self, event: AgentEvent) -> None:
         self._pending_lifecycle_events.append(event)
+
+    def _collect_runtime_events(self, iterator: Iterator[AgentEvent]) -> list[AgentEvent]:
+        previous = self._captured_events
+        self._captured_events = []
+        try:
+            for _ in iterator:
+                pass
+            return list(self._captured_events)
+        finally:
+            self._captured_events = previous
 
     @staticmethod
     def _args_preview(arguments: dict) -> dict[str, object]:

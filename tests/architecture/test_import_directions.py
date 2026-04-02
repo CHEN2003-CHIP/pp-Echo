@@ -6,14 +6,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / "src" / "pp_agent"
-CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain"}
+CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain", "extensions"}
 ALLOWED = {
     "cli": {"cli", "app", "runtime", "storage", "domain"},
-    "app": {"app", "runtime", "storage", "llm", "tools", "domain"},
+    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions"},
     "runtime": {"runtime", "storage", "llm", "tools", "domain"},
     "llm": {"llm", "domain"},
     "storage": {"storage", "domain"},
     "domain": {"domain"},
+    "extensions": {"extensions", "runtime", "domain"},
 }
 EXCLUDED = {
     PACKAGE_ROOT / "cli" / "_legacy_main_impl.py",
@@ -61,3 +62,17 @@ def test_cli_entry_files_do_not_reference_legacy_impl() -> None:
 
     assert "_legacy_main_impl" not in main_text
     assert "_legacy_main_impl" not in chat_text
+
+
+def test_runtime_and_extensions_do_not_depend_on_cli_rendering() -> None:
+    runtime_paths = [
+        PACKAGE_ROOT / "runtime" / "lifecycle.py",
+        PACKAGE_ROOT / "runtime" / "emitter.py",
+    ]
+    for path in runtime_paths:
+        text = path.read_text(encoding="utf-8-sig")
+        assert "pp_agent.cli" not in text
+
+    for path in (PACKAGE_ROOT / "extensions").rglob("*.py"):
+        text = path.read_text(encoding="utf-8-sig")
+        assert "pp_agent.cli" not in text

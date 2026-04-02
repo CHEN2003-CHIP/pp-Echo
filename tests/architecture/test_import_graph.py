@@ -16,7 +16,7 @@ ALLOWED = {
     'api': {'api', 'cli', 'app', 'runtime', 'storage', 'domain'},
     'prompts': {'prompts'},
     'skills': {'skills'},
-    'extensions': {'extensions', 'domain'},
+    'extensions': {'extensions', 'domain', 'runtime'},
 }
 EXCLUDED = {
     PACKAGE_ROOT / 'cli' / '_legacy_main_impl.py',

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
-from pp_agent.runtime.state import AgentEvent
-
-
-LifecycleSubscriber = Callable[[AgentEvent], None]
+LifecycleSubscriber = Callable[[Any], None]
