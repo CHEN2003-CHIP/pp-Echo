@@ -514,3 +514,18 @@ def test_agent_session_manual_compact_noops_when_nothing_new_to_compact(tmp_path
     events = agent.compact_now()
 
     assert events == []
+
+
+def test_agent_session_does_not_execute_pending_plan_without_explicit_approval(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, FakeLLMClient(), require_plan_approval=True)
+    agent.prompt("create a file")
+
+    token = agent.state.pending_plan_token
+    assert token is not None
+
+    events = agent.prompt("approve")
+
+    assert any(event.type == "error" and "planner approval" in (event.message or "") for event in events)
+    assert agent.state.pending_plan_token == token
+    assert len(agent.state.pending_tool_calls) == 1
+    assert (tmp_path / "a.txt").exists() is False

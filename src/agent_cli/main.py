@@ -967,6 +967,24 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
                 agent.enqueue_message(raw, delivery="follow_up")
                 continue
 
+            if agent.state.pending_plan_token and raw.strip().lower() in {"approve", "yes", "??", "??"}:
+                token = agent.state.pending_plan_token
+                start_worker("approve", lambda: agent.approve_pending_plan(token))
+                continue
+
+            if agent.state.pending_plan_token and raw.strip().lower() in {"reject", "no", "??"}:
+                token = agent.state.pending_plan_token
+                result = handle_command(agent, f"/reject {token}", workspace)
+                if result == "quit":
+                    return
+                if result == "new":
+                    session_id = None
+                    break
+                if result != "handled":
+                    session_id = result
+                    break
+                continue
+
             if raw.startswith("/approve "):
                 token = raw.split(" ", 1)[1].strip()
                 payload = load_pending_action(workspace, token)

@@ -148,6 +148,11 @@ class AgentSession:
             yield from self._set_turn_phase(start_decision.phase, start_decision.reason)
             yield from self._emit(AgentEvent(type="turn_start", details={"turn_id": self.state.turn.turn_id}))
             executing_pending_plan = bool(self.state.pending_tool_calls)
+            if executing_pending_plan and not self._approved_pending_plan:
+                message = "A planner approval is still pending. Use /approve <token> before continuing."
+                self.state.error_message = message
+                yield from self._emit(AgentEvent(type="error", message=message, is_error=True))
+                break
             if executing_pending_plan:
                 tool_calls = [call.model_copy(deep=True) for call in self.state.pending_tool_calls]
                 self.state.pending_tool_calls = []
