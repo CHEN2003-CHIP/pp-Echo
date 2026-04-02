@@ -2,6 +2,9 @@
 
 `pp-agent` is a Windows-first personal coding agent inspired by `pi-mono`.
 `pp-agent` 是一个优先面向 Windows 的个人 coding agent，整体设计思路参考 `pi-mono`。
+Migration status: the codebase now lives under src/pp_agent, while legacy imports like gent_cli, gent_core, storage, and 	ools remain as compatibility shims.
+迁移状态：当前实现已迁到 src/pp_agent，同时保留 gent_cli、gent_core、storage、	ools 兼容 shim。
+
 
 ## Overview | 项目概览
 
@@ -77,11 +80,11 @@ After approval, the same session resumes and the executor runs the pending tool 
 
 ```powershell
 set PYTHONPATH=src
-python -m agent_cli.main chat
-python -m agent_cli.main run "请简要介绍你自己"
-python -m agent_cli.main sessions list
-python -m agent_cli.main sessions tree
-python -m agent_cli.main config show
+python -m pp_agent.cli.main chat
+python -m pp_agent.cli.main run "请简要介绍你自己"
+python -m pp_agent.cli.main sessions list
+python -m pp_agent.cli.main sessions tree
+python -m pp_agent.cli.main config show
 ```
 
 ## Environment Variables | 环境变量
@@ -131,13 +134,13 @@ The approval queue supports summary view, preview, planner gates, and batch acti
 
 ```powershell
 set PYTHONPATH=src
-python -m agent_cli.main approvals summary
-python -m agent_cli.main approvals list
-python -m agent_cli.main approvals show <token>
-python -m agent_cli.main approvals approve <token>
-python -m agent_cli.main approvals reject <token>
-python -m agent_cli.main approvals approve-all
-python -m agent_cli.main approvals reject-all
+python -m pp_agent.cli.main approvals summary
+python -m pp_agent.cli.main approvals list
+python -m pp_agent.cli.main approvals show <token>
+python -m pp_agent.cli.main approvals approve <token>
+python -m pp_agent.cli.main approvals reject <token>
+python -m pp_agent.cli.main approvals approve-all
+python -m pp_agent.cli.main approvals reject-all
 ```
 
 ### What Goes Into the Queue | 哪些动作会进入审批队列
@@ -163,11 +166,11 @@ This command is designed to feel closer to a real coding-agent loop.
 
 ```powershell
 set PYTHONPATH=src
-python -m agent_cli.main workflow repo --query "AgentSession"
-python -m agent_cli.main workflow repo --query "AgentSession" --path-filter src\agent_core
-python -m agent_cli.main workflow repo --token <token>
-python -m agent_cli.main workflow repo --token <token> --staged-only
-python -m agent_cli.main workflow repo --token <token> --auto-apply --staged-only
+python -m pp_agent.cli.main workflow repo --query "AgentSession"
+python -m pp_agent.cli.main workflow repo --query "AgentSession" --path-filter src\agent_core
+python -m pp_agent.cli.main workflow repo --token <token>
+python -m pp_agent.cli.main workflow repo --token <token> --staged-only
+python -m pp_agent.cli.main workflow repo --token <token> --auto-apply --staged-only
 ```
 
 ### Repo Workflow Shape | 仓库工作流结构
@@ -212,8 +215,8 @@ new text
 
 ## Validation Checklist | 首次验证清单
 
-1. Run `python -m agent_cli.main config show`.
-   运行 `python -m agent_cli.main config show`。
+1. Run `python -m pp_agent.cli.main config show`.
+   运行 `python -m pp_agent.cli.main config show`。
 2. Confirm the model is `qwen3.5-plus` and `high_risk_plan` is enabled.
    确认模型是 `qwen3.5-plus`，并且 `high_risk_plan` 已启用。
 3. Open chat and trigger a high-risk request.
@@ -237,11 +240,11 @@ Double-click [run-tests.bat](/E:/Pycharm%20Project/pp-Echo/run-tests.bat).
 ```powershell
 set PYTHONPATH=src
 python -m pytest -q
-python -m agent_cli.main --help
-python -m agent_cli.main sessions tree
-python -m agent_cli.main approvals summary
-python -m agent_cli.main workflow repo --query "AgentSession"
-python -m agent_cli.main config show
+python -m pp_agent.cli.main --help
+python -m pp_agent.cli.main sessions tree
+python -m pp_agent.cli.main approvals summary
+python -m pp_agent.cli.main workflow repo --query "AgentSession"
+python -m pp_agent.cli.main config show
 ```
 
 If `PP_AGENT_API_KEY` is missing or the network is blocked, the CLI should show a clear error instead of a Python stack trace.
@@ -257,10 +260,10 @@ This is closer to `pi-mono` and makes branch, rewind, and history navigation eas
 
 ```powershell
 set PYTHONPATH=src
-python -m agent_cli.main sessions tree
-python -m agent_cli.main sessions tree --sort updated
-python -m agent_cli.main sessions branch <session_id>
-python -m agent_cli.main sessions rewind-turn <session_id> 2
+python -m pp_agent.cli.main sessions tree
+python -m pp_agent.cli.main sessions tree --sort updated
+python -m pp_agent.cli.main sessions branch <session_id>
+python -m pp_agent.cli.main sessions rewind-turn <session_id> 2
 ```
 
 In chat mode you can use:
@@ -398,8 +401,8 @@ Query it with:
 
 ```powershell
 set PYTHONPATH=src
-python -m agent_cli.main timeline show --limit 30
-python -m agent_cli.main timeline show --session <session_id> --limit 50
+python -m pp_agent.cli.main timeline show --limit 30
+python -m pp_agent.cli.main timeline show --session <session_id> --limit 50
 ```
 
 In chat mode, use `/timeline` to inspect the current session timeline.
@@ -463,3 +466,5 @@ It separates:
 
 This makes the runtime easier to evolve toward `pi-agent-core` without rewriting the whole agent loop.
 ?? runtime ???????? `pi-agent-core` ????????????? agent loop?
+
+
