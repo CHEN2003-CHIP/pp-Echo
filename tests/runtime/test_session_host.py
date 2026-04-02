@@ -16,6 +16,7 @@ from pp_agent.runtime.lifecycle import (
 )
 from pp_agent.runtime.session_host import SessionHost
 from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.checkpoints import CheckpointStore
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.tools.registry import ToolRegistry
 
@@ -50,6 +51,7 @@ def _host(tmp_path: Path) -> SessionHost:
         session_store_factory=lambda workspace: SessionStore(workspace / "sessions"),
         pending_action_store_factory=lambda workspace: PendingActionStore(workspace / "pending"),
         session_defaults_factory=lambda workspace: {"system_prompt": "system", "model": ModelConfig()},
+        checkpoint_store_factory=lambda workspace: CheckpointStore(workspace / "checkpoints"),
     )
 
 

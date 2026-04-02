@@ -51,6 +51,22 @@ def rewind_session(*args, **kwargs):
     return sdk.rewind_session(*args, **kwargs)
 
 
+def create_checkpoint(*args, **kwargs):
+    return sdk.create_checkpoint(*args, **kwargs)
+
+
+def list_checkpoints(*args, **kwargs):
+    return sdk.list_checkpoints(*args, **kwargs)
+
+
+def preview_rewind(*args, **kwargs):
+    return sdk.preview_rewind(*args, **kwargs)
+
+
+def rewind_safe(*args, **kwargs):
+    return sdk.rewind_safe(*args, **kwargs)
+
+
 def approvals_summary(*args, **kwargs):
     return sdk.approvals_summary(*args, **kwargs)
 
@@ -63,14 +79,18 @@ __all__ = [
     "approvals_summary",
     "chat",
     "continue_session",
+    "create_checkpoint",
     "create_runtime",
     "create_session",
     "enqueue_message",
     "fork_session",
     "get_session_tree",
+    "list_checkpoints",
     "list_sessions",
+    "preview_rewind",
     "restore_session",
     "rewind_session",
+    "rewind_safe",
     "run",
     "sessions_tree",
     "subscribe",

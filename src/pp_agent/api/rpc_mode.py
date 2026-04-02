@@ -59,6 +59,40 @@ def _dispatch_request(workspace: Path, request: dict, output_stream) -> dict:
             message_count=params.get("message_count"),
             lifecycle_subscribers=[emit],
         )
+    if method == "create_checkpoint":
+        return sdk.create_checkpoint(
+            workspace,
+            params["session_id"],
+            head_id=params.get("head_id"),
+            turn_id=params.get("turn_id"),
+            reason=params.get("reason", "manual"),
+            snapshot_type=params.get("snapshot_type", "head_snapshot"),
+            lifecycle_subscribers=[emit],
+        )
+    if method == "list_checkpoints":
+        return {"checkpoints": sdk.list_checkpoints(workspace, session_id=params.get("session_id"))}
+    if method == "preview_rewind":
+        return sdk.preview_rewind(
+            workspace,
+            params["session_id"],
+            checkpoint_id=params.get("checkpoint_id"),
+            turn_count=params.get("turn_count"),
+            message_count=params.get("message_count"),
+            mode=params.get("mode", "conversation_and_workspace"),
+            allow_stash_snapshot=bool(params.get("allow_stash_snapshot", False)),
+            lifecycle_subscribers=[emit],
+        )
+    if method == "rewind_safe":
+        return sdk.rewind_safe(
+            workspace,
+            params["session_id"],
+            checkpoint_id=params.get("checkpoint_id"),
+            turn_count=params.get("turn_count"),
+            message_count=params.get("message_count"),
+            mode=params.get("mode", "conversation_and_workspace"),
+            allow_stash_snapshot=bool(params.get("allow_stash_snapshot", False)),
+            lifecycle_subscribers=[emit],
+        )
     if method == "approvals_summary":
         return sdk.approvals_summary(workspace)
     raise ValueError(f"Unsupported rpc method: {method}")

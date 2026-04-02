@@ -3,12 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from pp_agent.domain.checkpoints import CheckpointEntry
 from pp_agent.extensions.hooks import LifecycleSubscriber
-from pp_agent.llm.registry import create_llm_client
 from pp_agent.llm.models import ModelConfig, ProviderConfig
+from pp_agent.llm.registry import create_llm_client
+from pp_agent.runtime.git_checkpoint import GitCheckpointManager
+from pp_agent.runtime.hooks import BeforeToolCallDecision
+from pp_agent.runtime.lifecycle import CHECKPOINT_BEFORE_CREATE, CHECKPOINT_CREATED
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.session_host import SessionHost
 from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.checkpoints import CheckpointStore
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.settings import Settings
@@ -57,6 +62,21 @@ def pending_action_store_for(workspace: Path) -> PendingActionStore:
     return PendingActionStore(workspace.resolve() / ".pp-agent" / "pending-edits")
 
 
+def checkpoint_store_for(workspace: Path) -> CheckpointStore:
+    settings = load_settings(workspace)
+    candidates = [settings.global_dir / "checkpoints", settings.project_dir / "global" / "checkpoints"]
+    last_error: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            return CheckpointStore(candidate)
+        except PermissionError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise PermissionError("Unable to create a writable checkpoint store")
+
+
 def create_tool_registry(workspace: Path) -> ToolRegistry:
     settings = load_settings(workspace)
     return ToolRegistry(workspace, policy=settings.tool_policy)
@@ -88,13 +108,14 @@ def create_runtime_from_record(
     lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
 ) -> AgentRuntime:
     settings = load_settings(workspace)
+    session_store = session_store_for(workspace)
     agent = AgentRuntime(
         llm_client=create_llm_client(
             provider=provider_config_for_llm(settings.provider),
             model=model_config_for_llm(record.model),
         ),
         tool_registry=ToolRegistry(workspace, policy=settings.tool_policy),
-        session_store=session_store_for(workspace),
+        session_store=session_store,
         session_id=record.id,
         system_prompt=record.system_prompt,
         confirm_callback=confirm_tool_call,
@@ -104,6 +125,11 @@ def create_runtime_from_record(
         initial_queued_messages=record.queued_messages,
         require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
         timeline_store=timeline_store_for(workspace),
+    )
+    _install_auto_checkpoint_hook(
+        agent=agent,
+        workspace=workspace,
+        manager=GitCheckpointManager(workspace, checkpoint_store_for(workspace), session_store),
     )
     for subscriber in lifecycle_subscribers or []:
         agent.subscribe(subscriber)
@@ -122,6 +148,7 @@ def create_session_host(workspace: Path) -> SessionHost:
         session_store_factory=session_store_for,
         pending_action_store_factory=pending_action_store_for,
         session_defaults_factory=session_defaults_for,
+        checkpoint_store_factory=checkpoint_store_for,
     )
 
 
@@ -168,3 +195,74 @@ def rewind_session_with_events(
         lifecycle_subscribers=subscribers,
     )
     return result.session_id
+
+
+def _install_auto_checkpoint_hook(*, agent: AgentRuntime, workspace: Path, manager: GitCheckpointManager) -> None:
+    def before_tool_call(state, call, _registry):
+        if not _should_auto_checkpoint(workspace, call.name, call.arguments):
+            return BeforeToolCallDecision(action="allow")
+        if not manager.is_git_repository():
+            return BeforeToolCallDecision(action="allow")
+        turn_key = f"turn-{state.turn.turn_id}"
+        if getattr(agent, "_auto_checkpoint_turn_key", None) == turn_key:
+            return BeforeToolCallDecision(action="allow")
+        head_id, turn_id = manager.current_head_context(agent.session_id)
+        list(
+            agent._emit(
+                agent._event(
+                    CHECKPOINT_BEFORE_CREATE,
+                    details={
+                        "checkpoint_id": None,
+                        "snapshot_type": "head_snapshot",
+                        "session_id": agent.session_id,
+                        "head_id": head_id,
+                        "turn_id": turn_id,
+                        "reason": f"auto:{call.name}",
+                        "has_dirty_workspace": False,
+                        "affected_file_count": 0,
+                    },
+                )
+            )
+        )
+        entry = manager.create_head_snapshot(
+            session_id=agent.session_id,
+            head_id=head_id,
+            turn_id=turn_id,
+            reason=f"auto:{call.name}",
+            summary=f"Automatic checkpoint before {call.name}",
+        )
+        setattr(agent, "_auto_checkpoint_turn_key", turn_key)
+        list(agent._emit(agent._event(CHECKPOINT_CREATED, details=_checkpoint_event_details(entry))))
+        return BeforeToolCallDecision(action="allow", details={"checkpoint_id": entry.checkpoint_id})
+
+    agent.runtime_hooks.before_tool_call_hooks.insert(0, before_tool_call)
+
+
+def _should_auto_checkpoint(workspace: Path, tool_name: str, arguments: dict) -> bool:
+    if tool_name in {"write_file", "edit_file"}:
+        return bool(arguments.get("apply"))
+    if tool_name == "run_shell":
+        return bool(arguments.get("apply"))
+    if tool_name != "approve_pending_action":
+        return False
+    token = arguments.get("token")
+    if not token:
+        return False
+    try:
+        payload = pending_action_store_for(workspace).load(token)
+    except FileNotFoundError:
+        return False
+    return payload["action_type"] in {"write_file", "edit_file", "run_shell"}
+
+
+def _checkpoint_event_details(entry: CheckpointEntry) -> dict[str, object]:
+    return {
+        "checkpoint_id": entry.checkpoint_id,
+        "snapshot_type": entry.snapshot_type,
+        "session_id": entry.session_id,
+        "head_id": entry.head_id,
+        "turn_id": entry.turn_id,
+        "reason": entry.reason,
+        "has_dirty_workspace": entry.file_stats.has_dirty_workspace,
+        "affected_file_count": entry.file_stats.changed_file_count,
+    }

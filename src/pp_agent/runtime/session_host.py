@@ -6,21 +6,33 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from pp_agent.domain.checkpoints import CheckpointEntry, SafeRewindPreview, SafeRewindResult
+from pp_agent.runtime.git_checkpoint import GitCheckpointManager
 from pp_agent.runtime.lifecycle import (
+    CHECKPOINT_BEFORE_CREATE,
+    CHECKPOINT_BEFORE_RESTORE,
+    CHECKPOINT_CREATED,
+    CHECKPOINT_RESTORE_FAILED,
+    CHECKPOINT_RESTORE_PREVIEW,
+    CHECKPOINT_RESTORED,
     SESSION_BEFORE_FORK,
     SESSION_BEFORE_SWITCH,
     SESSION_BEFORE_TREE,
     SESSION_FORKED,
     SESSION_RESTORE,
     SESSION_REWOUND,
+    SESSION_SAFE_REWIND_COMPLETED,
+    SESSION_SAFE_REWIND_STARTED,
     SESSION_START,
     SESSION_SWITCHED,
     SESSION_TREE_NAVIGATED,
     SESSION_TREE_VIEWED,
 )
 from pp_agent.runtime.runtime import AgentRuntime
+from pp_agent.runtime.safe_rewind import SafeRewindOrchestrator
 from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.checkpoints import CheckpointStore
 from pp_agent.storage.sessions import SessionRecord, SessionStore, SessionTreeEntry
 
 LifecycleSubscriber = Callable[[AgentEvent], None]
@@ -28,6 +40,7 @@ RuntimeFactory = Callable[[Path, SessionRecord, Optional[list[LifecycleSubscribe
 SessionStoreFactory = Callable[[Path], SessionStore]
 PendingActionStoreFactory = Callable[[Path], PendingActionStore]
 SessionDefaultsFactory = Callable[[Path], dict[str, Any]]
+CheckpointStoreFactory = Callable[[Path], CheckpointStore]
 
 
 class SwitchResult(BaseModel):
@@ -77,11 +90,13 @@ class SessionHost:
         session_store_factory: SessionStoreFactory,
         pending_action_store_factory: PendingActionStoreFactory,
         session_defaults_factory: SessionDefaultsFactory,
+        checkpoint_store_factory: CheckpointStoreFactory,
     ) -> None:
         self._runtime_factory = runtime_factory
         self._session_store_factory = session_store_factory
         self._pending_action_store_factory = pending_action_store_factory
         self._session_defaults_factory = session_defaults_factory
+        self._checkpoint_store_factory = checkpoint_store_factory
 
     def create_session(self, workspace: Path, *, lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None) -> AgentRuntime:
         defaults = self._session_defaults_factory(workspace)
@@ -157,6 +172,16 @@ class SessionHost:
         lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
     ) -> ForkResult:
         store = self._session_store(workspace)
+        manager = self._checkpoint_manager(workspace)
+        if manager.is_git_repository():
+            self.create_checkpoint(
+                workspace,
+                session_id=session_id,
+                head_id=head_id,
+                reason="fork_session",
+                snapshot_type="head_snapshot",
+                lifecycle_subscribers=lifecycle_subscribers,
+            )
         self._emit(SESSION_BEFORE_FORK, session_id=session_id, subscribers=lifecycle_subscribers, details={"source_head_id": head_id})
         forked = store.fork_from_head(session_id, head_id) if head_id is not None else store.fork(session_id)
         store.save(forked)
@@ -246,6 +271,176 @@ class SessionHost:
             by_type[action_type] = by_type.get(action_type, 0) + 1
         return {"count": len(items), "by_type": by_type, "tokens": [item["token"] for item in items], "items": items}
 
+    def create_checkpoint(
+        self,
+        workspace: Path,
+        *,
+        session_id: str,
+        head_id: Optional[str] = None,
+        turn_id: Optional[str] = None,
+        reason: str = "manual",
+        snapshot_type: str = "head_snapshot",
+        lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
+    ) -> CheckpointEntry:
+        manager = self._checkpoint_manager(workspace)
+        if head_id is None and turn_id is None:
+            head_id, turn_id = manager.current_head_context(session_id)
+        self._emit(
+            CHECKPOINT_BEFORE_CREATE,
+            session_id=session_id,
+            subscribers=lifecycle_subscribers,
+            details={
+                "checkpoint_id": None,
+                "snapshot_type": snapshot_type,
+                "session_id": session_id,
+                "head_id": head_id,
+                "turn_id": turn_id,
+                "reason": reason,
+                "has_dirty_workspace": False,
+                "affected_file_count": 0,
+            },
+        )
+        entry = manager.create_checkpoint(
+            session_id=session_id,
+            head_id=head_id,
+            turn_id=turn_id,
+            reason=reason,
+            snapshot_type=snapshot_type,
+        )
+        self._emit(CHECKPOINT_CREATED, session_id=session_id, subscribers=lifecycle_subscribers, details=self._checkpoint_details(entry))
+        return entry
+
+    def list_checkpoints(self, workspace: Path, *, session_id: Optional[str] = None) -> list[CheckpointEntry]:
+        return self._checkpoint_manager(workspace).list_checkpoints(session_id=session_id)
+
+    def preview_rewind(
+        self,
+        workspace: Path,
+        session_id: str,
+        *,
+        checkpoint_id: Optional[str] = None,
+        turn_count: Optional[int] = None,
+        message_count: Optional[int] = None,
+        mode: str = "conversation_and_workspace",
+        allow_stash_snapshot: bool = False,
+        lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
+    ) -> SafeRewindPreview:
+        preview = self._safe_rewind(workspace).preview_rewind(
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            turn_count=turn_count,
+            message_count=message_count,
+            mode=mode,
+            allow_stash_snapshot=allow_stash_snapshot,
+        )
+        details = {
+            "checkpoint_id": preview.checkpoint.checkpoint_id if preview.checkpoint else None,
+            "snapshot_type": preview.checkpoint.snapshot_type if preview.checkpoint else None,
+            "session_id": session_id,
+            "head_id": preview.target_head_id,
+            "turn_id": preview.target_turn_id,
+            "reason": preview.checkpoint.reason if preview.checkpoint else "rewind_preview",
+            "mode": mode,
+            "has_dirty_workspace": bool(preview.restore_preview and preview.restore_preview.has_dirty_workspace),
+            "affected_file_count": len(preview.restore_preview.affected_files) if preview.restore_preview else 0,
+        }
+        self._emit(CHECKPOINT_RESTORE_PREVIEW, session_id=session_id, subscribers=lifecycle_subscribers, details=details)
+        return preview
+
+    def rewind_safe(
+        self,
+        workspace: Path,
+        session_id: str,
+        *,
+        checkpoint_id: Optional[str] = None,
+        turn_count: Optional[int] = None,
+        message_count: Optional[int] = None,
+        mode: str = "conversation_and_workspace",
+        allow_stash_snapshot: bool = False,
+        lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
+    ) -> SafeRewindResult:
+        preview = self.preview_rewind(
+            workspace,
+            session_id,
+            checkpoint_id=checkpoint_id,
+            turn_count=turn_count,
+            message_count=message_count,
+            mode=mode,
+            allow_stash_snapshot=allow_stash_snapshot,
+            lifecycle_subscribers=lifecycle_subscribers,
+        )
+        self._emit(
+            SESSION_SAFE_REWIND_STARTED,
+            session_id=session_id,
+            subscribers=lifecycle_subscribers,
+            details={
+                "checkpoint_id": preview.checkpoint.checkpoint_id if preview.checkpoint else None,
+                "snapshot_type": preview.checkpoint.snapshot_type if preview.checkpoint else None,
+                "session_id": session_id,
+                "head_id": preview.target_head_id,
+                "turn_id": preview.target_turn_id,
+                "reason": preview.checkpoint.reason if preview.checkpoint else "rewind_safe",
+                "mode": mode,
+                "has_dirty_workspace": bool(preview.restore_preview and preview.restore_preview.has_dirty_workspace),
+                "affected_file_count": len(preview.restore_preview.affected_files) if preview.restore_preview else 0,
+            },
+        )
+        if preview.checkpoint is not None and mode in {"workspace_only", "conversation_and_workspace"}:
+            self._emit(
+                CHECKPOINT_BEFORE_RESTORE,
+                session_id=session_id,
+                subscribers=lifecycle_subscribers,
+                details={**self._checkpoint_details(preview.checkpoint), "mode": mode},
+            )
+        try:
+            result = self._safe_rewind(workspace).rewind_safe(
+                session_id=session_id,
+                checkpoint_id=checkpoint_id,
+                turn_count=turn_count,
+                message_count=message_count,
+                mode=mode,
+                allow_stash_snapshot=allow_stash_snapshot,
+                rewind_callback=lambda **kwargs: self.rewind_session(
+                    workspace,
+                    kwargs["session_id"],
+                    turn_count=kwargs.get("turn_count"),
+                    message_count=kwargs.get("message_count"),
+                ),
+            )
+        except Exception as exc:
+            if preview.checkpoint is not None:
+                self._emit(
+                    CHECKPOINT_RESTORE_FAILED,
+                    session_id=session_id,
+                    subscribers=lifecycle_subscribers,
+                    details={**self._checkpoint_details(preview.checkpoint), "mode": mode, "error": str(exc)},
+                )
+            raise
+        if preview.checkpoint is not None and result.restored_workspace:
+            self._emit(
+                CHECKPOINT_RESTORED,
+                session_id=result.session_id or session_id,
+                subscribers=lifecycle_subscribers,
+                details={**self._checkpoint_details(preview.checkpoint), "mode": mode},
+            )
+        self._emit(
+            SESSION_SAFE_REWIND_COMPLETED,
+            session_id=result.session_id or session_id,
+            subscribers=lifecycle_subscribers,
+            details={
+                "checkpoint_id": result.checkpoint_id,
+                "snapshot_type": result.snapshot_type,
+                "session_id": result.session_id or session_id,
+                "head_id": preview.target_head_id,
+                "turn_id": preview.target_turn_id,
+                "reason": preview.checkpoint.reason if preview.checkpoint else "rewind_safe",
+                "mode": mode,
+                "has_dirty_workspace": bool(preview.restore_preview and preview.restore_preview.has_dirty_workspace),
+                "affected_file_count": len(preview.restore_preview.affected_files) if preview.restore_preview else 0,
+            },
+        )
+        return result
+
     def _activate_runtime(
         self,
         workspace: Path,
@@ -276,3 +471,25 @@ class SessionHost:
 
     def _session_store(self, workspace: Path) -> SessionStore:
         return self._session_store_factory(workspace)
+
+    def _checkpoint_store(self, workspace: Path) -> CheckpointStore:
+        return self._checkpoint_store_factory(workspace)
+
+    def _checkpoint_manager(self, workspace: Path) -> GitCheckpointManager:
+        return GitCheckpointManager(workspace, self._checkpoint_store(workspace), self._session_store(workspace))
+
+    def _safe_rewind(self, workspace: Path) -> SafeRewindOrchestrator:
+        return SafeRewindOrchestrator(self._session_store(workspace), self._checkpoint_manager(workspace))
+
+    @staticmethod
+    def _checkpoint_details(entry: CheckpointEntry) -> dict[str, object]:
+        return {
+            "checkpoint_id": entry.checkpoint_id,
+            "snapshot_type": entry.snapshot_type,
+            "session_id": entry.session_id,
+            "head_id": entry.head_id,
+            "turn_id": entry.turn_id,
+            "reason": entry.reason,
+            "has_dirty_workspace": entry.file_stats.has_dirty_workspace,
+            "affected_file_count": entry.file_stats.changed_file_count,
+        }

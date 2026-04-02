@@ -42,11 +42,13 @@ if app:
     workflow_app = typer.Typer(help="Guided repo-aware workflows.")
     config_app = typer.Typer(help="Show active configuration.")
     timeline_app = typer.Typer(help="Inspect persisted agent timeline history.")
+    checkpoint_app = typer.Typer(help="Manage git-backed checkpoints.")
     app.add_typer(sessions_app, name="sessions")
     app.add_typer(approvals_app, name="approvals")
     app.add_typer(workflow_app, name="workflow")
     app.add_typer(config_app, name="config")
     app.add_typer(timeline_app, name="timeline")
+    app.add_typer(checkpoint_app, name="checkpoint")
 
     @sessions_app.command("list")
     def sessions_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
@@ -190,6 +192,59 @@ if app:
         timeline_show_main(workspace, session_id=session_id, limit=limit)
 
 
+    @checkpoint_app.command("create")
+    def checkpoint_create(
+        session_id: str = typer.Option(..., "--session"),
+        reason: str = typer.Option("manual", "--reason"),
+        snapshot_type: str = typer.Option("head_snapshot", "--type"),
+        force_stash: bool = typer.Option(False, "--stash"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.checkpoint import checkpoint_create_main
+
+        checkpoint_create_main(workspace, session_id, reason=reason, snapshot_type=snapshot_type, force_stash=force_stash)
+
+
+    @checkpoint_app.command("list")
+    def checkpoint_list(
+        session_id: Optional[str] = typer.Option(None, "--session"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.checkpoint import checkpoint_list_main
+
+        checkpoint_list_main(workspace, session_id=session_id)
+
+
+    @checkpoint_app.command("restore")
+    def checkpoint_restore(checkpoint_id: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        from pp_agent.cli.commands.checkpoint import checkpoint_restore_main
+
+        checkpoint_restore_main(workspace, checkpoint_id)
+
+
+    @app.command("rewind-safe")
+    def rewind_safe(
+        session_id: str = typer.Option(..., "--session"),
+        checkpoint_id: Optional[str] = typer.Option(None, "--checkpoint"),
+        turns: Optional[int] = typer.Option(None, "--turns"),
+        messages: Optional[int] = typer.Option(None, "--messages"),
+        workspace_only: bool = typer.Option(False, "--workspace-only"),
+        conversation_only: bool = typer.Option(False, "--conversation-only"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.checkpoint import rewind_safe_main
+
+        rewind_safe_main(
+            workspace,
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            turn_count=turns,
+            message_count=messages,
+            workspace_only=workspace_only,
+            conversation_only=conversation_only,
+        )
+
+
 def main() -> None:
     if app and typer:
         app()
@@ -259,6 +314,28 @@ def main() -> None:
     timeline_show_parser.add_argument("--session", default=None)
     timeline_show_parser.add_argument("--limit", type=int, default=30)
     timeline_show_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    checkpoint_parser = subparsers.add_parser("checkpoint")
+    checkpoint_subparsers = checkpoint_parser.add_subparsers(dest="checkpoint_command", required=True)
+    checkpoint_create_parser = checkpoint_subparsers.add_parser("create")
+    checkpoint_create_parser.add_argument("--session", required=True)
+    checkpoint_create_parser.add_argument("--reason", default="manual")
+    checkpoint_create_parser.add_argument("--type", dest="snapshot_type", default="head_snapshot")
+    checkpoint_create_parser.add_argument("--stash", action="store_true")
+    checkpoint_create_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    checkpoint_list_parser = checkpoint_subparsers.add_parser("list")
+    checkpoint_list_parser.add_argument("--session", default=None)
+    checkpoint_list_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    checkpoint_restore_parser = checkpoint_subparsers.add_parser("restore")
+    checkpoint_restore_parser.add_argument("checkpoint_id")
+    checkpoint_restore_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    rewind_safe_parser = subparsers.add_parser("rewind-safe")
+    rewind_safe_parser.add_argument("--session", required=True)
+    rewind_safe_parser.add_argument("--checkpoint", default=None)
+    rewind_safe_parser.add_argument("--turns", type=int, default=None)
+    rewind_safe_parser.add_argument("--messages", type=int, default=None)
+    rewind_safe_parser.add_argument("--workspace-only", action="store_true")
+    rewind_safe_parser.add_argument("--conversation-only", action="store_true")
+    rewind_safe_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
 
     args = parser.parse_args()
     command = getattr(args, "command")
@@ -337,6 +414,30 @@ def main() -> None:
         from pp_agent.cli.commands.timeline import timeline_show_main
 
         timeline_show_main(Path(args.workspace), session_id=args.session, limit=args.limit)
+    elif command == "checkpoint" and args.checkpoint_command == "create":
+        from pp_agent.cli.commands.checkpoint import checkpoint_create_main
+
+        checkpoint_create_main(Path(args.workspace), args.session, reason=args.reason, snapshot_type=args.snapshot_type, force_stash=args.stash)
+    elif command == "checkpoint" and args.checkpoint_command == "list":
+        from pp_agent.cli.commands.checkpoint import checkpoint_list_main
+
+        checkpoint_list_main(Path(args.workspace), session_id=args.session)
+    elif command == "checkpoint" and args.checkpoint_command == "restore":
+        from pp_agent.cli.commands.checkpoint import checkpoint_restore_main
+
+        checkpoint_restore_main(Path(args.workspace), args.checkpoint_id)
+    elif command == "rewind-safe":
+        from pp_agent.cli.commands.checkpoint import rewind_safe_main
+
+        rewind_safe_main(
+            Path(args.workspace),
+            session_id=args.session,
+            checkpoint_id=args.checkpoint,
+            turn_count=args.turns,
+            message_count=args.messages,
+            workspace_only=args.workspace_only,
+            conversation_only=args.conversation_only,
+        )
 
 
 __all__ = ["app", "main"]

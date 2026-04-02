@@ -33,3 +33,19 @@ def test_rpc_mode_returns_structured_error_for_unknown_method(tmp_path) -> None:
     line = json.loads(stdout.getvalue().strip())
     assert line["protocol_version"] == "1"
     assert line["ok"] is False
+
+
+def test_rpc_mode_supports_rewind_safe(monkeypatch, tmp_path) -> None:
+    def fake_rewind_safe(workspace, session_id, **kwargs):
+        kwargs["lifecycle_subscribers"][0](type("Event", (), {"model_dump": lambda self, mode="json": {"type": "session_safe_rewind_started"}})())
+        return {"session_id": "rewound", "mode": kwargs["mode"], "restored_workspace": True}
+
+    monkeypatch.setattr(rpc_mode.sdk, "rewind_safe", fake_rewind_safe)
+    stdin = io.StringIO('{"protocol_version":"1","id":"2","method":"rewind_safe","params":{"session_id":"session-1","mode":"workspace_only"}}\n')
+    stdout = io.StringIO()
+
+    rpc_mode.run_stdio_rpc(tmp_path, stdin=stdin, stdout=stdout)
+
+    lines = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert lines[0]["event"]["type"] == "session_safe_rewind_started"
+    assert lines[1]["result"]["restored_workspace"] is True

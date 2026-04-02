@@ -137,6 +137,80 @@ def rewind_session(
     ).model_dump(mode="json")
 
 
+def create_checkpoint(
+    workspace: Path,
+    session_id: str,
+    *,
+    head_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
+    reason: str = "manual",
+    snapshot_type: str = "head_snapshot",
+    lifecycle_subscribers: Optional[list[Subscriber]] = None,
+    host: Optional[SessionHost] = None,
+) -> dict:
+    return (host or _default_host(workspace)).create_checkpoint(
+        workspace,
+        session_id=session_id,
+        head_id=head_id,
+        turn_id=turn_id,
+        reason=reason,
+        snapshot_type=snapshot_type,
+        lifecycle_subscribers=lifecycle_subscribers,
+    ).model_dump(mode="json")
+
+
+def list_checkpoints(workspace: Path, *, session_id: Optional[str] = None, host: Optional[SessionHost] = None) -> list[dict]:
+    return [item.model_dump(mode="json") for item in (host or _default_host(workspace)).list_checkpoints(workspace, session_id=session_id)]
+
+
+def preview_rewind(
+    workspace: Path,
+    session_id: str,
+    *,
+    checkpoint_id: Optional[str] = None,
+    turn_count: Optional[int] = None,
+    message_count: Optional[int] = None,
+    mode: str = "conversation_and_workspace",
+    allow_stash_snapshot: bool = False,
+    lifecycle_subscribers: Optional[list[Subscriber]] = None,
+    host: Optional[SessionHost] = None,
+) -> dict:
+    return (host or _default_host(workspace)).preview_rewind(
+        workspace,
+        session_id,
+        checkpoint_id=checkpoint_id,
+        turn_count=turn_count,
+        message_count=message_count,
+        mode=mode,
+        allow_stash_snapshot=allow_stash_snapshot,
+        lifecycle_subscribers=lifecycle_subscribers,
+    ).model_dump(mode="json")
+
+
+def rewind_safe(
+    workspace: Path,
+    session_id: str,
+    *,
+    checkpoint_id: Optional[str] = None,
+    turn_count: Optional[int] = None,
+    message_count: Optional[int] = None,
+    mode: str = "conversation_and_workspace",
+    allow_stash_snapshot: bool = False,
+    lifecycle_subscribers: Optional[list[Subscriber]] = None,
+    host: Optional[SessionHost] = None,
+) -> dict:
+    return (host or _default_host(workspace)).rewind_safe(
+        workspace,
+        session_id,
+        checkpoint_id=checkpoint_id,
+        turn_count=turn_count,
+        message_count=message_count,
+        mode=mode,
+        allow_stash_snapshot=allow_stash_snapshot,
+        lifecycle_subscribers=lifecycle_subscribers,
+    ).model_dump(mode="json")
+
+
 def approvals_summary(workspace: Path, *, host: Optional[SessionHost] = None) -> dict:
     return (host or _default_host(workspace)).approvals_summary(workspace)
 
