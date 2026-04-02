@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pp_agent import api
 from pp_agent.api import sdk
 from pp_agent.prompts.loader import load_prompt_templates
 from pp_agent.skills.loader import load_skills
+from pp_agent.skills.materializer import materialize_skill
 
 
 def test_api_run_returns_payload(monkeypatch, tmp_path: Path) -> None:
@@ -60,3 +63,34 @@ def test_skill_loader_requires_frontmatter_and_prefers_project(tmp_path: Path) -
     skills = load_skills(workspace, user_root)
 
     assert skills["demo"].description == "project skill"
+    assert skills["demo"].path == project_skill
+
+
+def test_skill_body_is_materialized_on_demand_and_cached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    user_root = tmp_path / "user"
+    skill_path = workspace / ".pp-agent" / "skills" / "demo" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("---\nname: demo\ndescription: project skill\n---\nbody", encoding="utf-8")
+
+    read_count = 0
+    original_read_text = Path.read_text
+
+    def counting_read_text(self: Path, *args, **kwargs) -> str:
+        nonlocal read_count
+        read_count += 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    skills = load_skills(workspace, user_root)
+
+    assert read_count == 0
+
+    descriptor = skills["demo"]
+    assert materialize_skill(descriptor) == "body"
+    assert read_count == 1
+
+    assert descriptor.body == "body"
+    assert materialize_skill(descriptor) == "body"
+    assert read_count == 1

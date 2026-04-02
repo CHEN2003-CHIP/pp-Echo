@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import ast
 from pathlib import Path
@@ -12,10 +12,11 @@ ALLOWED = {
     'llm': {'llm', 'domain'},
     'domain': {'domain'},
     'tools': {'tools', 'domain', 'storage'},
-    'app': {'app', 'runtime', 'storage', 'llm', 'tools', 'domain', 'prompts', 'skills', 'extensions'},
+    'app': {'app', 'runtime', 'storage', 'llm', 'tools', 'domain', 'prompts', 'skills', 'extensions', 'capabilities'},
     'api': {'api', 'runtime', 'storage', 'domain'},
     'prompts': {'prompts'},
     'skills': {'skills'},
+    'capabilities': {'capabilities', 'skills', 'tools', 'domain'},
     'extensions': {'extensions', 'domain', 'runtime'},
 }
 EXCLUDED = {
@@ -61,4 +62,3 @@ def test_pp_agent_import_graph_respects_layers() -> None:
             if target not in ALLOWED[layer]:
                 violations.append(f'{path.relative_to(ROOT)} imports {module_name}')
     assert not violations, '\n'.join(sorted(violations))
-

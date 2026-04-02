@@ -1,7 +1,8 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 import pytest
 
+from pp_agent.domain import ToolCall
 from storage.settings import ToolPolicyConfig
 from tools.pending_actions import PendingActionStore
 from tools.registry import ToolRegistry
@@ -113,3 +114,96 @@ def test_confirmation_policy_is_applied(tmp_path: Path) -> None:
     assert registry.get_spec("write_file").requires_confirmation is False
     assert registry.get_spec("edit_file").requires_confirmation is True
     assert registry.get_spec("approve_pending_action").requires_confirmation is True
+
+
+def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    calls = 0
+    original_factory = registry._registrations["read_file"].tool_factory
+
+    def tracking_factory():
+        nonlocal calls
+        calls += 1
+        return original_factory()
+
+    registry._registrations["read_file"].tool_factory = tracking_factory
+
+    expected_order = [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "preview_pending_action",
+        "approve_pending_action",
+        "reject_pending_action",
+        "list_pending_actions",
+        "list_files",
+        "search_text",
+        "grep_code",
+        "git_status",
+        "git_diff_worktree",
+        "run_shell",
+    ]
+
+    assert registry._instances == {}
+    assert registry.get_spec("read_file").name == "read_file"
+    assert list(registry.metadata()) == expected_order
+    assert [item["function"]["name"] for item in registry.openapi_specs()] == expected_order
+    assert calls == 0
+    assert registry._instances == {}
+
+
+def test_registry_materializes_tools_on_execute_and_reuses_cached_instance(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+    calls = 0
+    original_factory = registry._registrations["read_file"].tool_factory
+
+    def tracking_factory():
+        nonlocal calls
+        calls += 1
+        return original_factory()
+
+    registry._registrations["read_file"].tool_factory = tracking_factory
+
+    first = registry.execute("read_file", {"path": "notes.txt"})
+    second = registry.execute("read_file", {"path": "notes.txt"})
+
+    assert first.content == "hello"
+    assert second.content == "hello"
+    assert calls == 1
+    assert "read_file" in registry._instances
+
+
+def test_registry_does_not_cache_failed_tool_materialization(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    calls = 0
+
+    def failing_factory():
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("boom")
+
+    registry._registrations["read_file"].tool_factory = failing_factory
+
+    with pytest.raises(RuntimeError, match="boom"):
+        registry.execute("read_file", {"path": "notes.txt"})
+
+    with pytest.raises(RuntimeError, match="boom"):
+        registry.execute("read_file", {"path": "notes.txt"})
+
+    assert calls == 2
+    assert "read_file" not in registry._instances
+
+
+def test_unregistered_tool_behavior_matches_current_errors(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    call = ToolCall(id="call-1", name="missing_tool", arguments={})
+
+    with pytest.raises(KeyError):
+        registry.get_spec("missing_tool")
+
+    with pytest.raises(KeyError):
+        registry.execute("missing_tool", {})
+
+    with pytest.raises(KeyError):
+        registry.error_result(call, "nope")

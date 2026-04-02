@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from pp_agent.capabilities import (
+    BuiltinToolCapabilityDiscoveryProvider,
+    CapabilityCatalog,
+    SkillCapabilityDiscoveryProvider,
+)
 from pp_agent.domain.checkpoints import CheckpointEntry
 from pp_agent.extensions.hooks import LifecycleSubscriber
 from pp_agent.llm.models import ModelConfig, ProviderConfig
@@ -80,6 +85,16 @@ def checkpoint_store_for(workspace: Path) -> CheckpointStore:
 def create_tool_registry(workspace: Path) -> ToolRegistry:
     settings = load_settings(workspace)
     return ToolRegistry(workspace, policy=settings.tool_policy)
+
+
+def create_capability_catalog(workspace: Path) -> CapabilityCatalog:
+    settings = load_settings(workspace)
+    registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    providers = [
+        SkillCapabilityDiscoveryProvider(workspace=workspace.resolve(), user_root=settings.global_dir),
+        BuiltinToolCapabilityDiscoveryProvider(registry=registry),
+    ]
+    return CapabilityCatalog(providers)
 
 
 def provider_config_for_llm(config: StoredProviderConfig) -> ProviderConfig:
