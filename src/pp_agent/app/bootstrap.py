@@ -6,11 +6,13 @@ from typing import Optional
 from pp_agent.capabilities import (
     BuiltinToolCapabilityDiscoveryProvider,
     CapabilityCatalog,
+    MCPCapabilityDiscoveryProvider,
     SkillCapabilityDiscoveryProvider,
 )
 from pp_agent.domain.checkpoints import CheckpointEntry
 from pp_agent.extensions.hooks import LifecycleSubscriber
 from pp_agent.llm.models import ModelConfig, ProviderConfig
+from pp_agent.mcp import MCPManager
 from pp_agent.llm.registry import create_llm_client
 from pp_agent.runtime.git_checkpoint import GitCheckpointManager
 from pp_agent.runtime.hooks import BeforeToolCallDecision
@@ -95,6 +97,32 @@ def create_capability_catalog(workspace: Path) -> CapabilityCatalog:
         BuiltinToolCapabilityDiscoveryProvider(registry=registry),
     ]
     return CapabilityCatalog(providers)
+
+
+def create_capability_catalog_with_mcp(
+    workspace: Path,
+    *,
+    transport_factory=None,
+    time_fn=None,
+) -> CapabilityCatalog:
+    settings = load_settings(workspace)
+    registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    manager = create_mcp_manager(workspace, transport_factory=transport_factory, time_fn=time_fn)
+    providers = [
+        SkillCapabilityDiscoveryProvider(workspace=workspace.resolve(), user_root=settings.global_dir),
+        BuiltinToolCapabilityDiscoveryProvider(registry=registry),
+        MCPCapabilityDiscoveryProvider(manager=manager),
+    ]
+    return CapabilityCatalog(providers)
+
+
+def create_mcp_manager(
+    workspace: Path,
+    *,
+    transport_factory=None,
+    time_fn=None,
+) -> MCPManager:
+    return MCPManager.from_workspace(workspace, transport_factory=transport_factory, time_fn=time_fn)
 
 
 def provider_config_for_llm(config: StoredProviderConfig) -> ProviderConfig:
@@ -281,3 +309,5 @@ def _checkpoint_event_details(entry: CheckpointEntry) -> dict[str, object]:
         "has_dirty_workspace": entry.file_stats.has_dirty_workspace,
         "affected_file_count": entry.file_stats.changed_file_count,
     }
+
+

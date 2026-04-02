@@ -6,10 +6,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / "src" / "pp_agent"
-CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain", "extensions", "api", "tools", "capabilities"}
+CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain", "extensions", "api", "tools", "capabilities", "mcp"}
 ALLOWED = {
     "cli": {"cli", "app", "runtime", "storage", "domain", "api"},
-    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities"},
+    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp"},
     "runtime": {"runtime", "storage", "llm", "tools", "domain"},
     "llm": {"llm", "domain"},
     "storage": {"storage", "domain"},
@@ -17,6 +17,7 @@ ALLOWED = {
     "extensions": {"extensions", "runtime", "domain"},
     "tools": {"tools", "storage", "domain"},
     "capabilities": {"capabilities", "skills", "tools", "domain"},
+    "mcp": {"mcp"},
     "api": {"api", "runtime", "storage", "domain"},
 }
 EXCLUDED = {

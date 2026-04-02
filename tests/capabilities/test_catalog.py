@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pp_agent.app.bootstrap import create_capability_catalog
+from pp_agent.app.bootstrap import create_capability_catalog, create_capability_catalog_with_mcp
 from pp_agent.capabilities import CapabilityCatalog, CapabilityDescriptor
 from pp_agent.skills import materializer as skill_materializer
 from pp_agent.tools.shell_tool import PowerShellTool
@@ -22,6 +22,44 @@ class StaticProvider:
 class FailingProvider:
     def discover(self) -> list[CapabilityDescriptor]:
         raise RuntimeError("provider failed")
+
+
+class TrackingMCPClient:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def initialize(self) -> None:
+        self._events.append("demo:initialize")
+
+    def list_tools(self) -> list[dict]:
+        self._events.append("demo:list_tools")
+        return [{"name": "echo", "description": "Echo tool", "input_schema": {"type": "object"}}]
+
+    def list_resources(self) -> list[dict]:
+        self._events.append("demo:list_resources")
+        return [{"uri": "memo://notes", "name": "notes", "description": "Notes"}]
+
+    def list_prompts(self) -> list[dict]:
+        self._events.append("demo:list_prompts")
+        return [{"name": "summarize", "description": "Summarize prompt"}]
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        raise AssertionError(f"unexpected tool execution: {name} {arguments}")
+
+    def read_resource(self, uri: str) -> dict:
+        raise AssertionError(f"unexpected resource read: {uri}")
+
+    def get_prompt(self, name: str, arguments: dict | None = None) -> dict:
+        raise AssertionError(f"unexpected prompt fetch: {name} {arguments}")
+
+    def close(self) -> None:
+        self._events.append("demo:close")
+
+
+def _write_mcp_config(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "mcp.json").write_text(json.dumps({"servers": [{"name": "demo", "transport": "memory"}]}), encoding="utf-8")
 
 
 def test_create_capability_catalog_discovers_skills_and_builtin_tools_without_materializing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -137,3 +175,37 @@ def test_capability_metadata_is_lightweight_and_serializable(tmp_path: Path, mon
         assert "body" not in item.metadata
         assert "tool" not in item.metadata
         assert "registry" not in item.metadata
+
+
+def test_create_capability_catalog_does_not_connect_mcp_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    _write_mcp_config(tmp_path)
+
+    catalog = create_capability_catalog(tmp_path)
+
+    assert catalog.list(kind="mcp_tool") == []
+    assert catalog.list(kind="mcp_resource") == []
+    assert catalog.list(kind="mcp_prompt") == []
+
+
+def test_create_capability_catalog_with_mcp_discovers_mcp_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    _write_mcp_config(tmp_path)
+    events: list[str] = []
+
+    catalog = create_capability_catalog_with_mcp(
+        tmp_path,
+        transport_factory=lambda _config: TrackingMCPClient(events),
+    )
+
+    assert [item.name for item in catalog.list(kind="mcp_tool")] == ["demo.echo"]
+    assert [item.name for item in catalog.list(kind="mcp_resource")] == ["demo.notes"]
+    assert [item.name for item in catalog.list(kind="mcp_prompt")] == ["demo.summarize"]
+    assert catalog.get("mcp_tool", "demo.echo").metadata["server_name"] == "demo"
+    assert catalog.get("mcp_resource", "demo.notes").metadata["uri"] == "memo://notes"
+    assert events == [
+        "demo:initialize",
+        "demo:list_tools",
+        "demo:list_resources",
+        "demo:list_prompts",
+    ]
