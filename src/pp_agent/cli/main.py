@@ -43,12 +43,16 @@ if app:
     config_app = typer.Typer(help="Show active configuration.")
     timeline_app = typer.Typer(help="Inspect persisted agent timeline history.")
     checkpoint_app = typer.Typer(help="Manage git-backed checkpoints.")
+    capabilities_app = typer.Typer(help="Inspect and reload discoverable capabilities.")
+    skills_app = typer.Typer(help="Inspect discovered skills.")
     app.add_typer(sessions_app, name="sessions")
     app.add_typer(approvals_app, name="approvals")
     app.add_typer(workflow_app, name="workflow")
     app.add_typer(config_app, name="config")
     app.add_typer(timeline_app, name="timeline")
     app.add_typer(checkpoint_app, name="checkpoint")
+    app.add_typer(capabilities_app, name="capabilities")
+    app.add_typer(skills_app, name="skills")
 
     @sessions_app.command("list")
     def sessions_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
@@ -222,6 +226,54 @@ if app:
         checkpoint_restore_main(workspace, checkpoint_id)
 
 
+    @capabilities_app.command("list")
+    def capabilities_list(
+        kind: Optional[str] = typer.Option(None, "--kind"),
+        include_mcp: Optional[bool] = typer.Option(None, "--include-mcp"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.capabilities import capabilities_list_main
+
+        capabilities_list_main(workspace, kind=kind, include_mcp=include_mcp)
+
+
+    @capabilities_app.command("show")
+    def capabilities_show(
+        kind: str,
+        name: str,
+        include_mcp: Optional[bool] = typer.Option(None, "--include-mcp"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.capabilities import capabilities_show_main
+
+        capabilities_show_main(workspace, kind, name, include_mcp=include_mcp)
+
+
+    @capabilities_app.command("reload")
+    def capabilities_reload(
+        kind: Optional[str] = typer.Option(None, "--kind"),
+        include_mcp: Optional[bool] = typer.Option(None, "--include-mcp"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.capabilities import capabilities_reload_main
+
+        capabilities_reload_main(workspace, include_mcp=include_mcp)
+
+
+    @skills_app.command("list")
+    def skills_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        from pp_agent.cli.commands.skills import skills_list_main
+
+        skills_list_main(workspace)
+
+
+    @skills_app.command("show")
+    def skills_show(name: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        from pp_agent.cli.commands.skills import skills_show_main
+
+        skills_show_main(workspace, name)
+
+
     @app.command("rewind-safe")
     def rewind_safe(
         session_id: str = typer.Option(..., "--session"),
@@ -328,6 +380,28 @@ def main() -> None:
     checkpoint_restore_parser = checkpoint_subparsers.add_parser("restore")
     checkpoint_restore_parser.add_argument("checkpoint_id")
     checkpoint_restore_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    capabilities_parser = subparsers.add_parser("capabilities")
+    capabilities_subparsers = capabilities_parser.add_subparsers(dest="capabilities_command", required=True)
+    capabilities_list_parser = capabilities_subparsers.add_parser("list")
+    capabilities_list_parser.add_argument("--kind", default=None)
+    capabilities_list_parser.add_argument("--include-mcp", dest="include_mcp", action="store_true")
+    capabilities_list_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    capabilities_show_parser = capabilities_subparsers.add_parser("show")
+    capabilities_show_parser.add_argument("kind")
+    capabilities_show_parser.add_argument("name")
+    capabilities_show_parser.add_argument("--include-mcp", dest="include_mcp", action="store_true")
+    capabilities_show_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    capabilities_reload_parser = capabilities_subparsers.add_parser("reload")
+    capabilities_reload_parser.add_argument("--kind", default=None)
+    capabilities_reload_parser.add_argument("--include-mcp", dest="include_mcp", action="store_true")
+    capabilities_reload_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    skills_parser = subparsers.add_parser("skills")
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
+    skills_list_parser = skills_subparsers.add_parser("list")
+    skills_list_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    skills_show_parser = skills_subparsers.add_parser("show")
+    skills_show_parser.add_argument("name")
+    skills_show_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     rewind_safe_parser = subparsers.add_parser("rewind-safe")
     rewind_safe_parser.add_argument("--session", required=True)
     rewind_safe_parser.add_argument("--checkpoint", default=None)
@@ -426,6 +500,26 @@ def main() -> None:
         from pp_agent.cli.commands.checkpoint import checkpoint_restore_main
 
         checkpoint_restore_main(Path(args.workspace), args.checkpoint_id)
+    elif command == "capabilities" and args.capabilities_command == "list":
+        from pp_agent.cli.commands.capabilities import capabilities_list_main
+
+        capabilities_list_main(Path(args.workspace), kind=args.kind, include_mcp=args.include_mcp or None)
+    elif command == "capabilities" and args.capabilities_command == "show":
+        from pp_agent.cli.commands.capabilities import capabilities_show_main
+
+        capabilities_show_main(Path(args.workspace), args.kind, args.name, include_mcp=args.include_mcp or None)
+    elif command == "capabilities" and args.capabilities_command == "reload":
+        from pp_agent.cli.commands.capabilities import capabilities_reload_main
+
+        capabilities_reload_main(Path(args.workspace), include_mcp=args.include_mcp or None)
+    elif command == "skills" and args.skills_command == "list":
+        from pp_agent.cli.commands.skills import skills_list_main
+
+        skills_list_main(Path(args.workspace))
+    elif command == "skills" and args.skills_command == "show":
+        from pp_agent.cli.commands.skills import skills_show_main
+
+        skills_show_main(Path(args.workspace), args.name)
     elif command == "rewind-safe":
         from pp_agent.cli.commands.checkpoint import rewind_safe_main
 

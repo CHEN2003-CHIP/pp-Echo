@@ -1,3 +1,3 @@
-﻿from pp_agent.storage.settings import Settings, ToolPolicyConfig
+from pp_agent.storage.settings import CapabilitySettings, Settings, ToolPolicyConfig
 
-__all__ = ["Settings", "ToolPolicyConfig"]
+__all__ = ["CapabilitySettings", "Settings", "ToolPolicyConfig"]

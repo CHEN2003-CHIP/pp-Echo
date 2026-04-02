@@ -86,6 +86,41 @@ def list_sessions(workspace: Path, *, host: Optional[SessionHost] = None) -> lis
     return [entry.model_dump(mode="json") for entry in (host or _default_host(workspace)).list_sessions(workspace)]
 
 
+def list_capabilities(
+    workspace: Path,
+    *,
+    kind: Optional[str] = None,
+    include_mcp: Optional[bool] = None,
+) -> list[dict]:
+    bootstrap = import_module("pp_agent.app.bootstrap")
+    catalog = bootstrap.create_capability_catalog(workspace, include_mcp=include_mcp)
+    return [entry.model_dump(mode="json") for entry in catalog.list(kind=kind)]
+
+
+def get_capability(
+    workspace: Path,
+    *,
+    kind: str,
+    name: str,
+    include_mcp: Optional[bool] = None,
+) -> dict:
+    bootstrap = import_module("pp_agent.app.bootstrap")
+    catalog = bootstrap.create_capability_catalog(workspace, include_mcp=include_mcp)
+    return catalog.get(kind, name).model_dump(mode="json")
+
+
+def reload_capabilities(
+    workspace: Path,
+    *,
+    kind: Optional[str] = None,
+    include_mcp: Optional[bool] = None,
+) -> list[dict]:
+    bootstrap = import_module("pp_agent.app.bootstrap")
+    catalog = bootstrap.create_capability_catalog(workspace, include_mcp=include_mcp)
+    catalog.reload()
+    return [entry.model_dump(mode="json") for entry in catalog.list(kind=kind)]
+
+
 def get_session_tree(
     workspace: Path,
     session_id: Optional[str] = None,

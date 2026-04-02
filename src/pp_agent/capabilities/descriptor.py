@@ -6,7 +6,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
-CapabilityKind = Literal["skill", "builtin_tool", "mcp_tool", "mcp_resource", "mcp_prompt"]
+CapabilityKind = Literal["skill", "builtin_tool", "extension", "mcp_tool", "mcp_resource", "mcp_prompt"]
 
 
 class CapabilityDescriptor(BaseModel):
@@ -17,6 +17,8 @@ class CapabilityDescriptor(BaseModel):
     description: str
     source: str
     path: Optional[str] = None
+    status: str = "discovered"
+    origin_type: str = "unknown"
     risk_level: str = "low"
     cost_hint: str = "low"
     discoverability: str = "listed"

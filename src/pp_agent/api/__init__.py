@@ -35,6 +35,18 @@ def list_sessions(*args, **kwargs):
     return sdk.list_sessions(*args, **kwargs)
 
 
+def list_capabilities(*args, **kwargs):
+    return sdk.list_capabilities(*args, **kwargs)
+
+
+def reload_capabilities(*args, **kwargs):
+    return sdk.reload_capabilities(*args, **kwargs)
+
+
+def get_capability(*args, **kwargs):
+    return sdk.get_capability(*args, **kwargs)
+
+
 def get_session_tree(*args, **kwargs):
     return sdk.get_session_tree(*args, **kwargs)
 
@@ -84,10 +96,13 @@ __all__ = [
     "create_session",
     "enqueue_message",
     "fork_session",
+    "get_capability",
     "get_session_tree",
+    "list_capabilities",
     "list_checkpoints",
     "list_sessions",
     "preview_rewind",
+    "reload_capabilities",
     "restore_session",
     "rewind_session",
     "rewind_safe",

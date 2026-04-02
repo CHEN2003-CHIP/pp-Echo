@@ -30,6 +30,13 @@ class CapabilityCatalog:
     def get(self, kind: CapabilityKind, name: str) -> CapabilityDescriptor:
         return self._snapshot[(kind, name)].model_copy(deep=True)
 
+    def reload(self) -> None:
+        for provider in self._providers:
+            reload_fn = getattr(provider, "reload", None)
+            if callable(reload_fn):
+                reload_fn()
+        self.refresh()
+
     def refresh(self) -> None:
         next_snapshot: dict[CapabilityKey, CapabilityDescriptor] = {}
         next_ordered_keys: list[CapabilityKey] = []

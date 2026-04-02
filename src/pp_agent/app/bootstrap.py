@@ -1,21 +1,30 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from pp_agent.app.extensions_runtime import load_executable_extensions
+from pp_agent.app.resources import load_resource_manifest, manifest_extension_roots, manifest_skill_roots
+from pp_agent.app.skills_runtime import SkillRuntime
 from pp_agent.capabilities import (
     BuiltinToolCapabilityDiscoveryProvider,
     CapabilityCatalog,
-    MCPCapabilityDiscoveryProvider,
+    CapabilityDescriptor,
+    CapabilityDiscoveryProvider,
     SkillCapabilityDiscoveryProvider,
 )
 from pp_agent.domain.checkpoints import CheckpointEntry
+from pp_agent.extensions import ExtensionDescriptor, ExtensionRegistry, load_extensions
 from pp_agent.extensions.hooks import LifecycleSubscriber
+from pp_agent.extensions.index import extension_search_roots
 from pp_agent.llm.models import ModelConfig, ProviderConfig
-from pp_agent.mcp import MCPManager
 from pp_agent.llm.registry import create_llm_client
+from pp_agent.mcp import MCPManager
+from pp_agent.mcp.config import load_mcp_server_configs
 from pp_agent.runtime.git_checkpoint import GitCheckpointManager
-from pp_agent.runtime.hooks import BeforeToolCallDecision
+from pp_agent.runtime.hooks import BeforeToolCallDecision, RuntimeHooks
 from pp_agent.runtime.lifecycle import CHECKPOINT_BEFORE_CREATE, CHECKPOINT_CREATED
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.session_host import SessionHost
@@ -26,6 +35,250 @@ from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.settings import Settings
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.registry import ToolRegistry
+
+
+@dataclass
+class _ExtensionCapabilitySource:
+    workspace: Path
+    user_root: Path
+    config: object
+    registry: ExtensionRegistry
+    search_roots: list[object] = field(default_factory=list)
+
+    def discover(self) -> list[CapabilityDescriptor]:
+        for descriptor in load_extensions(
+            self.workspace,
+            self.user_root,
+            config=self.config,
+            search_roots=self.search_roots or None,
+        ).values():
+            self.registry.register(descriptor, status="discovered")
+        return [self._descriptor(binding) for binding in self.registry.list() if binding.descriptor.name != "mcp_adapter"]
+
+    def reload(self) -> None:
+        self.registry.clear()
+
+    @staticmethod
+    def _descriptor(binding) -> CapabilityDescriptor:
+        descriptor = binding.descriptor
+        return CapabilityDescriptor(
+            kind="extension",
+            name=descriptor.name,
+            description=descriptor.description,
+            source=f"extension:{descriptor.name}",
+            path=str(descriptor.path) if descriptor.path else None,
+            status=binding.status,
+            origin_type=descriptor.origin_type,
+            risk_level="low",
+            cost_hint="low",
+            discoverability="listed",
+            metadata={
+                "origin": "extension",
+                "entrypoint": descriptor.entrypoint,
+                "provides": descriptor.provides,
+                "root_name": descriptor.root_name,
+                "precedence": descriptor.precedence,
+                "declared_by_manifest": descriptor.declared_by_manifest,
+                "error": binding.error,
+                "loaded_tools": list(binding.loaded_tools),
+                "loaded_commands": list(binding.loaded_commands),
+                "loaded_resources": list(binding.loaded_resources),
+                "hook_counts": dict(binding.hook_counts),
+            },
+        )
+
+
+@dataclass
+class _MCPExtensionBackend:
+    workspace: Path
+    mcp_config: object
+    registry: ExtensionRegistry
+    transport_factory: object | None = None
+    time_fn: object | None = None
+    _manager: MCPManager | None = field(default=None, init=False, repr=False)
+    _fingerprint: str | None = field(default=None, init=False, repr=False)
+
+    def discover(self) -> list[CapabilityDescriptor]:
+        if not getattr(self.mcp_config, "enable", False):
+            self.reload()
+            return []
+
+        extension_descriptor = ExtensionDescriptor(
+            name="mcp_adapter",
+            description="Expose MCP servers as extension-backed capabilities.",
+            entrypoint="pp_agent.mcp",
+            provides=["mcp_tool", "mcp_resource", "mcp_prompt"],
+            origin_type="builtin",
+            root_name="mcp_backend",
+            precedence=-1,
+            declared_by_manifest=False,
+        )
+        self.registry.register(extension_descriptor, status="loaded")
+        try:
+            manager = self._manager_for_current_config()
+        except Exception as exc:  # pragma: no cover - defensive path
+            self.registry.mark_errored("mcp_adapter", str(exc))
+            return []
+
+        descriptors: list[CapabilityDescriptor] = [
+            CapabilityDescriptor(
+                kind="extension",
+                name=extension_descriptor.name,
+                description=extension_descriptor.description,
+                source=f"extension:{extension_descriptor.name}",
+                status="loaded",
+                origin_type=extension_descriptor.origin_type,
+                risk_level="low",
+                cost_hint="low",
+                discoverability="listed",
+                metadata={
+                    "origin": "extension",
+                    "entrypoint": extension_descriptor.entrypoint,
+                    "provides": extension_descriptor.provides,
+                    "root_name": extension_descriptor.root_name,
+                    "precedence": extension_descriptor.precedence,
+                    "declared_by_manifest": extension_descriptor.declared_by_manifest,
+                    "error": None,
+                    "loaded_tools": [],
+                    "loaded_commands": [],
+                    "loaded_resources": [],
+                    "hook_counts": {},
+                },
+            )
+        ]
+        loaded_tools: list[str] = []
+        loaded_resources: list[str] = []
+        for server_name in manager.server_names():
+            if not self._includes_server(server_name):
+                continue
+            for tool in manager.list_mcp_tools(server_name):
+                qualified = self._qualified_name(server_name, tool.name)
+                loaded_tools.append(qualified)
+                descriptors.append(
+                    CapabilityDescriptor(
+                        kind="mcp_tool",
+                        name=qualified,
+                        description=tool.description,
+                        source=f"extension:mcp_adapter:{server_name}:tool:{tool.name}",
+                        status="loaded",
+                        origin_type="extension",
+                        risk_level=tool.risk_level,
+                        cost_hint="medium" if tool.is_remote else "low",
+                        discoverability="listed",
+                        metadata={
+                            "origin": "mcp_tool",
+                            "origin_extension": "mcp_adapter",
+                            "server_name": server_name,
+                            "name": tool.name,
+                            "qualified_name": qualified,
+                            "is_remote": tool.is_remote,
+                            "requires_auth": tool.requires_auth,
+                            "is_destructive": tool.is_destructive,
+                            "approval_mode": tool.approval_mode,
+                            "input_schema": tool.input_schema,
+                        },
+                    )
+                )
+            for resource in manager.list_mcp_resources(server_name):
+                resource_name = resource.name or resource.uri
+                qualified = self._qualified_name(server_name, resource_name)
+                loaded_resources.append(qualified)
+                descriptors.append(
+                    CapabilityDescriptor(
+                        kind="mcp_resource",
+                        name=qualified,
+                        description=resource.description,
+                        source=f"extension:mcp_adapter:{server_name}:resource:{resource.uri}",
+                        status="loaded",
+                        origin_type="extension",
+                        risk_level=resource.risk_level,
+                        cost_hint="medium" if resource.is_remote else "low",
+                        discoverability="listed",
+                        metadata={
+                            "origin": "mcp_resource",
+                            "origin_extension": "mcp_adapter",
+                            "server_name": server_name,
+                            "name": resource.name,
+                            "qualified_name": qualified,
+                            "uri": resource.uri,
+                            "mime_type": resource.mime_type,
+                            "is_remote": resource.is_remote,
+                            "requires_auth": resource.requires_auth,
+                            "approval_mode": resource.approval_mode,
+                        },
+                    )
+                )
+            for prompt in manager.list_mcp_prompts(server_name):
+                qualified = self._qualified_name(server_name, prompt.name)
+                loaded_resources.append(qualified)
+                descriptors.append(
+                    CapabilityDescriptor(
+                        kind="mcp_prompt",
+                        name=qualified,
+                        description=prompt.description,
+                        source=f"extension:mcp_adapter:{server_name}:prompt:{prompt.name}",
+                        status="loaded",
+                        origin_type="extension",
+                        risk_level=prompt.risk_level,
+                        cost_hint="medium" if prompt.is_remote else "low",
+                        discoverability="listed",
+                        metadata={
+                            "origin": "mcp_prompt",
+                            "origin_extension": "mcp_adapter",
+                            "server_name": server_name,
+                            "name": prompt.name,
+                            "qualified_name": qualified,
+                            "is_remote": prompt.is_remote,
+                            "requires_auth": prompt.requires_auth,
+                            "approval_mode": prompt.approval_mode,
+                            "arguments_schema": prompt.arguments_schema,
+                        },
+                    )
+                )
+        self.registry.mark_loaded(
+            "mcp_adapter",
+            loaded_tools=loaded_tools,
+            loaded_commands=[],
+            loaded_resources=loaded_resources,
+            hook_counts={},
+        )
+        descriptors[0].metadata["loaded_tools"] = list(loaded_tools)
+        descriptors[0].metadata["loaded_commands"] = []
+        descriptors[0].metadata["loaded_resources"] = list(loaded_resources)
+        descriptors[0].metadata["hook_counts"] = {}
+        return descriptors
+
+    def reload(self) -> None:
+        if self._manager is not None:
+            self._manager.close_all_sessions()
+        binding = self.registry.get("mcp_adapter")
+        if binding is not None:
+            self.registry.register(binding.descriptor, status="discovered")
+        self._manager = None
+        self._fingerprint = None
+
+    def _manager_for_current_config(self) -> MCPManager:
+        project_dir = self.workspace.resolve() / ".pp-agent"
+        config_paths = getattr(self.mcp_config, "resolved_config_paths")(project_dir)
+        servers = [
+            server
+            for server in load_mcp_server_configs(project_dir, config_paths=config_paths)
+            if self._includes_server(server.name)
+        ]
+        fingerprint = json.dumps([server.model_dump(mode="json") for server in servers], sort_keys=True)
+        if self._manager is None or fingerprint != self._fingerprint:
+            if self._manager is not None:
+                self._manager.close_all_sessions()
+            self._manager = MCPManager(servers, transport_factory=self.transport_factory, time_fn=self.time_fn)
+            self._fingerprint = fingerprint
+        return self._manager
+
+    def _includes_server(self, server_name: str) -> bool:
+        return getattr(self.mcp_config, "includes_server")(server_name)
+
+    @staticmethod
+    def _qualified_name(server_name: str, name: str) -> str:
+        return f"{server_name}.{name}"
 
 
 def load_settings(workspace: Path) -> Settings:
@@ -89,13 +342,21 @@ def create_tool_registry(workspace: Path) -> ToolRegistry:
     return ToolRegistry(workspace, policy=settings.tool_policy)
 
 
-def create_capability_catalog(workspace: Path) -> CapabilityCatalog:
+def create_capability_catalog(
+    workspace: Path,
+    *,
+    include_mcp: Optional[bool] = None,
+    transport_factory=None,
+    time_fn=None,
+) -> CapabilityCatalog:
     settings = load_settings(workspace)
-    registry = ToolRegistry(workspace, policy=settings.tool_policy)
-    providers = [
-        SkillCapabilityDiscoveryProvider(workspace=workspace.resolve(), user_root=settings.global_dir),
-        BuiltinToolCapabilityDiscoveryProvider(registry=registry),
-    ]
+    providers = create_capability_providers(
+        workspace,
+        settings=settings,
+        include_mcp=include_mcp,
+        transport_factory=transport_factory,
+        time_fn=time_fn,
+    )
     return CapabilityCatalog(providers)
 
 
@@ -105,15 +366,55 @@ def create_capability_catalog_with_mcp(
     transport_factory=None,
     time_fn=None,
 ) -> CapabilityCatalog:
-    settings = load_settings(workspace)
+    return create_capability_catalog(workspace, include_mcp=True, transport_factory=transport_factory, time_fn=time_fn)
+
+
+def create_capability_providers(
+    workspace: Path,
+    *,
+    settings: Optional[Settings] = None,
+    include_mcp: Optional[bool] = None,
+    transport_factory=None,
+    time_fn=None,
+) -> list[CapabilityDiscoveryProvider]:
+    settings = settings or load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
-    manager = create_mcp_manager(workspace, transport_factory=transport_factory, time_fn=time_fn)
-    providers = [
-        SkillCapabilityDiscoveryProvider(workspace=workspace.resolve(), user_root=settings.global_dir),
-        BuiltinToolCapabilityDiscoveryProvider(registry=registry),
-        MCPCapabilityDiscoveryProvider(manager=manager),
+    extension_registry = ExtensionRegistry()
+    skill_roots = _skill_roots_for(workspace.resolve(), settings)
+    extension_roots = _extension_roots_for(workspace.resolve(), settings)
+    providers: list[CapabilityDiscoveryProvider] = [
+        SkillCapabilityDiscoveryProvider(
+            workspace=workspace.resolve(),
+            user_root=settings.global_dir,
+            config=settings.capabilities.skills,
+            search_roots=skill_roots,
+        ),
+        _ExtensionCapabilitySource(
+            workspace=workspace.resolve(),
+            user_root=settings.global_dir,
+            config=settings.capabilities.extensions,
+            registry=extension_registry,
+            search_roots=extension_roots,
+        ),
+        BuiltinToolCapabilityDiscoveryProvider(
+            registry=registry,
+            enabled=settings.capabilities.builtin_tools.enable,
+        ),
     ]
-    return CapabilityCatalog(providers)
+    mcp_enabled = settings.capabilities.mcp.enable if include_mcp is None else include_mcp
+    if mcp_enabled:
+        mcp_config = settings.capabilities.mcp.model_copy(deep=True)
+        mcp_config.enable = True
+        providers.append(
+            _MCPExtensionBackend(
+                workspace=workspace.resolve(),
+                mcp_config=mcp_config,
+                registry=extension_registry,
+                transport_factory=transport_factory,
+                time_fn=time_fn,
+            )
+        )
+    return providers
 
 
 def create_mcp_manager(
@@ -122,7 +423,9 @@ def create_mcp_manager(
     transport_factory=None,
     time_fn=None,
 ) -> MCPManager:
-    return MCPManager.from_workspace(workspace, transport_factory=transport_factory, time_fn=time_fn)
+    settings = load_settings(workspace)
+    config_paths = settings.capabilities.mcp.resolved_config_paths(settings.project_dir)
+    return MCPManager.from_workspace(workspace, transport_factory=transport_factory, time_fn=time_fn, config_paths=config_paths)
 
 
 def provider_config_for_llm(config: StoredProviderConfig) -> ProviderConfig:
@@ -152,12 +455,14 @@ def create_runtime_from_record(
 ) -> AgentRuntime:
     settings = load_settings(workspace)
     session_store = session_store_for(workspace)
+    tool_registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    runtime_hooks = RuntimeHooks()
     agent = AgentRuntime(
         llm_client=create_llm_client(
             provider=provider_config_for_llm(settings.provider),
             model=model_config_for_llm(record.model),
         ),
-        tool_registry=ToolRegistry(workspace, policy=settings.tool_policy),
+        tool_registry=tool_registry,
         session_store=session_store,
         session_id=record.id,
         system_prompt=record.system_prompt,
@@ -167,6 +472,7 @@ def create_runtime_from_record(
         initial_pending_plan_token=record.pending_plan_token,
         initial_queued_messages=record.queued_messages,
         require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
+        runtime_hooks=runtime_hooks,
         timeline_store=timeline_store_for(workspace),
     )
     _install_auto_checkpoint_hook(
@@ -174,9 +480,105 @@ def create_runtime_from_record(
         workspace=workspace,
         manager=GitCheckpointManager(workspace, checkpoint_store_for(workspace), session_store),
     )
+    setattr(agent, "_baseline_runtime_hooks_snapshot", agent.runtime_hooks.snapshot())
+    extension_runtime = load_executable_extensions(
+        workspace,
+        settings=settings,
+        tool_registry=tool_registry,
+        runtime_hooks=agent.runtime_hooks,
+        search_roots=_extension_roots_for(workspace.resolve(), settings),
+    )
+    skill_runtime = SkillRuntime(
+        workspace=workspace.resolve(),
+        user_root=settings.global_dir,
+        config=settings.capabilities.skills,
+        search_roots=_skill_roots_for(workspace.resolve(), settings),
+    )
+    agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
+    setattr(agent, "extension_registry", extension_runtime.registry)
+    setattr(agent, "extension_commands", extension_runtime.commands)
+    setattr(agent, "extension_resources", extension_runtime.resources)
+    setattr(agent, "mcp_runtime", extension_runtime.mcp_runtime)
+    setattr(agent, "skill_runtime", skill_runtime)
+    setattr(agent, "_extension_runtime", extension_runtime)
     for subscriber in lifecycle_subscribers or []:
         agent.subscribe(subscriber)
     return agent
+
+
+def reload_runtime_extensions(
+    agent: AgentRuntime,
+    workspace: Path,
+    *,
+    include_mcp: Optional[bool] = None,
+    transport_factory=None,
+    time_fn=None,
+) -> dict[str, object]:
+    settings = load_settings(workspace)
+    previous_runtime = getattr(agent, "_extension_runtime", None)
+    if previous_runtime is not None:
+        previous_runtime.close()
+    agent.tool_registry.reset_dynamic_registrations()
+    extension_commands = getattr(agent, "extension_commands", None)
+    if extension_commands is not None:
+        extension_commands.clear()
+    extension_resources = getattr(agent, "extension_resources", None)
+    if isinstance(extension_resources, dict):
+        extension_resources.clear()
+    extension_registry = getattr(agent, "extension_registry", None)
+    if extension_registry is not None:
+        extension_registry.clear()
+    baseline_snapshot = getattr(agent, "_baseline_runtime_hooks_snapshot", None)
+    if baseline_snapshot is not None:
+        agent.runtime_hooks.restore(baseline_snapshot)
+    extension_runtime = load_executable_extensions(
+        workspace,
+        settings=settings,
+        tool_registry=agent.tool_registry,
+        runtime_hooks=agent.runtime_hooks,
+        search_roots=_extension_roots_for(workspace.resolve(), settings),
+        include_mcp=include_mcp,
+        transport_factory=transport_factory,
+        time_fn=time_fn,
+    )
+    skill_runtime = SkillRuntime(
+        workspace=workspace.resolve(),
+        user_root=settings.global_dir,
+        config=settings.capabilities.skills,
+        search_roots=_skill_roots_for(workspace.resolve(), settings),
+    )
+    agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
+    setattr(agent, "extension_registry", extension_runtime.registry)
+    setattr(agent, "extension_commands", extension_runtime.commands)
+    setattr(agent, "extension_resources", extension_runtime.resources)
+    setattr(agent, "mcp_runtime", extension_runtime.mcp_runtime)
+    setattr(agent, "skill_runtime", skill_runtime)
+    setattr(agent, "_extension_runtime", extension_runtime)
+    builtin_tool_names = {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "preview_pending_action",
+        "approve_pending_action",
+        "reject_pending_action",
+        "list_pending_actions",
+        "list_files",
+        "search_text",
+        "grep_code",
+        "git_status",
+        "git_diff_worktree",
+        "run_shell",
+    }
+    return {
+        "extension_count": len(extension_runtime.registry.items),
+        "command_count": len(extension_runtime.commands.commands),
+        "resource_count": sum(len(values) for values in extension_runtime.resources.values()),
+        "tool_count": len([name for name in agent.tool_registry.metadata() if name not in builtin_tool_names]),
+        "skill_count": len(skill_runtime.available_skills()),
+        "active_skill_count": len(skill_runtime.active_skills()),
+        "mcp_enabled": extension_runtime.mcp_runtime is not None,
+        "mcp_discovered": extension_runtime.mcp_runtime.status()["discovered"] if extension_runtime.mcp_runtime is not None else False,
+    }
 
 
 def session_defaults_for(workspace: Path) -> dict[str, object]:
@@ -238,6 +640,97 @@ def rewind_session_with_events(
         lifecycle_subscribers=subscribers,
     )
     return result.session_id
+
+
+def _skill_roots_for(workspace: Path, settings: Settings) -> list[object]:
+    manifest = load_resource_manifest(settings.project_dir)
+    roots: list[object] = []
+    precedence = 0
+    for value in settings.capabilities.skills.custom_directories:
+        path = Path(value).expanduser()
+        roots.append(
+            type(
+                "SkillRoot",
+                (),
+                {
+                    "path": path,
+                    "origin_type": "custom",
+                    "root_name": path.name,
+                    "precedence": precedence,
+                    "declared_by_manifest": False,
+                },
+            )()
+        )
+        precedence += 1
+    if settings.capabilities.skills.enable_project:
+        roots.append(
+            type(
+                "SkillRoot",
+                (),
+                {
+                    "path": workspace / ".pp-agent" / "skills",
+                    "origin_type": "project",
+                    "root_name": "project_skills",
+                    "precedence": precedence,
+                    "declared_by_manifest": False,
+                },
+            )()
+        )
+        precedence += 1
+    if settings.capabilities.skills.enable_user:
+        roots.append(
+            type(
+                "SkillRoot",
+                (),
+                {
+                    "path": settings.global_dir / "skills",
+                    "origin_type": "user",
+                    "root_name": "user_skills",
+                    "precedence": precedence,
+                    "declared_by_manifest": False,
+                },
+            )()
+        )
+        precedence += 1
+    if settings.capabilities.skills.enable_builtin:
+        roots.append(
+            type(
+                "SkillRoot",
+                (),
+                {
+                    "path": Path(__file__).resolve().parents[1] / "skills",
+                    "origin_type": "builtin",
+                    "root_name": "builtin_skills",
+                    "precedence": precedence,
+                    "declared_by_manifest": False,
+                },
+            )()
+        )
+    return _replace_project_skill_roots(roots, settings, manifest.skills)
+
+
+def _extension_roots_for(workspace: Path, settings: Settings) -> list[object]:
+    manifest = load_resource_manifest(settings.project_dir)
+    roots = extension_search_roots(workspace, settings.global_dir, config=settings.capabilities.extensions)
+    return _replace_project_extension_roots(roots, settings, manifest.extensions)
+
+
+def _replace_project_skill_roots(roots: list[object], settings: Settings, manifest_entries: list[str]) -> list[object]:
+    if not manifest_entries:
+        return roots
+    custom_count = len(settings.capabilities.skills.custom_directories)
+    replaced = [root for root in roots if root.origin_type != "project"]
+    replaced.extend(manifest_skill_roots(settings.project_dir, manifest_entries, precedence_start=custom_count))
+    return replaced
+
+
+def _replace_project_extension_roots(roots: list[object], settings: Settings, manifest_entries: list[str]) -> list[object]:
+    if not manifest_entries:
+        return roots
+    custom_count = len(settings.capabilities.extensions.custom_directories)
+    replaced = [root for root in roots if getattr(root, "origin_type", None) != "project"]
+    replaced.extend(manifest_extension_roots(settings.project_dir, manifest_entries, precedence_start=custom_count))
+    return replaced
 
 
 def _install_auto_checkpoint_hook(*, agent: AgentRuntime, workspace: Path, manager: GitCheckpointManager) -> None:
@@ -309,5 +802,3 @@ def _checkpoint_event_details(entry: CheckpointEntry) -> dict[str, object]:
         "has_dirty_workspace": entry.file_stats.has_dirty_workspace,
         "affected_file_count": entry.file_stats.changed_file_count,
     }
-
-

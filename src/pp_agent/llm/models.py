@@ -1,9 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import os
 from typing import Optional
 
 from pydantic import BaseModel
-import os
+
 
 class ProviderConfig(BaseModel):
     name: str = "alibaba-bailian"
@@ -13,7 +14,7 @@ class ProviderConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     provider: str = "alibaba-bailian"
-    model: str = os.getenv("model_name")
+    model: str = os.getenv("model_name") or "qwen3.5-plus"
     temperature: float = 0.2
     max_tokens: Optional[int] = None
     enable_thinking: bool = False

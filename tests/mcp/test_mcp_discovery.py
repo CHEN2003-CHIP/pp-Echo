@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from pp_agent.app.bootstrap import create_mcp_manager
+from pp_agent.mcp.config import load_mcp_config, load_mcp_server_configs
 
 
 class TrackingClient:
@@ -48,10 +49,10 @@ class TrackingClient:
         return None
 
 
-def _write_config(tmp_path: Path) -> None:
+def _write_config(tmp_path: Path, payload: dict | None = None) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "mcp.json").write_text(json.dumps({"servers": [{"name": "demo"}]}), encoding="utf-8")
+    (project_dir / "mcp.json").write_text(json.dumps(payload or {"servers": [{"name": "demo"}]}), encoding="utf-8")
 
 
 def test_mcp_discovery_returns_metadata_only_and_does_not_execute(tmp_path: Path) -> None:
@@ -80,3 +81,44 @@ def test_mcp_discovery_order_is_stable(tmp_path: Path) -> None:
 
     assert first == ["alpha", "beta"]
     assert second == ["alpha", "beta"]
+
+
+def test_load_mcp_config_supports_legacy_and_extended_shapes(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    legacy = project_dir / "legacy.json"
+    legacy.write_text(json.dumps({"servers": [{"name": "legacy"}]}), encoding="utf-8")
+    extended = project_dir / "extended.json"
+    extended.write_text(
+        json.dumps(
+            {
+                "settings": {"tool_prefix": "adapter", "idle_timeout": 12},
+                "servers": [{"name": "extended"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    document = load_mcp_config(project_dir, config_paths=[legacy, extended])
+
+    assert document.settings.tool_prefix == "adapter"
+    assert [item.name for item in document.servers] == ["legacy", "extended"]
+    assert document.servers[-1].idle_timeout_seconds == 12
+
+
+def test_load_mcp_server_configs_supports_mcp_servers_mapping(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        {
+            "settings": {"idle_timeout": 7},
+            "mcpServers": {
+                "demo": {"command": "npx", "args": ["server"]},
+            },
+        },
+    )
+
+    servers = load_mcp_server_configs(tmp_path / ".pp-agent")
+
+    assert [item.name for item in servers] == ["demo"]
+    assert servers[0].command == "npx"
+    assert servers[0].idle_timeout_seconds == 7

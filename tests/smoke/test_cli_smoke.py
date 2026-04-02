@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -8,9 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _run_module(*args: str) -> subprocess.CompletedProcess[str]:
+def _run_module(*args: str, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT / "src")
+    if env_overrides:
+        env.update(env_overrides)
     return subprocess.run(
         [sys.executable, "-m", *args],
         cwd=ROOT,
@@ -41,6 +44,46 @@ def test_pp_agent_approvals_summary_smoke() -> None:
 
     assert result.returncode == 0
     assert "Approvals Queue" in result.stdout
+
+
+def test_pp_agent_capabilities_list_smoke(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    skill_path = project_dir / "skills" / "demo" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    skill_path.write_text("---\nname: demo\ndescription: smoke skill\n---\nbody", encoding="utf-8")
+
+    result = _run_module(
+        "pp_agent.cli.main",
+        "capabilities",
+        "list",
+        "--workspace",
+        str(tmp_path),
+        env_overrides={"PP_AGENT_HOME": str(tmp_path / ".pp-agent-home")},
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    demo = next(item for item in payload if item["name"] == "demo")
+    assert demo["status"] == "discovered"
+    assert demo["origin_type"] == "project"
+
+
+def test_pp_agent_skills_commands_smoke(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    skill_path = project_dir / "skills" / "demo" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    skill_path.write_text("---\nname: demo\ndescription: smoke skill\n---\nbody", encoding="utf-8")
+    env = {"PP_AGENT_HOME": str(tmp_path / ".pp-agent-home")}
+
+    list_result = _run_module("pp_agent.cli.main", "skills", "list", "--workspace", str(tmp_path), env_overrides=env)
+    show_result = _run_module("pp_agent.cli.main", "skills", "show", "demo", "--workspace", str(tmp_path), env_overrides=env)
+
+    assert list_result.returncode == 0
+    assert show_result.returncode == 0
+    assert any(item["name"] == "demo" for item in json.loads(list_result.stdout))
+    assert json.loads(show_result.stdout)["name"] == "demo"
 
 
 def test_agent_cli_shim_help_smoke() -> None:

@@ -53,6 +53,20 @@ class RuntimeHooks:
         self.after_tool_call_hooks = after_tool_call or []
         self.on_tool_error_hooks = on_tool_error or []
 
+    def snapshot(self) -> dict[str, list[Callable]]:
+        return {
+            "transform_context": list(self.transform_context_hooks),
+            "before_tool_call": list(self.before_tool_call_hooks),
+            "after_tool_call": list(self.after_tool_call_hooks),
+            "on_tool_error": list(self.on_tool_error_hooks),
+        }
+
+    def restore(self, snapshot: dict[str, list[Callable]]) -> None:
+        self.transform_context_hooks = list(snapshot.get("transform_context", []))
+        self.before_tool_call_hooks = list(snapshot.get("before_tool_call", []))
+        self.after_tool_call_hooks = list(snapshot.get("after_tool_call", []))
+        self.on_tool_error_hooks = list(snapshot.get("on_tool_error", []))
+
     def transform_context(self, state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
         current = messages
         for hook in self.transform_context_hooks:

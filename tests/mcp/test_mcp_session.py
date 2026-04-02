@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 from pp_agent.app.bootstrap import create_mcp_manager
 
@@ -110,3 +111,64 @@ def test_mcp_close_idle_sessions_reclaims_cached_session(tmp_path: Path) -> None
     assert manager.close_idle_sessions() == ["demo"]
     assert events[-1] == "demo:close"
     assert manager.active_session_names() == []
+
+
+def test_default_stdio_transport_can_talk_to_demo_server(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    server_script = tmp_path / "demo_server.py"
+    server_script.write_text(
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    params = request.get("params", {})
+    result = {}
+    if method == "initialize":
+        result = {"ok": True}
+    elif method == "list_tools":
+        result = {"tools": [{"name": "echo", "description": "Echo tool", "input_schema": {"type": "object", "properties": {"message": {"type": "string"}}}}]}
+    elif method == "list_resources":
+        result = {"resources": []}
+    elif method == "list_prompts":
+        result = {"prompts": []}
+    elif method == "call_tool":
+        result = {"content": params.get("arguments", {}).get("message", ""), "payload": {}, "is_error": False}
+    elif method == "close":
+        result = {"closed": True}
+    else:
+        print(json.dumps({"id": request.get("id"), "error": f"unknown method: {method}"}), flush=True)
+        continue
+    print(json.dumps({"id": request.get("id"), "result": result}), flush=True)
+    if method == "close":
+        break
+""".strip(),
+        encoding="utf-8",
+    )
+    (project_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "demo",
+                        "description": "Echo back user text",
+                        "transport": "stdio",
+                        "command": sys.executable,
+                        "args": [str(server_script)],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = create_mcp_manager(tmp_path)
+
+    tools = manager.list_mcp_tools("demo")
+    result = manager.call_mcp_tool("demo", "echo", {"message": "hello"})
+
+    assert tools[0].name == "echo"
+    assert result.content == "hello"

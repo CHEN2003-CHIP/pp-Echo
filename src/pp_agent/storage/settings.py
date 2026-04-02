@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,71 @@ class ToolPolicyConfig(BaseModel):
     confirm_high_risk_plan: bool = True
 
 
+class BuiltinToolCapabilityConfig(BaseModel):
+    enable: bool = True
+
+
+class SkillCapabilityConfig(BaseModel):
+    enable_project: bool = True
+    enable_user: bool = True
+    enable_builtin: bool = True
+    custom_directories: list[str] = Field(default_factory=list)
+    ignored: list[str] = Field(default_factory=list)
+    include: list[str] = Field(default_factory=list)
+
+    def custom_paths(self) -> list[Path]:
+        return [Path(value).expanduser() for value in self.custom_directories]
+
+    def includes_name(self, name: str) -> bool:
+        if self.include and not any(fnmatch.fnmatch(name, pattern) for pattern in self.include):
+            return False
+        if any(fnmatch.fnmatch(name, pattern) for pattern in self.ignored):
+            return False
+        return True
+
+
+class MCPCapabilityConfig(BaseModel):
+    enable: bool = False
+    config_paths: list[str] = Field(default_factory=list)
+    server_filters: list[str] = Field(default_factory=list)
+
+    def resolved_config_paths(self, project_dir: Path) -> list[Path]:
+        if self.config_paths:
+            return [Path(value).expanduser() for value in self.config_paths]
+        return [project_dir / "mcp.json"]
+
+    def includes_server(self, name: str) -> bool:
+        if not self.server_filters:
+            return True
+        return any(fnmatch.fnmatch(name, pattern) for pattern in self.server_filters)
+
+
+class ExtensionCapabilityConfig(BaseModel):
+    enable_project: bool = True
+    enable_user: bool = True
+    enable_builtin: bool = False
+    custom_directories: list[str] = Field(default_factory=list)
+    ignored: list[str] = Field(default_factory=list)
+    include: list[str] = Field(default_factory=list)
+
+    def custom_paths(self) -> list[Path]:
+        return [Path(value).expanduser() for value in self.custom_directories]
+
+    def includes_name(self, name: str) -> bool:
+        if self.include and not any(fnmatch.fnmatch(name, pattern) for pattern in self.include):
+            return False
+        if any(fnmatch.fnmatch(name, pattern) for pattern in self.ignored):
+            return False
+        return True
+
+
+class CapabilitySettings(BaseModel):
+    builtin_tools: BuiltinToolCapabilityConfig = Field(default_factory=BuiltinToolCapabilityConfig)
+    skills: SkillCapabilityConfig = Field(default_factory=SkillCapabilityConfig)
+    mcp: MCPCapabilityConfig = Field(default_factory=MCPCapabilityConfig)
+    extensions: ExtensionCapabilityConfig = Field(default_factory=ExtensionCapabilityConfig)
+
+
 class Settings(BaseModel):
     workspace: Path
     global_dir: Path
@@ -30,6 +96,7 @@ class Settings(BaseModel):
     provider: StoredProviderConfig = Field(default_factory=StoredProviderConfig)
     model: StoredModelConfig = Field(default_factory=StoredModelConfig)
     tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
+    capabilities: CapabilitySettings = Field(default_factory=CapabilitySettings)
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
     @classmethod
@@ -102,3 +169,47 @@ class Settings(BaseModel):
         if "high_risk_plan" in tool_confirm:
             self.tool_policy.confirm_high_risk_plan = bool(tool_confirm["high_risk_plan"])
 
+        capability_config = data.get("capabilities", {})
+        if capability_config:
+            self._apply_capability_config(capability_config)
+
+    def _apply_capability_config(self, capability_config: dict) -> None:
+        builtin_tools = capability_config.get("builtin_tools", {})
+        if "enable" in builtin_tools:
+            self.capabilities.builtin_tools.enable = bool(builtin_tools["enable"])
+
+        skill_config = capability_config.get("skills", {})
+        if "enable_project" in skill_config:
+            self.capabilities.skills.enable_project = bool(skill_config["enable_project"])
+        if "enable_user" in skill_config:
+            self.capabilities.skills.enable_user = bool(skill_config["enable_user"])
+        if "enable_builtin" in skill_config:
+            self.capabilities.skills.enable_builtin = bool(skill_config["enable_builtin"])
+        if "custom_directories" in skill_config:
+            self.capabilities.skills.custom_directories = [str(value) for value in skill_config["custom_directories"]]
+        if "ignored" in skill_config:
+            self.capabilities.skills.ignored = [str(value) for value in skill_config["ignored"]]
+        if "include" in skill_config:
+            self.capabilities.skills.include = [str(value) for value in skill_config["include"]]
+
+        mcp_config = capability_config.get("mcp", {})
+        if "enable" in mcp_config:
+            self.capabilities.mcp.enable = bool(mcp_config["enable"])
+        if "config_paths" in mcp_config:
+            self.capabilities.mcp.config_paths = [str(value) for value in mcp_config["config_paths"]]
+        if "server_filters" in mcp_config:
+            self.capabilities.mcp.server_filters = [str(value) for value in mcp_config["server_filters"]]
+
+        extension_config = capability_config.get("extensions", {})
+        if "enable_project" in extension_config:
+            self.capabilities.extensions.enable_project = bool(extension_config["enable_project"])
+        if "enable_user" in extension_config:
+            self.capabilities.extensions.enable_user = bool(extension_config["enable_user"])
+        if "enable_builtin" in extension_config:
+            self.capabilities.extensions.enable_builtin = bool(extension_config["enable_builtin"])
+        if "custom_directories" in extension_config:
+            self.capabilities.extensions.custom_directories = [str(value) for value in extension_config["custom_directories"]]
+        if "ignored" in extension_config:
+            self.capabilities.extensions.ignored = [str(value) for value in extension_config["ignored"]]
+        if "include" in extension_config:
+            self.capabilities.extensions.include = [str(value) for value in extension_config["include"]]

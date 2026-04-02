@@ -24,6 +24,12 @@ def config_show_main(workspace: Path) -> None:
             "run_shell": settings.tool_policy.confirm_run_shell,
             "high_risk_plan": settings.tool_policy.confirm_high_risk_plan,
         },
+        "capabilities": {
+            "builtin_tools": settings.capabilities.builtin_tools.model_dump(mode="json"),
+            "skills": settings.capabilities.skills.model_dump(mode="json"),
+            "mcp": settings.capabilities.mcp.model_dump(mode="json"),
+            "extensions": settings.capabilities.extensions.model_dump(mode="json"),
+        },
     }
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 

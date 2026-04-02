@@ -56,10 +56,28 @@ class TrackingMCPClient:
         self._events.append("demo:close")
 
 
-def _write_mcp_config(tmp_path: Path) -> None:
+def _write_mcp_config(tmp_path: Path, payload: dict | None = None) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "mcp.json").write_text(json.dumps({"servers": [{"name": "demo", "transport": "memory"}]}), encoding="utf-8")
+    (project_dir / "mcp.json").write_text(
+        json.dumps(payload or {"servers": [{"name": "demo", "transport": "memory"}]}),
+        encoding="utf-8",
+    )
+
+
+def _write_extension_descriptor(path: Path, *, name: str, description: str, entrypoint: str = "extension.py", provides: list[str] | None = None) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "EXTENSION.json").write_text(
+        json.dumps(
+            {
+                "name": name,
+                "description": description,
+                "entrypoint": entrypoint,
+                "provides": provides or ["hooks"],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_create_capability_catalog_discovers_skills_and_builtin_tools_without_materializing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -201,6 +219,8 @@ def test_create_capability_catalog_with_mcp_discovers_mcp_entries(tmp_path: Path
     assert [item.name for item in catalog.list(kind="mcp_tool")] == ["demo.echo"]
     assert [item.name for item in catalog.list(kind="mcp_resource")] == ["demo.notes"]
     assert [item.name for item in catalog.list(kind="mcp_prompt")] == ["demo.summarize"]
+    assert [item.name for item in catalog.list(kind="extension")] == ["mcp_adapter"]
+    assert catalog.get("extension", "mcp_adapter").status == "loaded"
     assert catalog.get("mcp_tool", "demo.echo").metadata["server_name"] == "demo"
     assert catalog.get("mcp_resource", "demo.notes").metadata["uri"] == "memo://notes"
     assert events == [
@@ -209,3 +229,110 @@ def test_create_capability_catalog_with_mcp_discovers_mcp_entries(tmp_path: Path
         "demo:list_resources",
         "demo:list_prompts",
     ]
+
+
+def test_capability_catalog_uses_configured_skill_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "capabilities": {
+                    "skills": {
+                        "include": ["keep*"],
+                        "ignored": ["skip*"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in ["keep-demo", "skip-demo"]:
+        path = project_dir / "skills" / name / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"---\nname: {name}\ndescription: {name}\n---\nbody", encoding="utf-8")
+
+    catalog = create_capability_catalog(tmp_path)
+
+    assert [item.name for item in catalog.list(kind="skill")] == ["keep-demo"]
+
+
+def test_capability_catalog_reload_picks_up_mcp_config_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "config.json").write_text(json.dumps({"capabilities": {"mcp": {"enable": True}}}), encoding="utf-8")
+    _write_mcp_config(tmp_path, {"servers": [{"name": "demo", "transport": "memory"}]})
+    events: list[str] = []
+    catalog = create_capability_catalog(tmp_path, transport_factory=lambda _config: TrackingMCPClient(events))
+
+    assert [item.name for item in catalog.list(kind="mcp_tool")] == ["demo.echo"]
+
+    _write_mcp_config(tmp_path, {"servers": [{"name": "demo", "transport": "memory"}, {"name": "demo2", "transport": "memory"}]})
+    catalog.reload()
+
+    assert [item.name for item in catalog.list(kind="mcp_tool")] == ["demo.echo", "demo2.echo"]
+    assert "demo:close" in events
+
+
+def test_extension_discovery_prefers_custom_and_manifest_project_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    custom_root = tmp_path / "custom-extensions"
+    user_root = tmp_path / "user-home" / "extensions" / "demo"
+    manifest_root = project_dir / "manifest-ext" / "demo"
+    conventional_project_root = project_dir / "extensions" / "demo"
+    _write_extension_descriptor(custom_root / "demo", name="demo", description="custom extension")
+    _write_extension_descriptor(user_root, name="demo", description="user extension")
+    _write_extension_descriptor(manifest_root, name="demo", description="manifest extension")
+    _write_extension_descriptor(conventional_project_root, name="demo", description="conventional project extension")
+    (project_dir / "resources.json").write_text(json.dumps({"extensions": ["manifest-ext"]}), encoding="utf-8")
+    (project_dir / "config.json").write_text(
+        json.dumps({"capabilities": {"extensions": {"custom_directories": [str(custom_root)]}}}),
+        encoding="utf-8",
+    )
+
+    catalog = create_capability_catalog(tmp_path)
+
+    extension = catalog.get("extension", "demo")
+    assert extension.description == "custom extension"
+    assert extension.origin_type == "custom"
+    assert extension.metadata["root_name"] == "custom-extensions"
+
+
+
+def test_extension_catalog_reload_discovers_new_extension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    catalog = create_capability_catalog(tmp_path)
+    assert catalog.list(kind="extension") == []
+
+    _write_extension_descriptor(tmp_path / ".pp-agent" / "extensions" / "demo", name="demo", description="project extension")
+    catalog.reload()
+
+    extension = catalog.get("extension", "demo")
+    assert extension.name == "demo"
+    assert extension.status == "discovered"
+    assert extension.metadata["entrypoint"] == "extension.py"
+
+
+
+def test_skill_and_extension_metadata_include_origin_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "resources.json").write_text(json.dumps({"skills": ["manifest-skills"], "extensions": ["manifest-ext"]}), encoding="utf-8")
+    skill_path = project_dir / "manifest-skills" / "demo" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    skill_path.write_text("---\nname: demo\ndescription: manifest skill\n---\nbody", encoding="utf-8")
+    _write_extension_descriptor(project_dir / "manifest-ext" / "demo-ext", name="demo_ext", description="manifest extension")
+
+    catalog = create_capability_catalog(tmp_path)
+
+    skill = catalog.get("skill", "demo")
+    extension = catalog.get("extension", "demo_ext")
+    assert skill.origin_type == "project"
+    assert skill.metadata["declared_by_manifest"] is True
+    assert extension.origin_type == "project"
+    assert extension.metadata["declared_by_manifest"] is True

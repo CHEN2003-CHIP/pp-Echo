@@ -3,7 +3,6 @@ from pp_agent.capabilities.descriptor import CapabilityDescriptor, CapabilityKin
 from pp_agent.capabilities.discovery import (
     BuiltinToolCapabilityDiscoveryProvider,
     CapabilityDiscoveryProvider,
-    MCPCapabilityDiscoveryProvider,
     SkillCapabilityDiscoveryProvider,
 )
 
@@ -13,6 +12,5 @@ __all__ = [
     "CapabilityDescriptor",
     "CapabilityDiscoveryProvider",
     "CapabilityKind",
-    "MCPCapabilityDiscoveryProvider",
     "SkillCapabilityDiscoveryProvider",
 ]

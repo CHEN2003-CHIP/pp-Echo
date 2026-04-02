@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from pp_agent.domain import ToolCall, ToolSpec
 from pp_agent.storage.settings import ToolPolicyConfig
@@ -25,6 +25,7 @@ from pp_agent.tools.shell_tool import PowerShellTool
 
 SpecFactory = Callable[[], ToolSpec]
 ToolFactory = Callable[[], BaseTool]
+ToolExecutor = Callable[[Path, dict[str, Any]], Union[ToolExecutionResult, str]]
 
 
 @dataclass
@@ -51,6 +52,66 @@ class ToolRegistry:
             "run_shell": self.policy.confirm_run_shell,
         }
         self._registrations = self._build_builtin_registrations()
+        self._builtin_registration_names = set(self._registrations)
+
+    def register(self, registration: ToolRegistration, *, replace: bool = False) -> None:
+        if not replace and registration.name in self._registrations:
+            raise ValueError(f"Tool already registered: {registration.name}")
+        self._registrations[registration.name] = registration
+        self._instances.pop(registration.name, None)
+
+    def reset_dynamic_registrations(self) -> None:
+        dynamic_names = [name for name in self._registrations if name not in self._builtin_registration_names]
+        for name in dynamic_names:
+            self._registrations.pop(name, None)
+            self._instances.pop(name, None)
+
+    def register_function_tool(
+        self,
+        *,
+        name: str,
+        description: str,
+        parameters: Optional[dict[str, Any]] = None,
+        executor: ToolExecutor,
+        category: str = "extension",
+        requires_confirmation: bool = False,
+        replace: bool = False,
+    ) -> None:
+        spec = ToolSpec(
+            name=name,
+            description=description,
+            parameters=parameters or {"type": "object", "properties": {}},
+            requires_confirmation=requires_confirmation,
+        )
+
+        class _FunctionTool(BaseTool):
+            @property
+            def spec(self) -> ToolSpec:
+                return spec.model_copy(deep=True)
+
+            def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+                result = executor(self.workspace, arguments)
+                if isinstance(result, ToolExecutionResult):
+                    return result
+                if hasattr(result, "model_dump"):
+                    payload = result.model_dump(mode="python")
+                    return ToolExecutionResult(**payload)
+                return ToolExecutionResult(tool_call_id="", tool_name=name, content=str(result))
+
+        self.register(
+            ToolRegistration(
+                name=name,
+                category=category,
+                spec_factory=lambda: spec.model_copy(deep=True),
+                tool_factory=lambda: _FunctionTool(self.workspace),
+                metadata=ToolMetadata(
+                    name=name,
+                    category=category,
+                    requires_confirmation=requires_confirmation,
+                ),
+            ),
+            replace=replace,
+        )
 
     def get_spec(self, name: str) -> ToolSpec:
         registration = self._registrations[name]
@@ -286,3 +347,4 @@ class ToolRegistry:
         if name == "run_shell":
             return "shell"
         return "approvals"
+

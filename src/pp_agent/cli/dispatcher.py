@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from pp_agent.app.bootstrap import reload_runtime_extensions
 from pp_agent.cli.commands.approvals import (
     approve_or_execute_pending_action,
     load_pending_action,
@@ -75,6 +77,133 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
         events = agent.compact_now()
         if not events:
             console.print("No new messages to compact.")
+        return "handled"
+    if raw == "/reload":
+        payload = reload_runtime_extensions(agent, workspace)
+        console.print(
+            "Reloaded runtime: "
+            f"{payload['extension_count']} extensions, "
+            f"{payload['tool_count']} dynamic tools, "
+            f"{payload['command_count']} commands, "
+            f"{payload['resource_count']} resources, "
+            f"{payload['skill_count']} skills."
+        )
+        return "handled"
+    if raw in {"/skills", "/skills list"}:
+        skill_runtime = getattr(agent, "skill_runtime", None)
+        if skill_runtime is None:
+            console.print("Skill runtime is not available.")
+            return "handled"
+        payload = [
+            {
+                "name": descriptor.name,
+                "description": descriptor.description,
+                "origin_type": descriptor.origin_type,
+                "body_loaded": descriptor._body_cache is not None,
+            }
+            for descriptor in skill_runtime.available_skills().values()
+        ]
+        console.print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return "handled"
+    if raw == "/skills active":
+        skill_runtime = getattr(agent, "skill_runtime", None)
+        if skill_runtime is None:
+            console.print("Skill runtime is not available.")
+            return "handled"
+        payload = [item.__dict__ for item in skill_runtime.active_skills()]
+        console.print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return "handled"
+    if raw == "/skills reload":
+        payload = reload_runtime_extensions(agent, workspace)
+        console.print(
+            "Reloaded skills: "
+            f"{payload['skill_count']} available, "
+            f"{payload['active_skill_count']} active."
+        )
+        return "handled"
+    if raw.startswith("/skill use "):
+        skill_runtime = getattr(agent, "skill_runtime", None)
+        if skill_runtime is None:
+            console.print("Skill runtime is not available.")
+            return "handled"
+        name = raw.split(" ", 2)[2].strip()
+        if not name:
+            console.print("Usage: /skill use <name>")
+            return "handled"
+        try:
+            descriptor = skill_runtime.use_skill(name)
+        except KeyError:
+            console.print(f"Unknown skill: {name}")
+            return "handled"
+        console.print(f"Activated skill {descriptor.name}")
+        return "handled"
+    if raw == "/skill clear":
+        skill_runtime = getattr(agent, "skill_runtime", None)
+        if skill_runtime is None:
+            console.print("Skill runtime is not available.")
+            return "handled"
+        skill_runtime.clear_active()
+        console.print("Cleared active skills.")
+        return "handled"
+    if raw == "/mcp status":
+        mcp_runtime = getattr(agent, "mcp_runtime", None)
+        payload = {"enabled": False, "server_count": 0, "servers": [], "discovered": False, "active_sessions": [], "tool_count": 0, "resource_count": 0}
+        if mcp_runtime is not None:
+            payload = mcp_runtime.status()
+        console.print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return "handled"
+    if raw == "/mcp list":
+        mcp_runtime = getattr(agent, "mcp_runtime", None)
+        if mcp_runtime is None:
+            console.print("[]")
+            return "handled"
+        payload = mcp_runtime.list_servers()
+        console.print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return "handled"
+    if raw == "/mcp reload":
+        payload = reload_runtime_extensions(agent, workspace)
+        mcp_runtime = getattr(agent, "mcp_runtime", None)
+        discovered = []
+        if mcp_runtime is not None:
+            discovered = mcp_runtime.list_servers()
+        console.print(
+            json.dumps(
+                {
+                    "reloaded": True,
+                    "mcp_enabled": payload["mcp_enabled"],
+                    "discovered": discovered,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return "handled"
+    if raw.startswith("/mcp call "):
+        mcp_runtime = getattr(agent, "mcp_runtime", None)
+        if mcp_runtime is None:
+            console.print("MCP runtime is not enabled.")
+            return "handled"
+        target, arguments = _parse_mcp_call(raw)
+        if not target:
+            console.print("Usage: /mcp call <server.tool> [json-args|message]")
+            return "handled"
+        try:
+            result = mcp_runtime.call_tool(target, arguments)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[Error] {exc}")
+            return "handled"
+        console.print(
+            json.dumps(
+                {
+                    "tool": target,
+                    "is_error": result.is_error,
+                    "content": result.content,
+                    "details": result.details,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return "handled"
     if raw.startswith("/tree"):
         parts = raw.split()
@@ -195,7 +324,30 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
         except (FileNotFoundError, ValueError) as exc:
             console.print(f"[Error] {exc}")
             return "handled"
+    extension_commands = getattr(agent, "extension_commands", None)
+    if extension_commands is not None:
+        result = extension_commands.dispatch(raw, agent, workspace)
+        if result is not None:
+            return result
     return "run"
 
 
 __all__ = ["handle_command", "handle_queue_command"]
+
+
+def _parse_mcp_call(raw: str) -> tuple[str, dict[str, object]]:
+    remainder = raw[len("/mcp call ") :].strip()
+    if not remainder:
+        return "", {}
+    if " " not in remainder:
+        return remainder, {}
+    target, arg_text = remainder.split(" ", 1)
+    arg_text = arg_text.strip()
+    if not arg_text:
+        return target, {}
+    if arg_text.startswith("{"):
+        payload = json.loads(arg_text)
+        if not isinstance(payload, dict):
+            raise ValueError("MCP call arguments must be a JSON object")
+        return target, payload
+    return target, {"message": arg_text}

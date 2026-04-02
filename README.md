@@ -106,6 +106,13 @@ flowchart LR
 - repo-aware search and grep
 - git status and diff inspection
 
+### Capability sources
+
+- builtin tools stay in the runtime core
+- skills are lightweight prompt packs discovered from project, user, builtin, or custom roots
+- extensions are first-class capability sources with explicit descriptors, lifecycle status, and executable runtime hooks
+- MCP is treated as an optional extension-backed adapter instead of a default runtime subsystem
+
 ## Quick Start
 
 ### Fastest path on Windows
@@ -124,6 +131,8 @@ python -m pp_agent.cli.main sessions list
 python -m pp_agent.cli.main sessions tree
 python -m pp_agent.cli.main checkpoint list
 python -m pp_agent.cli.main config show
+python -m pp_agent.cli.main capabilities list
+python -m pp_agent.cli.main skills list
 ```
 
 ## Checkpoint and Safe Rewind
@@ -196,6 +205,32 @@ Create `.pp-agent/config.json` for per-project overrides:
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "enable_thinking": false,
   "shell_timeout_seconds": 30,
+  "capabilities": {
+    "builtin_tools": {
+      "enable": true
+    },
+    "skills": {
+      "enable_project": true,
+      "enable_user": true,
+      "enable_builtin": true,
+      "custom_directories": [],
+      "ignored": [],
+      "include": []
+    },
+    "extensions": {
+      "enable_project": true,
+      "enable_user": true,
+      "enable_builtin": false,
+      "custom_directories": [],
+      "ignored": [],
+      "include": []
+    },
+    "mcp": {
+      "enable": false,
+      "config_paths": [],
+      "server_filters": []
+    }
+  },
   "tool_confirmation": {
     "write_file": true,
     "edit_file": true,
@@ -204,6 +239,87 @@ Create `.pp-agent/config.json` for per-project overrides:
   }
 }
 ```
+
+### Resource manifests
+
+Project resources can be declared explicitly in `.pp-agent/resources.json` or `.pp-agent/package.json`.
+If no manifest is present, `pp-agent` falls back to conventional directories such as `.pp-agent/skills` and `.pp-agent/extensions`.
+
+```json
+{
+  "skills": ["skills"],
+  "extensions": ["extensions"],
+  "prompts": []
+}
+```
+
+In `.pp-agent/package.json`, the same payload can live under `pp-agent`, `pp_agent`, or `pi`.
+
+### MCP config
+
+`.pp-agent/mcp.json` supports both the legacy `servers` form and the newer extension-oriented document shape:
+
+```json
+{
+  "settings": {
+    "tool_prefix": "mcp",
+    "idle_timeout": 300
+  },
+  "servers": [
+    {
+      "name": "docs",
+      "transport": {
+        "type": "stdio",
+        "command": "python",
+        "args": ["server.py"]
+      }
+    }
+  ]
+}
+```
+
+`settings` is intentionally lightweight in this phase. It exists to keep the file forward-compatible while the runtime continues to treat MCP as an optional adapter layer.
+
+## Capabilities, Skills, and Extensions
+
+The capability catalog now exposes both discovery metadata and runtime-facing status:
+
+- `builtin_tool` capabilities are part of the core runtime and typically show `status: "loaded"`
+- `skill` capabilities are discovered lazily and keep origin metadata such as `origin_type`, `precedence`, and `declared_by_manifest`
+- `extension` capabilities describe discovered extension packages, and executable extensions can now register tools, slash commands, and runtime hooks
+- `mcp_tool`, `mcp_resource`, and `mcp_prompt` are emitted through the built-in `mcp_adapter` extension when MCP is enabled
+
+This keeps the core small while making capability sources observable and reloadable.
+
+### CLI examples
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main capabilities list
+python -m pp_agent.cli.main capabilities list --kind extension
+python -m pp_agent.cli.main capabilities show skill repo_overview
+python -m pp_agent.cli.main capabilities reload --include-mcp
+python -m pp_agent.cli.main skills list
+python -m pp_agent.cli.main skills show repo_overview`r`n# extension-provided slash commands are available inside interactive chat once loaded`r`n# use /reload in chat to hot-reload executable extensions and MCP-backed runtime tools
+```
+
+`capabilities` returns structured JSON with `kind`, `name`, `source`, `status`, `origin_type`, `path`, and capability-specific metadata.
+
+### Chat Runtime Commands
+
+Inside interactive chat, runtime-managed capabilities can now be inspected and refreshed directly:
+
+- `/reload`
+- `/skills list`
+- `/skills active`
+- `/skill use <name>`
+- `/skill clear`
+- `/skills reload`
+- `/mcp status`
+- `/mcp list`
+- `/mcp reload`
+
+Skills are injected lazily into the turn context when they are activated or matched. MCP servers stay undiscovered until runtime management or the first discovery path asks for them.
 
 ## Example Workflows
 
@@ -237,6 +353,8 @@ python -m pp_agent.cli.main sessions tree
 python -m pp_agent.cli.main approvals summary
 python -m pp_agent.cli.main checkpoint list
 python -m pp_agent.cli.main rewind-safe --help
+python -m pp_agent.cli.main capabilities list
+python -m pp_agent.cli.main skills list
 python -m pp_agent.cli.main workflow repo --query "AgentSession"
 python -m pp_agent.cli.main config show
 ```
@@ -251,3 +369,6 @@ Legacy import paths such as `agent_cli`, `agent_core`, `storage`, and `tools` ar
 ## License
 
 Add your preferred license here.
+
+
+

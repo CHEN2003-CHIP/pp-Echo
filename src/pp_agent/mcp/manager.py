@@ -30,9 +30,10 @@ class MCPManager:
         *,
         transport_factory: TransportFactory | None = None,
         time_fn: TimeFn | None = None,
+        config_paths: Optional[list[Path]] = None,
     ) -> "MCPManager":
         project_dir = workspace.resolve() / ".pp-agent"
-        return cls(load_mcp_server_configs(project_dir), transport_factory=transport_factory, time_fn=time_fn)
+        return cls(load_mcp_server_configs(project_dir, config_paths=config_paths), transport_factory=transport_factory, time_fn=time_fn)
 
     def list_mcp_tools(self, server_name: str) -> list[MCPToolDescriptor]:
         server, session = self._server_session(server_name)
@@ -49,7 +50,7 @@ class MCPManager:
     def call_mcp_tool(self, server_name: str, name: str, args: dict[str, Any]) -> MCPResult:
         _server, session = self._server_session(server_name)
         payload = session.client.call_tool(name, args)
-        session.touch(session.last_used_at if False else session.last_used_at)
+        session.touch(session.last_used_at)
         return MCPResult(
             server_name=server_name,
             kind="mcp_tool",
@@ -63,7 +64,7 @@ class MCPManager:
     def read_mcp_resource(self, server_name: str, uri: str) -> MCPResult:
         _server, session = self._server_session(server_name)
         payload = session.client.read_resource(uri)
-        session.touch(session.last_used_at if False else session.last_used_at)
+        session.touch(session.last_used_at)
         return MCPResult(
             server_name=server_name,
             kind="mcp_resource",
@@ -77,7 +78,7 @@ class MCPManager:
     def get_mcp_prompt(self, server_name: str, name: str, args: Optional[dict[str, Any]] = None) -> MCPResult:
         _server, session = self._server_session(server_name)
         payload = session.client.get_prompt(name, args or {})
-        session.touch(session.last_used_at if False else session.last_used_at)
+        session.touch(session.last_used_at)
         return MCPResult(
             server_name=server_name,
             kind="mcp_prompt",
@@ -91,11 +92,17 @@ class MCPManager:
     def close_idle_sessions(self) -> list[str]:
         return self._session_manager.close_idle_sessions()
 
+    def close_all_sessions(self) -> list[str]:
+        return self._session_manager.close_all_sessions()
+
     def active_session_names(self) -> list[str]:
         return self._session_manager.active_session_names()
 
     def server_names(self) -> list[str]:
         return list(self._servers)
+
+    def server_config(self, server_name: str) -> MCPServerConfig:
+        return self._servers[server_name]
 
     def _server_session(self, server_name: str) -> tuple[MCPServerConfig, MCPSession]:
         server = self._servers[server_name]

@@ -1,3 +1,3 @@
-from pp_agent.skills.index import SkillDescriptor, load_skills, skill_search_paths
+from pp_agent.skills.index import SkillDescriptor, SkillSearchRoot, load_skills, skill_search_paths, skill_search_roots
 
-__all__ = ["SkillDescriptor", "load_skills", "skill_search_paths"]
+__all__ = ["SkillDescriptor", "SkillSearchRoot", "load_skills", "skill_search_paths", "skill_search_roots"]

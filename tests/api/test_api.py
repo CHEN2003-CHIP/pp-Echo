@@ -9,6 +9,7 @@ from pp_agent.api import sdk
 from pp_agent.prompts.loader import load_prompt_templates
 from pp_agent.skills.loader import load_skills
 from pp_agent.skills.materializer import materialize_skill
+from pp_agent.storage.settings import SkillCapabilityConfig
 
 
 def test_api_run_returns_payload(monkeypatch, tmp_path: Path) -> None:
@@ -64,6 +65,39 @@ def test_skill_loader_requires_frontmatter_and_prefers_project(tmp_path: Path) -
 
     assert skills["demo"].description == "project skill"
     assert skills["demo"].path == project_skill
+    assert skills["demo"].origin_type == "project"
+
+
+def test_skill_loader_supports_custom_directory_priority_and_filters(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    user_root = tmp_path / "user"
+    custom_a = tmp_path / "custom-a"
+    custom_b = tmp_path / "custom-b"
+    for root, description in [
+        (workspace / ".pp-agent" / "skills" / "demo", "project"),
+        (user_root / "skills" / "demo", "user"),
+        (custom_b / "demo", "custom-b"),
+        (custom_a / "demo", "custom-a"),
+        (custom_a / "skip-me", "skip"),
+    ]:
+        root.mkdir(parents=True, exist_ok=True)
+        root.joinpath("SKILL.md").write_text(f"---\nname: {root.name}\ndescription: {description}\n---\nbody", encoding="utf-8")
+
+    skills = load_skills(
+        workspace,
+        user_root,
+        config=SkillCapabilityConfig(
+            custom_directories=[str(custom_a), str(custom_b)],
+            include=["demo", "skip*"],
+            ignored=["skip*"],
+        ),
+    )
+
+    assert list(skills) == ["demo"]
+    assert skills["demo"].description == "custom-a"
+    assert skills["demo"].path == custom_a / "demo" / "SKILL.md"
+    assert skills["demo"].origin_type == "custom"
+    assert skills["demo"].root_name == "custom-a"
 
 
 def test_skill_body_is_materialized_on_demand_and_cached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -94,3 +128,13 @@ def test_skill_body_is_materialized_on_demand_and_cached(monkeypatch: pytest.Mon
     assert descriptor.body == "body"
     assert materialize_skill(descriptor) == "body"
     assert read_count == 1
+
+
+def test_api_capability_helpers_forward_to_sdk(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sdk, "list_capabilities", lambda workspace, **kwargs: [{"name": "demo"}])
+    monkeypatch.setattr(sdk, "get_capability", lambda workspace, **kwargs: {"name": kwargs["name"]})
+    monkeypatch.setattr(sdk, "reload_capabilities", lambda workspace, **kwargs: [{"name": "demo"}, {"name": "reload"}])
+
+    assert api.list_capabilities(workspace=tmp_path) == [{"name": "demo"}]
+    assert api.get_capability(workspace=tmp_path, kind="skill", name="demo") == {"name": "demo"}
+    assert api.reload_capabilities(workspace=tmp_path)[-1]["name"] == "reload"
