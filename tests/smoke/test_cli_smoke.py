@@ -1,0 +1,119 @@
+﻿from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _run_module(*args: str) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT / "src")
+    return subprocess.run(
+        [sys.executable, "-m", *args],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_pp_agent_help_smoke() -> None:
+    result = _run_module("pp_agent.cli.main", "--help")
+
+    assert result.returncode == 0
+    assert "Personal Python coding agent" in result.stdout
+
+
+def test_pp_agent_sessions_tree_smoke() -> None:
+    result = _run_module("pp_agent.cli.main", "sessions", "tree")
+
+    assert result.returncode == 0
+    assert "Session Tree" in result.stdout
+
+
+def test_pp_agent_approvals_summary_smoke() -> None:
+    result = _run_module("pp_agent.cli.main", "approvals", "summary")
+
+    assert result.returncode == 0
+    assert "Approvals Queue" in result.stdout
+
+
+def test_agent_cli_shim_help_smoke() -> None:
+    result = _run_module("agent_cli.main", "--help")
+
+    assert result.returncode == 0
+    assert "Personal Python coding agent" in result.stdout
+
+
+def test_run_hello_wiring_smoke(monkeypatch, tmp_path: Path) -> None:
+    from pp_agent.cli.commands import run as run_command
+
+    class FakeEvent:
+        def model_dump(self, mode: str = "json") -> dict:
+            return {"type": "agent_end"}
+
+    class FakeRuntime:
+        session_id = "session-1"
+
+        def __init__(self) -> None:
+            self.state = type(
+                "State",
+                (),
+                {
+                    "pending_plan_token": None,
+                    "pending_tool_calls": [],
+                    "queued_messages": [],
+                    "messages": [],
+                },
+            )()
+
+        def subscribe(self, callback) -> None:
+            self.callback = callback
+
+        def prompt(self, text: str):
+            assert text == "hello"
+            return [FakeEvent()]
+
+    monkeypatch.setattr(run_command, "build_agent", lambda workspace, session_id=None: FakeRuntime())
+
+    payload = run_command.run_main("hello", tmp_path, json_mode=True)
+
+    assert payload["session_id"] == "session-1"
+    assert payload["event_count"] == 1
+
+
+def test_chat_main_enters_loop(monkeypatch, tmp_path: Path) -> None:
+    from pp_agent.cli import chat as chat_module
+    from pp_agent.runtime.events import RuntimeMonitor
+
+    class FakeRuntime:
+        session_id = "session-1"
+
+        def __init__(self) -> None:
+            self.llm_client = type("Client", (), {"model": type("Model", (), {"model": "fake-model"})()})()
+            self.state = type(
+                "State",
+                (),
+                {
+                    "pending_plan_token": None,
+                    "pending_tool_calls": [],
+                    "queued_messages": [],
+                    "turn": type("Turn", (), {"turn_id": 0, "phase": "idle", "reason": ""})(),
+                    "compaction": type("Compaction", (), {"summary": "", "summarized_message_count": 0})(),
+                },
+            )()
+            self.runtime_monitor = RuntimeMonitor()
+
+        def subscribe(self, callback) -> None:
+            self.callback = callback
+
+    monkeypatch.setattr(chat_module, "build_agent", lambda workspace, session_id=None: FakeRuntime())
+    monkeypatch.setattr(chat_module, "PromptSession", None)
+    monkeypatch.setattr("builtins.input", lambda prompt="": (_ for _ in ()).throw(EOFError()))
+
+    chat_module.chat_main(tmp_path)

@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Optional
 
 from pp_agent.llm.registry import create_llm_client
+from pp_agent.llm.models import ModelConfig, ProviderConfig
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.storage.settings import Settings
 from pp_agent.storage.timeline import TimelineStore
@@ -59,6 +61,14 @@ def create_tool_registry(workspace: Path) -> ToolRegistry:
     return ToolRegistry(workspace, policy=settings.tool_policy)
 
 
+def provider_config_for_llm(config: StoredProviderConfig) -> ProviderConfig:
+    return ProviderConfig(**config.model_dump(mode="python"))
+
+
+def model_config_for_llm(config: StoredModelConfig) -> ModelConfig:
+    return ModelConfig(**config.model_dump(mode="python"))
+
+
 def confirm_tool_call(tool_name: str, args: dict) -> bool:
     try:
         import typer
@@ -76,7 +86,10 @@ def build_agent(workspace: Path, session_id: Optional[str] = None) -> AgentRunti
     session_store = create_session_store(settings)
     record = session_store.load(session_id) if session_id else session_store.create(settings.system_prompt, settings.model)
     agent = AgentRuntime(
-        llm_client=create_llm_client(provider=settings.provider, model=record.model),
+        llm_client=create_llm_client(
+            provider=provider_config_for_llm(settings.provider),
+            model=model_config_for_llm(record.model),
+        ),
         tool_registry=ToolRegistry(workspace, policy=settings.tool_policy),
         session_store=session_store,
         session_id=record.id,

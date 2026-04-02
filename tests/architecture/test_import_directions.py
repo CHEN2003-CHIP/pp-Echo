@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_ROOT = ROOT / "src" / "pp_agent"
+CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain"}
+ALLOWED = {
+    "cli": {"cli", "app", "runtime", "storage", "domain"},
+    "app": {"app", "runtime", "storage", "llm", "tools", "domain"},
+    "runtime": {"runtime", "storage", "llm", "tools", "domain"},
+    "llm": {"llm", "domain"},
+    "storage": {"storage", "domain"},
+    "domain": {"domain"},
+}
+EXCLUDED = {
+    PACKAGE_ROOT / "cli" / "_legacy_main_impl.py",
+    PACKAGE_ROOT / "domain" / "_legacy_types_impl.py",
+}
+
+
+def _layer_for(path: Path) -> str | None:
+    relative = path.relative_to(PACKAGE_ROOT)
+    if len(relative.parts) < 2:
+        return None
+    layer = relative.parts[0]
+    if layer not in CHECKED_LAYERS:
+        return None
+    return layer
+
+
+def test_import_directions_for_core_layers() -> None:
+    violations: list[str] = []
+    for path in PACKAGE_ROOT.rglob("*.py"):
+        if path in EXCLUDED:
+            continue
+        layer = _layer_for(path)
+        if layer is None:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("pp_agent."):
+                target = node.module.split(".")[1]
+                if target not in ALLOWED[layer]:
+                    violations.append(f"{path.relative_to(ROOT)} imports {node.module}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if not alias.name.startswith("pp_agent."):
+                        continue
+                    target = alias.name.split(".")[1]
+                    if target not in ALLOWED[layer]:
+                        violations.append(f"{path.relative_to(ROOT)} imports {alias.name}")
+    assert not violations, "\n".join(sorted(violations))
+
+
+def test_cli_entry_files_do_not_reference_legacy_impl() -> None:
+    main_text = (PACKAGE_ROOT / "cli" / "main.py").read_text(encoding="utf-8-sig")
+    chat_text = (PACKAGE_ROOT / "cli" / "chat.py").read_text(encoding="utf-8-sig")
+
+    assert "_legacy_main_impl" not in main_text
+    assert "_legacy_main_impl" not in chat_text

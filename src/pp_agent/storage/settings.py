@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from pp_agent.llm.models import ModelConfig, ProviderConfig
+from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 
 
 DEFAULT_SYSTEM_PROMPT = """You are a careful personal coding agent running on Windows 10.
@@ -27,8 +27,8 @@ class Settings(BaseModel):
     workspace: Path
     global_dir: Path
     project_dir: Path
-    provider: ProviderConfig = Field(default_factory=ProviderConfig)
-    model: ModelConfig = Field(default_factory=ModelConfig)
+    provider: StoredProviderConfig = Field(default_factory=StoredProviderConfig)
+    model: StoredModelConfig = Field(default_factory=StoredModelConfig)
     tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 

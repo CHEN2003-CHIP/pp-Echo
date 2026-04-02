@@ -32,9 +32,9 @@ class FakeRuntimeAgent(FakeAgent):
 
 
 def test_api_run_returns_payload(monkeypatch, tmp_path: Path) -> None:
-    from pp_agent.cli import _legacy_main_impl as legacy
+    from pp_agent.cli.commands import run as run_command
 
-    monkeypatch.setattr(legacy, 'build_agent', lambda workspace, session_id=None: FakeRuntimeAgent())
+    monkeypatch.setattr(run_command, 'build_agent', lambda workspace, session_id=None: FakeRuntimeAgent())
     payload = api.run('hello', workspace=tmp_path, json_mode=True)
 
     assert payload['session_id'] == 'session-1'

@@ -8,11 +8,10 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from pp_agent.llm.models import ModelConfig
-from pp_agent.storage.migrations import load_legacy_session_payloads
-
 from pp_agent.domain import QueuedMessage
 from pp_agent.domain import ChatMessage, CompactionState, TextPart, ToolCall
+from pp_agent.storage.models import StoredModelConfig
+from pp_agent.storage.migrations import load_legacy_session_payloads
 
 
 class SessionTurnNode(BaseModel):
@@ -32,7 +31,7 @@ class SessionMetadata(BaseModel):
     parent_id: Optional[str] = None
     created_at: float
     updated_at: float
-    model: ModelConfig = Field(default_factory=ModelConfig)
+    model: StoredModelConfig = Field(default_factory=StoredModelConfig)
     system_prompt: str
     compaction: CompactionState = Field(default_factory=CompactionState)
     pending_tool_calls: list[ToolCall] = Field(default_factory=list)
@@ -55,7 +54,7 @@ class SessionRecord(BaseModel):
         return self.metadata.parent_id
 
     @property
-    def model(self) -> ModelConfig:
+    def model(self) -> StoredModelConfig:
         return self.metadata.model
 
     @property
@@ -123,7 +122,7 @@ class SessionStore:
         self.tree_path = self.root / "session-tree.jsonl"
         self._migrate_legacy_files()
 
-    def create(self, system_prompt: str, model: ModelConfig) -> SessionRecord:
+    def create(self, system_prompt: str, model: StoredModelConfig) -> SessionRecord:
         now = time.time()
         return SessionRecord(
             metadata=SessionMetadata(
