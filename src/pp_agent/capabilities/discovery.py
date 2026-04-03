@@ -42,6 +42,8 @@ class SkillCapabilityDiscoveryProvider:
                         "root_name": skill.root_name,
                         "precedence": skill.precedence,
                         "declared_by_manifest": skill.declared_by_manifest,
+                        "discovery_root": skill.discovery_root,
+                        "discovery_mode": skill.discovery_mode,
                     },
                 )
             )

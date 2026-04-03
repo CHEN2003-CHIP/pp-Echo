@@ -357,6 +357,35 @@ class SessionStore:
         normalized.metadata.active_head_id = parent_id
         return self._normalized_record(normalized)
 
+    def best_base_head_id(self, record: SessionRecord, branch_messages: list[ChatMessage]) -> Optional[str]:
+        """Return the head id whose branch messages best match the given branch prefix.
+
+        This is primarily a recovery helper for cases where the caller's cached base head
+        is stale (e.g. external navigation/rewind) and `sync_branch_state` would otherwise
+        raise. The returned head id is the one with the longest matching message prefix.
+        """
+
+        normalized = self._normalized_record(record)
+        if not branch_messages or not normalized.turn_nodes:
+            return None
+
+        target_dump = [message.model_dump(mode="json") for message in branch_messages]
+        best_head_id: Optional[str] = None
+        best_length = 0
+        for node in normalized.turn_nodes:
+            candidate = self.branch_messages(normalized, node.id)
+            if not candidate:
+                continue
+            if len(candidate) > len(branch_messages):
+                continue
+            candidate_dump = [message.model_dump(mode="json") for message in candidate]
+            if target_dump[: len(candidate_dump)] != candidate_dump:
+                continue
+            if len(candidate_dump) > best_length:
+                best_length = len(candidate_dump)
+                best_head_id = node.id
+        return best_head_id
+
     def _prepare_record_for_save(self, record: SessionRecord) -> SessionRecord:
         target_compaction = record.metadata.compaction.model_copy(deep=True)
         normalized = self._normalized_record(record)

@@ -557,13 +557,36 @@ class AgentRuntime:
         record.metadata.pending_tool_calls = [call.model_copy(deep=True) for call in self.state.pending_tool_calls]
         record.metadata.pending_plan_token = self.state.pending_plan_token
         record.metadata.queued_messages = [item.model_copy(deep=True) for item in self.state.queued_messages]
-        record = self.session_store.sync_branch_state(
-            record,
-            base_head_id=self._base_head_id,
-            branch_messages=self.state.messages,
-            pending_plan_token=self.state.pending_plan_token,
-            pending_tool_calls=self.state.pending_tool_calls,
-        )
+        try:
+            record = self.session_store.sync_branch_state(
+                record,
+                base_head_id=self._base_head_id,
+                branch_messages=self.state.messages,
+                pending_plan_token=self.state.pending_plan_token,
+                pending_tool_calls=self.state.pending_tool_calls,
+            )
+        except ValueError:
+            latest = self.session_store.load(self.session_id) if self._session_exists() else record.model_copy(deep=True)
+            recovered_base_head_id = self.session_store.best_base_head_id(latest, self.state.messages)
+            recovery_record = latest.model_copy(deep=True)
+            recovery_record.metadata.id = self.session_id
+            recovery_record.metadata.model = self.state.model.model_copy(deep=True)
+            recovery_record.metadata.system_prompt = self.state.system_prompt
+            recovery_record.metadata.compaction = self.state.compaction.model_copy(deep=True)
+            recovery_record.metadata.pending_tool_calls = [call.model_copy(deep=True) for call in self.state.pending_tool_calls]
+            recovery_record.metadata.pending_plan_token = self.state.pending_plan_token
+            recovery_record.metadata.queued_messages = [item.model_copy(deep=True) for item in self.state.queued_messages]
+            if recovered_base_head_id is None:
+                recovery_record.messages = []
+                recovery_record.metadata.turn_nodes = []
+                recovery_record.metadata.active_head_id = None
+            record = self.session_store.sync_branch_state(
+                recovery_record,
+                base_head_id=recovered_base_head_id,
+                branch_messages=self.state.messages,
+                pending_plan_token=self.state.pending_plan_token,
+                pending_tool_calls=self.state.pending_tool_calls,
+            )
         self.session_store.save(record)
         self._session_record = record.model_copy(deep=True)
         active_head = self.session_store.turn_node(record, record.active_head_id)

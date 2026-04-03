@@ -15,6 +15,8 @@ class ExtensionRuntimeBinding:
     loaded_commands: list[str] = field(default_factory=list)
     loaded_resources: list[str] = field(default_factory=list)
     hook_counts: dict[str, int] = field(default_factory=dict)
+    event_counts: dict[str, int] = field(default_factory=dict)
+    resource_roots: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -38,6 +40,8 @@ class ExtensionRegistry:
         loaded_commands: Optional[list[str]] = None,
         loaded_resources: Optional[list[str]] = None,
         hook_counts: Optional[dict[str, int]] = None,
+        event_counts: Optional[dict[str, int]] = None,
+        resource_roots: Optional[dict[str, list[str]]] = None,
     ) -> None:
         binding = self.items[name]
         binding.status = "loaded"
@@ -49,6 +53,10 @@ class ExtensionRegistry:
             binding.loaded_resources = list(loaded_resources)
         if hook_counts is not None:
             binding.hook_counts = dict(hook_counts)
+        if event_counts is not None:
+            binding.event_counts = dict(event_counts)
+        if resource_roots is not None:
+            binding.resource_roots = {key: list(values) for key, values in resource_roots.items()}
 
     def mark_errored(self, name: str, error: str) -> None:
         binding = self.items[name]

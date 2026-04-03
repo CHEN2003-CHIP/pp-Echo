@@ -20,6 +20,8 @@ class SkillDescriptor(BaseModel):
     root_name: Optional[str] = None
     precedence: int = 0
     declared_by_manifest: bool = False
+    discovery_root: Optional[str] = None
+    discovery_mode: str = "legacy_project"
 
     _body_cache: Optional[str] = PrivateAttr(default=None)
 
@@ -42,6 +44,8 @@ class SkillSearchRoot(BaseModel):
     root_name: Optional[str] = None
     precedence: int = 0
     declared_by_manifest: bool = False
+    discovery_root: Optional[str] = None
+    discovery_mode: str = "legacy_project"
 
 
 class _DefaultSkillConfig:
@@ -74,25 +78,31 @@ def skill_search_roots(
     precedence = 0
     for value in getattr(config, "custom_directories", []):
         path = Path(value).expanduser()
-        roots.append(SkillSearchRoot(path=path, origin_type="custom", root_name=path.name, precedence=precedence))
-        precedence += 1
-    if getattr(config, "enable_project", True):
         roots.append(
             SkillSearchRoot(
-                path=_safe_resolve(workspace) / ".pp-agent" / "skills",
-                origin_type="project",
-                root_name="project_skills",
+                path=path,
+                origin_type="custom",
+                root_name=path.name,
                 precedence=precedence,
+                discovery_root=str(path),
+                discovery_mode="custom_directory",
             )
         )
         precedence += 1
+    if getattr(config, "enable_project", True):
+        project_roots = _project_skill_roots(_safe_resolve(workspace), precedence_start=precedence)
+        roots.extend(project_roots)
+        precedence += len(project_roots)
     if getattr(config, "enable_user", True):
+        resolved_user_root = _safe_resolve(user_root)
         roots.append(
             SkillSearchRoot(
-                path=_safe_resolve(user_root) / "skills",
+                path=resolved_user_root / "skills",
                 origin_type="user",
                 root_name="user_skills",
                 precedence=precedence,
+                discovery_root=str(resolved_user_root),
+                discovery_mode="user_directory",
             )
         )
         precedence += 1
@@ -103,6 +113,8 @@ def skill_search_roots(
                 origin_type="builtin",
                 root_name="builtin_skills",
                 precedence=precedence,
+                discovery_root=str(BUILTIN_SKILLS_DIR),
+                discovery_mode="builtin_directory",
             )
         )
     return roots
@@ -148,6 +160,8 @@ def _parse_skill_metadata(path: Path, root: SkillSearchRoot) -> SkillDescriptor:
         root_name=root.root_name,
         precedence=root.precedence,
         declared_by_manifest=root.declared_by_manifest,
+        discovery_root=getattr(root, "discovery_root", str(root.path)),
+        discovery_mode=getattr(root, "discovery_mode", "legacy_project"),
     )
 
 
@@ -187,3 +201,46 @@ def _safe_resolve(path: Path) -> Path:
         return candidate.resolve()
     except (OSError, PermissionError):
         return candidate.absolute()
+
+
+def _project_skill_roots(workspace: Path, *, precedence_start: int = 0) -> list[SkillSearchRoot]:
+    roots: list[SkillSearchRoot] = []
+    seen_paths: set[Path] = set()
+    precedence = precedence_start
+    for directory in _ancestor_directories(workspace):
+        for relative_path, root_name in ((".pi/skills", "pi_skills"), (".agents/skills", "agents_skills")):
+            candidate = _safe_resolve(directory / relative_path)
+            if candidate in seen_paths:
+                continue
+            seen_paths.add(candidate)
+            roots.append(
+                SkillSearchRoot(
+                    path=candidate,
+                    origin_type="project",
+                    root_name=root_name,
+                    precedence=precedence,
+                    discovery_root=str(directory),
+                    discovery_mode="ancestor_directory" if directory != workspace else "project_convention",
+                )
+            )
+            precedence += 1
+    legacy_path = _safe_resolve(workspace / ".pp-agent" / "skills")
+    if legacy_path not in seen_paths:
+        roots.append(
+            SkillSearchRoot(
+                path=legacy_path,
+                origin_type="project",
+                root_name="project_skills",
+                precedence=precedence,
+                discovery_root=str(workspace),
+                discovery_mode="legacy_project",
+            )
+        )
+    return roots
+
+
+def _ancestor_directories(path: Path) -> list[Path]:
+    current = _safe_resolve(path)
+    ancestors = [current]
+    ancestors.extend(current.parents)
+    return ancestors

@@ -51,6 +51,20 @@ def test_prompt_loader_prefers_project_over_user_and_builtin(tmp_path: Path) -> 
     assert templates["system"] == "project"
 
 
+def test_prompt_loader_supports_extension_contributed_paths_with_lower_precedence(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    user_root = tmp_path / "user"
+    extension_root = tmp_path / "ext-prompts"
+    (workspace / ".pp-agent" / "prompts").mkdir(parents=True)
+    extension_root.mkdir(parents=True)
+    (workspace / ".pp-agent" / "prompts" / "system.md").write_text("project", encoding="utf-8")
+    (extension_root / "system.md").write_text("extension", encoding="utf-8")
+
+    templates = load_prompt_templates(workspace, user_root, extra_paths=[extension_root])
+
+    assert templates["system"] == "project"
+
+
 def test_skill_loader_requires_frontmatter_and_prefers_project(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     user_root = tmp_path / "user"
@@ -98,6 +112,32 @@ def test_skill_loader_supports_custom_directory_priority_and_filters(tmp_path: P
     assert skills["demo"].path == custom_a / "demo" / "SKILL.md"
     assert skills["demo"].origin_type == "custom"
     assert skills["demo"].root_name == "custom-a"
+    assert skills["demo"].discovery_mode == "custom_directory"
+    assert skills["demo"].discovery_root == str(custom_a)
+
+
+def test_skill_loader_prefers_pi_style_ancestor_roots_over_legacy_project_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo" / "apps" / "feature"
+    user_root = tmp_path / "user"
+    legacy_skill = workspace / ".pp-agent" / "skills" / "demo" / "SKILL.md"
+    nearest_pi_skill = workspace / ".pi" / "skills" / "demo" / "SKILL.md"
+    ancestor_agents_skill = tmp_path / "repo" / ".agents" / "skills" / "demo" / "SKILL.md"
+    for path, description in [
+        (legacy_skill, "legacy project"),
+        (nearest_pi_skill, "nearest pi"),
+        (ancestor_agents_skill, "ancestor agents"),
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"---\nname: demo\ndescription: {description}\n---\nbody", encoding="utf-8")
+
+    skills = load_skills(workspace, user_root)
+
+    assert skills["demo"].description == "nearest pi"
+    assert skills["demo"].path == nearest_pi_skill
+    assert skills["demo"].origin_type == "project"
+    assert skills["demo"].root_name == "pi_skills"
+    assert skills["demo"].discovery_mode == "project_convention"
+    assert skills["demo"].discovery_root == str(workspace.resolve())
 
 
 def test_skill_body_is_materialized_on_demand_and_cached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

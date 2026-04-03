@@ -99,6 +99,10 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
                 "name": descriptor.name,
                 "description": descriptor.description,
                 "origin_type": descriptor.origin_type,
+                "root_name": descriptor.root_name,
+                "precedence": descriptor.precedence,
+                "discovery_root": descriptor.discovery_root,
+                "discovery_mode": descriptor.discovery_mode,
                 "body_loaded": descriptor._body_cache is not None,
             }
             for descriptor in skill_runtime.available_skills().values()
@@ -132,6 +136,22 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
             return "handled"
         try:
             descriptor = skill_runtime.use_skill(name)
+        except KeyError:
+            console.print(f"Unknown skill: {name}")
+            return "handled"
+        console.print(f"Activated skill {descriptor.name}")
+        return "handled"
+    if raw.startswith("/skill:"):
+        skill_runtime = getattr(agent, "skill_runtime", None)
+        if skill_runtime is None:
+            console.print("Skill runtime is not available.")
+            return "handled"
+        name = raw[len("/skill:") :].strip()
+        if not name:
+            console.print("Usage: /skill:<name>")
+            return "handled"
+        try:
+            descriptor = skill_runtime.use_skill(name, source="explicit_command")
         except KeyError:
             console.print(f"Unknown skill: {name}")
             return "handled"

@@ -49,7 +49,7 @@ def test_pp_agent_approvals_summary_smoke() -> None:
 def test_pp_agent_capabilities_list_smoke(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True, exist_ok=True)
-    skill_path = project_dir / "skills" / "demo" / "SKILL.md"
+    skill_path = tmp_path / ".pi" / "skills" / "demo" / "SKILL.md"
     skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text("---\nname: demo\ndescription: smoke skill\n---\nbody", encoding="utf-8")
 
@@ -72,7 +72,7 @@ def test_pp_agent_capabilities_list_smoke(tmp_path: Path) -> None:
 def test_pp_agent_skills_commands_smoke(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True, exist_ok=True)
-    skill_path = project_dir / "skills" / "demo" / "SKILL.md"
+    skill_path = tmp_path / ".pi" / "skills" / "demo" / "SKILL.md"
     skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text("---\nname: demo\ndescription: smoke skill\n---\nbody", encoding="utf-8")
     env = {"PP_AGENT_HOME": str(tmp_path / ".pp-agent-home")}
@@ -82,7 +82,10 @@ def test_pp_agent_skills_commands_smoke(tmp_path: Path) -> None:
 
     assert list_result.returncode == 0
     assert show_result.returncode == 0
-    assert any(item["name"] == "demo" for item in json.loads(list_result.stdout))
+    list_payload = json.loads(list_result.stdout)
+    demo = next(item for item in list_payload if item["name"] == "demo")
+    assert demo["metadata"]["discovery_mode"] == "project_convention"
+    assert demo["metadata"]["discovery_root"] == str(tmp_path.resolve())
     assert json.loads(show_result.stdout)["name"] == "demo"
 
 

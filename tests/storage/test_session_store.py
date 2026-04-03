@@ -16,7 +16,7 @@ def test_session_store_save_and_load_uses_single_tree_file(tmp_path: Path) -> No
     loaded = store.load(record.id)
     assert loaded.id == record.id
     assert loaded.system_prompt == "hello"
-    assert loaded.model.model == "qwen3.5-plus"
+    assert loaded.model.model == record.model.model
     assert loaded.compaction.summary == "old messages"
 
 

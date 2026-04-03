@@ -17,6 +17,9 @@ class ActiveSkill:
     description: str
     source: str
     body_loaded: bool
+    origin_type: str
+    discovery_root: str | None
+    discovery_mode: str
 
 
 @dataclass
@@ -46,11 +49,11 @@ class SkillRuntime:
         self._last_auto_active = []
         self._last_match_sources = {}
 
-    def use_skill(self, name: str):
+    def use_skill(self, name: str, *, source: str = "manual"):
         descriptor = self.available_skills()[name]
         if name not in self._manual_active:
             self._manual_active.append(name)
-        self._last_match_sources[name] = "manual"
+        self._last_match_sources[name] = source
         return descriptor
 
     def clear_active(self) -> None:
@@ -72,6 +75,9 @@ class SkillRuntime:
                     description=descriptor.description,
                     source=self._last_match_sources.get(name, "manual" if name in self._manual_active else "automatic"),
                     body_loaded=getattr(descriptor, "_body_cache", None) is not None,
+                    origin_type=descriptor.origin_type,
+                    discovery_root=getattr(descriptor, "discovery_root", None),
+                    discovery_mode=getattr(descriptor, "discovery_mode", "legacy_project"),
                 )
             )
         return items

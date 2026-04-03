@@ -334,5 +334,9 @@ def test_skill_and_extension_metadata_include_origin_fields(tmp_path: Path, monk
     extension = catalog.get("extension", "demo_ext")
     assert skill.origin_type == "project"
     assert skill.metadata["declared_by_manifest"] is True
+    assert skill.metadata["discovery_root"] == str(project_dir / "manifest-skills")
+    assert skill.metadata["discovery_mode"] == "legacy_project"
     assert extension.origin_type == "project"
     assert extension.metadata["declared_by_manifest"] is True
+    assert extension.metadata["event_counts"] == {}
+    assert extension.metadata["resource_roots"] == {}

@@ -129,6 +129,7 @@ def test_skill_runtime_description_match_and_commands(tmp_path: Path, monkeypatc
     result = handle_command(agent, "/skill use review-helper", tmp_path)
     assert result == "handled"
     assert [item.name for item in skill_runtime.active_skills()] == ["review-helper"]
+    assert skill_runtime.active_skills()[0].source == "manual"
 
     skill_runtime.clear_active()
     skill_runtime.transform_context(
@@ -146,6 +147,40 @@ def test_skill_runtime_description_match_and_commands(tmp_path: Path, monkeypatc
 
     assert handle_command(agent, "/skill clear", tmp_path) == "handled"
     assert skill_runtime.active_skills() == []
+
+
+def test_skill_colon_command_marks_explicit_command_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    _write_skill(
+        tmp_path / ".pi" / "skills" / "review-helper" / "SKILL.md",
+        name="review-helper",
+        description="Review pull requests carefully",
+        body="Review body",
+    )
+    settings = Settings.load(tmp_path)
+    skill_runtime = SkillRuntime(
+        workspace=tmp_path,
+        user_root=settings.global_dir,
+        config=settings.capabilities.skills,
+    )
+    agent = type("Agent", (), {"session_id": "session-1", "llm_client": type("Client", (), {"model": type("Model", (), {"model": "fake"})()})(), "state": type("State", (), {"model": type("Model", (), {"model": "fake"})()})()})()
+    agent.skill_runtime = skill_runtime
+    agent.mcp_runtime = None
+    agent.extension_commands = None
+    agent.tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    agent.runtime_hooks = RuntimeHooks()
+    agent.extension_registry = None
+    agent.extension_resources = {}
+    agent._extension_runtime = type("Runtime", (), {"close": lambda self: None})()
+    agent._baseline_runtime_hooks_snapshot = agent.runtime_hooks.snapshot()
+
+    result = handle_command(agent, "/skill:review-helper", tmp_path)
+
+    assert result == "handled"
+    active = skill_runtime.active_skills()
+    assert active[0].name == "review-helper"
+    assert active[0].source == "explicit_command"
+    assert active[0].discovery_mode == "project_convention"
 
 
 def test_mcp_runtime_is_lazy_until_list_call_or_natural_language_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

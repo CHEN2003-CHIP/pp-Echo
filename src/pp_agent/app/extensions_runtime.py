@@ -4,7 +4,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.extensions import (
@@ -251,6 +251,8 @@ class ExecutableExtensions:
     registry: ExtensionRegistry = field(default_factory=ExtensionRegistry)
     commands: ExtensionCommandRegistry = field(default_factory=ExtensionCommandRegistry)
     resources: dict[str, list[str]] = field(default_factory=dict)
+    resource_roots: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    resource_discovery_handlers: dict[str, list[Callable[[dict[str, Any]], Optional[dict[str, list[str]]]]]] = field(default_factory=dict)
     cleanup_callbacks: list[Callable[[], object]] = field(default_factory=list)
     mcp_runtime: MCPRuntime | None = None
 
@@ -332,7 +334,10 @@ def _apply_loaded_extension(
     runtime_hooks.before_tool_call_hooks.extend(loaded.before_tool_call_hooks)
     runtime_hooks.after_tool_call_hooks.extend(loaded.after_tool_call_hooks)
     runtime_hooks.on_tool_error_hooks.extend(loaded.tool_error_hooks)
+    runtime_hooks.lifecycle_event_hooks.extend(loaded.lifecycle_event_hooks)
     runtime.resources[loaded.descriptor.name] = list(loaded.resources)
+    runtime.resource_discovery_handlers[loaded.descriptor.name] = list(loaded.resource_discovery_handlers)
+    runtime.resource_roots.setdefault(loaded.descriptor.name, {})
     runtime.cleanup_callbacks.extend(loaded.cleanup_callbacks)
     runtime.registry.mark_loaded(
         loaded.descriptor.name,
@@ -344,8 +349,55 @@ def _apply_loaded_extension(
             "before_tool_call": len(loaded.before_tool_call_hooks),
             "after_tool_call": len(loaded.after_tool_call_hooks),
             "tool_error": len(loaded.tool_error_hooks),
+            "lifecycle_event": len(loaded.lifecycle_event_hooks),
         },
+        event_counts=dict(loaded.event_counts),
+        resource_roots=runtime.resource_roots.get(loaded.descriptor.name, {}),
     )
+
+
+def discover_extension_resource_roots(
+    runtime: ExecutableExtensions,
+    workspace: Path,
+    *,
+    reason: str,
+) -> dict[str, list[Path]]:
+    merged: dict[str, list[Path]] = {
+        "skill_paths": [],
+        "prompt_paths": [],
+        "theme_paths": [],
+        "extension_paths": [],
+    }
+    for extension_name, handlers in runtime.resource_discovery_handlers.items():
+        resource_roots = {
+            "skill_paths": [],
+            "prompt_paths": [],
+            "theme_paths": [],
+            "extension_paths": [],
+        }
+        payload = {"cwd": str(workspace.resolve()), "workspace": workspace.resolve(), "reason": reason}
+        for handler in handlers:
+            contribution = handler(payload) or {}
+            for key in resource_roots:
+                values = [_safe_resolve(Path(value)) for value in contribution.get(key, [])]
+                resource_roots[key].extend(value for value in values if value not in resource_roots[key])
+        runtime.resource_roots[extension_name] = {key: [str(value) for value in values] for key, values in resource_roots.items() if values}
+        binding = runtime.registry.get(extension_name)
+        if binding is not None:
+            runtime.registry.mark_loaded(
+                extension_name,
+                loaded_tools=binding.loaded_tools,
+                loaded_commands=binding.loaded_commands,
+                loaded_resources=binding.loaded_resources,
+                hook_counts=binding.hook_counts,
+                event_counts=binding.event_counts,
+                resource_roots=runtime.resource_roots.get(extension_name, {}),
+            )
+        for key, values in resource_roots.items():
+            for value in values:
+                if value not in merged[key]:
+                    merged[key].append(value)
+    return merged
 
 
 def _mcp_result_to_tool_execution(result, *, tool_name: str) -> ToolExecutionResult:
@@ -413,4 +465,12 @@ def _normalize_term(term: str) -> str:
     return value
 
 
-__all__ = ["ExecutableExtensions", "MCPRuntime", "load_executable_extensions"]
+__all__ = ["ExecutableExtensions", "MCPRuntime", "discover_extension_resource_roots", "load_executable_extensions"]
+
+
+def _safe_resolve(path: Path) -> Path:
+    candidate = path.expanduser()
+    try:
+        return candidate.resolve()
+    except (OSError, PermissionError):
+        return candidate.absolute()

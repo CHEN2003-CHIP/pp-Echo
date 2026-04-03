@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from pp_agent.app.extensions_runtime import load_executable_extensions
+from pp_agent.app.extensions_runtime import discover_extension_resource_roots, load_executable_extensions
 from pp_agent.app.resources import load_resource_manifest, manifest_extension_roots, manifest_skill_roots
 from pp_agent.app.skills_runtime import SkillRuntime
 from pp_agent.capabilities import (
@@ -28,6 +28,7 @@ from pp_agent.runtime.hooks import BeforeToolCallDecision, RuntimeHooks
 from pp_agent.runtime.lifecycle import CHECKPOINT_BEFORE_CREATE, CHECKPOINT_CREATED
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.session_host import SessionHost
+from pp_agent.skills import skill_search_roots
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.checkpoints import CheckpointStore
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
@@ -84,6 +85,8 @@ class _ExtensionCapabilitySource:
                 "loaded_commands": list(binding.loaded_commands),
                 "loaded_resources": list(binding.loaded_resources),
                 "hook_counts": dict(binding.hook_counts),
+                "event_counts": dict(binding.event_counts),
+                "resource_roots": {key: list(values) for key, values in binding.resource_roots.items()},
             },
         )
 
@@ -143,6 +146,8 @@ class _MCPExtensionBackend:
                     "loaded_commands": [],
                     "loaded_resources": [],
                     "hook_counts": {},
+                    "event_counts": {},
+                    "resource_roots": {},
                 },
             )
         ]
@@ -241,11 +246,15 @@ class _MCPExtensionBackend:
             loaded_commands=[],
             loaded_resources=loaded_resources,
             hook_counts={},
+            event_counts={},
+            resource_roots={},
         )
         descriptors[0].metadata["loaded_tools"] = list(loaded_tools)
         descriptors[0].metadata["loaded_commands"] = []
         descriptors[0].metadata["loaded_resources"] = list(loaded_resources)
         descriptors[0].metadata["hook_counts"] = {}
+        descriptors[0].metadata["event_counts"] = {}
+        descriptors[0].metadata["resource_roots"] = {}
         return descriptors
 
     def reload(self) -> None:
@@ -488,16 +497,18 @@ def create_runtime_from_record(
         runtime_hooks=agent.runtime_hooks,
         search_roots=_extension_roots_for(workspace.resolve(), settings),
     )
+    extension_resource_roots = discover_extension_resource_roots(extension_runtime, workspace.resolve(), reason="startup")
     skill_runtime = SkillRuntime(
         workspace=workspace.resolve(),
         user_root=settings.global_dir,
         config=settings.capabilities.skills,
-        search_roots=_skill_roots_for(workspace.resolve(), settings),
+        search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
     agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
     setattr(agent, "extension_resources", extension_runtime.resources)
+    setattr(agent, "extension_resource_roots", extension_resource_roots)
     setattr(agent, "mcp_runtime", extension_runtime.mcp_runtime)
     setattr(agent, "skill_runtime", skill_runtime)
     setattr(agent, "_extension_runtime", extension_runtime)
@@ -541,16 +552,18 @@ def reload_runtime_extensions(
         transport_factory=transport_factory,
         time_fn=time_fn,
     )
+    extension_resource_roots = discover_extension_resource_roots(extension_runtime, workspace.resolve(), reason="reload")
     skill_runtime = SkillRuntime(
         workspace=workspace.resolve(),
         user_root=settings.global_dir,
         config=settings.capabilities.skills,
-        search_roots=_skill_roots_for(workspace.resolve(), settings),
+        search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
     agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
     setattr(agent, "extension_resources", extension_runtime.resources)
+    setattr(agent, "extension_resource_roots", extension_resource_roots)
     setattr(agent, "mcp_runtime", extension_runtime.mcp_runtime)
     setattr(agent, "skill_runtime", skill_runtime)
     setattr(agent, "_extension_runtime", extension_runtime)
@@ -642,71 +655,15 @@ def rewind_session_with_events(
     return result.session_id
 
 
-def _skill_roots_for(workspace: Path, settings: Settings) -> list[object]:
+def _skill_roots_for(
+    workspace: Path,
+    settings: Settings,
+    extra_paths: Optional[list[Path]] = None,
+) -> list[object]:
     manifest = load_resource_manifest(settings.project_dir)
-    roots: list[object] = []
-    precedence = 0
-    for value in settings.capabilities.skills.custom_directories:
-        path = Path(value).expanduser()
-        roots.append(
-            type(
-                "SkillRoot",
-                (),
-                {
-                    "path": path,
-                    "origin_type": "custom",
-                    "root_name": path.name,
-                    "precedence": precedence,
-                    "declared_by_manifest": False,
-                },
-            )()
-        )
-        precedence += 1
-    if settings.capabilities.skills.enable_project:
-        roots.append(
-            type(
-                "SkillRoot",
-                (),
-                {
-                    "path": workspace / ".pp-agent" / "skills",
-                    "origin_type": "project",
-                    "root_name": "project_skills",
-                    "precedence": precedence,
-                    "declared_by_manifest": False,
-                },
-            )()
-        )
-        precedence += 1
-    if settings.capabilities.skills.enable_user:
-        roots.append(
-            type(
-                "SkillRoot",
-                (),
-                {
-                    "path": settings.global_dir / "skills",
-                    "origin_type": "user",
-                    "root_name": "user_skills",
-                    "precedence": precedence,
-                    "declared_by_manifest": False,
-                },
-            )()
-        )
-        precedence += 1
-    if settings.capabilities.skills.enable_builtin:
-        roots.append(
-            type(
-                "SkillRoot",
-                (),
-                {
-                    "path": Path(__file__).resolve().parents[1] / "skills",
-                    "origin_type": "builtin",
-                    "root_name": "builtin_skills",
-                    "precedence": precedence,
-                    "declared_by_manifest": False,
-                },
-            )()
-        )
-    return _replace_project_skill_roots(roots, settings, manifest.skills)
+    roots = skill_search_roots(workspace, settings.global_dir, config=settings.capabilities.skills)
+    replaced = _replace_project_skill_roots(roots, settings, manifest.skills)
+    return _append_extension_skill_roots(replaced, extra_paths or [])
 
 
 def _extension_roots_for(workspace: Path, settings: Settings) -> list[object]:
@@ -722,6 +679,35 @@ def _replace_project_skill_roots(roots: list[object], settings: Settings, manife
     replaced = [root for root in roots if root.origin_type != "project"]
     replaced.extend(manifest_skill_roots(settings.project_dir, manifest_entries, precedence_start=custom_count))
     return replaced
+
+
+def _append_extension_skill_roots(roots: list[object], extra_paths: list[Path]) -> list[object]:
+    if not extra_paths:
+        return roots
+    existing = {str(getattr(root, "path", "")) for root in roots}
+    precedence = max((int(getattr(root, "precedence", -1)) for root in roots), default=-1) + 1
+    for path in extra_paths:
+        candidate = path.resolve() if path.exists() else path
+        if str(candidate) in existing:
+            continue
+        roots.append(
+            type(
+                "SkillRoot",
+                (),
+                {
+                    "path": candidate,
+                    "origin_type": "extension",
+                    "root_name": candidate.name or "extension_skills",
+                    "precedence": precedence,
+                    "declared_by_manifest": False,
+                    "discovery_root": str(candidate),
+                    "discovery_mode": "extension_resource",
+                },
+            )()
+        )
+        existing.add(str(candidate))
+        precedence += 1
+    return roots
 
 
 def _replace_project_extension_roots(roots: list[object], settings: Settings, manifest_entries: list[str]) -> list[object]:

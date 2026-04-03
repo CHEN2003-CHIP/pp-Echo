@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from pp_agent.domain import ChatMessage, ToolCall
+from pp_agent.runtime.emitter import LifecycleSubscriber
 from pp_agent.runtime.emitter import LifecycleEmitter
 from pp_agent.runtime.lifecycle import (
     ContextBuildDecision,
@@ -47,11 +48,13 @@ class RuntimeHooks:
         before_tool_call: Optional[list[BeforeToolCallHook]] = None,
         after_tool_call: Optional[list[AfterToolCallHook]] = None,
         on_tool_error: Optional[list[ToolErrorHook]] = None,
+        lifecycle_event: Optional[list[LifecycleSubscriber]] = None,
     ) -> None:
         self.transform_context_hooks = transform_context or []
         self.before_tool_call_hooks = before_tool_call or []
         self.after_tool_call_hooks = after_tool_call or []
         self.on_tool_error_hooks = on_tool_error or []
+        self.lifecycle_event_hooks = lifecycle_event or []
 
     def snapshot(self) -> dict[str, list[Callable]]:
         return {
@@ -59,6 +62,7 @@ class RuntimeHooks:
             "before_tool_call": list(self.before_tool_call_hooks),
             "after_tool_call": list(self.after_tool_call_hooks),
             "on_tool_error": list(self.on_tool_error_hooks),
+            "lifecycle_event": list(self.lifecycle_event_hooks),
         }
 
     def restore(self, snapshot: dict[str, list[Callable]]) -> None:
@@ -66,6 +70,7 @@ class RuntimeHooks:
         self.before_tool_call_hooks = list(snapshot.get("before_tool_call", []))
         self.after_tool_call_hooks = list(snapshot.get("after_tool_call", []))
         self.on_tool_error_hooks = list(snapshot.get("on_tool_error", []))
+        self.lifecycle_event_hooks = list(snapshot.get("lifecycle_event", []))
 
     def transform_context(self, state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
         current = messages
@@ -106,10 +111,15 @@ class RuntimeHooks:
         return final
 
     def register_with_lifecycle(self, emitter: LifecycleEmitter) -> None:
+        emitter.subscribe(self._handle_lifecycle_event)
         emitter.on_context_built(self._handle_context_built)
         emitter.on_tool_call(self._handle_tool_call)
         emitter.on_tool_result(self._handle_tool_result)
         emitter.on_tool_error(self._handle_tool_error)
+
+    def _handle_lifecycle_event(self, event) -> None:
+        for hook in self.lifecycle_event_hooks:
+            hook(event)
 
     def _handle_context_built(self, event, state: AgentState, messages: list[ChatMessage]) -> ContextBuildDecision:
         return ContextBuildDecision(messages=self.transform_context(state, messages))

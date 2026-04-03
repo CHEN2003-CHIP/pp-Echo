@@ -109,8 +109,8 @@ flowchart LR
 ### Capability sources
 
 - builtin tools stay in the runtime core
-- skills are lightweight prompt packs discovered from project, user, builtin, or custom roots
-- extensions are first-class capability sources with explicit descriptors, lifecycle status, and executable runtime hooks
+- skills are lightweight prompt packs discovered from `.pp-agent`, pi-style project roots (`.pi/skills`, `.agents/skills` up the ancestor chain), user, builtin, or custom roots
+- extensions are first-class capability sources with explicit descriptors, lifecycle status, unified event handlers, and executable runtime hooks
 - MCP is treated as an optional extension-backed adapter instead of a default runtime subsystem
 
 ## Quick Start
@@ -243,7 +243,7 @@ Create `.pp-agent/config.json` for per-project overrides:
 ### Resource manifests
 
 Project resources can be declared explicitly in `.pp-agent/resources.json` or `.pp-agent/package.json`.
-If no manifest is present, `pp-agent` falls back to conventional directories such as `.pp-agent/skills` and `.pp-agent/extensions`.
+If no manifest is present, `pp-agent` falls back to conventional directories such as `.pp-agent/skills` and `.pp-agent/extensions`. Skills also support pi-compatible discovery from `.pi/skills` and `.agents/skills` in the current workspace and its ancestor directories.
 
 ```json
 {
@@ -286,7 +286,7 @@ The capability catalog now exposes both discovery metadata and runtime-facing st
 
 - `builtin_tool` capabilities are part of the core runtime and typically show `status: "loaded"`
 - `skill` capabilities are discovered lazily and keep origin metadata such as `origin_type`, `precedence`, and `declared_by_manifest`
-- `extension` capabilities describe discovered extension packages, and executable extensions can now register tools, slash commands, and runtime hooks
+- `extension` capabilities describe discovered extension packages, and executable extensions can now register tools, slash commands, unified event handlers, runtime hooks, and resource discovery roots
 - `mcp_tool`, `mcp_resource`, and `mcp_prompt` are emitted through the built-in `mcp_adapter` extension when MCP is enabled
 
 This keeps the core small while making capability sources observable and reloadable.
@@ -305,6 +305,12 @@ python -m pp_agent.cli.main skills show repo_overview`r`n# extension-provided sl
 
 `capabilities` returns structured JSON with `kind`, `name`, `source`, `status`, `origin_type`, `path`, and capability-specific metadata.
 
+### Extension runtime API
+
+Project extensions continue to use `EXTENSION.json` + `extension.py`. The recommended runtime API is now `api.on(event_name, handler)` for lifecycle-style integration points such as `context_built`, `tool_call`, `tool_result`, `tool_error`, session/checkpoint events, and `resources_discover`. The older helper methods like `on_context_built()` and `on_before_tool_call()` remain supported for compatibility.
+
+`resources_discover` is evaluated during startup and `/reload`. Extensions can contribute extra `skill_paths`, `prompt_paths`, and `theme_paths`; contributed skill roots are appended after the built-in project/user/custom roots so they stay lower precedence than explicit project configuration.
+
 ### Chat Runtime Commands
 
 Inside interactive chat, runtime-managed capabilities can now be inspected and refreshed directly:
@@ -312,6 +318,7 @@ Inside interactive chat, runtime-managed capabilities can now be inspected and r
 - `/reload`
 - `/skills list`
 - `/skills active`
+- `/skill:<name>`
 - `/skill use <name>`
 - `/skill clear`
 - `/skills reload`
@@ -319,7 +326,18 @@ Inside interactive chat, runtime-managed capabilities can now be inspected and r
 - `/mcp list`
 - `/mcp reload`
 
-Skills are injected lazily into the turn context when they are activated or matched. MCP servers stay undiscovered until runtime management or the first discovery path asks for them.
+Skills are injected lazily into the turn context when they are activated or matched. Explicit `/skill:<name>` activation takes precedence over automatic description matching. `MCP` servers stay undiscovered until runtime management or the first discovery path asks for them.
+
+### Skill compatibility
+
+`pp-agent` now supports both its legacy project layout and pi-style layouts:
+
+- prefer `.pi/skills/<name>/SKILL.md` for pi-compatible project-local skills
+- `.agents/skills/<name>/SKILL.md` is also discovered from the current workspace upward through parent directories
+- keep `.pp-agent/skills/<name>/SKILL.md` for existing projects and backwards compatibility
+- use `/skill:<name>` as the primary interactive activation command; `/skill use <name>` remains supported
+
+Current MCP adapter settings such as `tool_prefix`, `direct_tools`, and `lifecycle` remain forward-compatibility placeholders for the next alignment pass; this phase does not change MCP runtime behavior.
 
 ## Example Workflows
 

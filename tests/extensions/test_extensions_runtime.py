@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 from pp_agent.app.bootstrap import reload_runtime_extensions
-from pp_agent.app.extensions_runtime import load_executable_extensions
+from pp_agent.app.extensions_runtime import discover_extension_resource_roots, load_executable_extensions
 from pp_agent.cli.dispatcher import handle_command
 from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.runtime.emitter import LifecycleEmitter
 from pp_agent.runtime.hooks import RuntimeHooks
+from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.settings import Settings
 from pp_agent.tools.registry import ToolRegistry
 
@@ -233,3 +235,111 @@ def register(api):
 
     payload = reload_runtime_extensions(agent, tmp_path)
     assert payload["extension_count"] == 1
+
+
+def test_extension_on_api_bridges_runtime_and_lifecycle_events(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    marker = tmp_path / "events.txt"
+    extension_dir = tmp_path / ".pp-agent" / "extensions" / "demo"
+    _write_extension(
+        extension_dir,
+        name="demo",
+        description="Demo extension",
+        source=f"""
+from pp_agent.runtime.hooks import BeforeToolCallDecision
+
+def register(api):
+    api.on("context_built", lambda state, messages: messages + [messages[0].model_copy()])
+    api.on("tool_call", lambda state, call, registry: BeforeToolCallDecision(action="block", message="blocked"))
+    api.on("session_start", lambda event: open(r"{marker}", "a", encoding="utf-8").write(event.type + \"\\n\"))
+""",
+    )
+    settings = Settings.load(tmp_path)
+    tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    runtime_hooks = RuntimeHooks()
+    loaded = load_executable_extensions(tmp_path, settings=settings, tool_registry=tool_registry, runtime_hooks=runtime_hooks)
+    emitter = LifecycleEmitter()
+    runtime_hooks.register_with_lifecycle(emitter)
+
+    messages = runtime_hooks.transform_context(
+        type("State", (), {"queued_messages": [], "pending_plan_token": None})(),
+        [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
+    )
+    decision = runtime_hooks.before_tool_call(
+        type("State", (), {"queued_messages": [], "pending_plan_token": None})(),
+        type("Call", (), {"name": "demo", "arguments": {}})(),
+        tool_registry,
+    )
+    emitter.emit(AgentEvent(type="session_start"))
+    binding = loaded.registry.get("demo")
+
+    assert len(messages) == 2
+    assert decision.action == "block"
+    assert decision.message == "blocked"
+    assert marker.read_text(encoding="utf-8") == "session_start\n"
+    assert binding is not None
+    assert binding.event_counts["context_built"] == 1
+    assert binding.event_counts["tool_call"] == 1
+    assert binding.event_counts["session_start"] == 1
+
+
+def test_extension_resources_discover_adds_skill_roots_and_refreshes_on_reload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    extension_dir = tmp_path / ".pp-agent" / "extensions" / "demo"
+    skill_root_a = tmp_path / "ext-skills-a"
+    skill_root_b = tmp_path / "ext-skills-b"
+    for root, name in [(skill_root_a, "ext_a"), (skill_root_b, "ext_b")]:
+        skill_path = root / name / "SKILL.md"
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        skill_path.write_text(f"---\nname: {name}\ndescription: {name}\n---\nbody", encoding="utf-8")
+    _write_extension(
+        extension_dir,
+        name="demo",
+        description="Demo extension",
+        source=f"""
+def register(api):
+    api.on("resources_discover", lambda event: {{"skill_paths": [r"{skill_root_a}"], "prompt_paths": [], "theme_paths": []}})
+""",
+    )
+    settings = Settings.load(tmp_path)
+    tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    runtime_hooks = RuntimeHooks()
+    baseline_snapshot = runtime_hooks.snapshot()
+    loaded = load_executable_extensions(tmp_path, settings=settings, tool_registry=tool_registry, runtime_hooks=runtime_hooks)
+    contributions = discover_extension_resource_roots(loaded, tmp_path, reason="startup")
+    agent = type("Agent", (), {"session_id": "session-1", "llm_client": None, "state": None})()
+    agent.tool_registry = tool_registry
+    agent.runtime_hooks = runtime_hooks
+    agent.extension_registry = loaded.registry
+    agent.extension_commands = loaded.commands
+    agent.extension_resources = loaded.resources
+    agent.extension_resource_roots = contributions
+    agent._extension_runtime = loaded
+    agent._baseline_runtime_hooks_snapshot = baseline_snapshot
+
+    payload = reload_runtime_extensions(agent, tmp_path)
+    binding = agent.extension_registry.get("demo")
+
+    assert payload["skill_count"] == 1
+    assert "ext_a" in agent.skill_runtime.available_skills()
+    assert binding is not None
+    assert binding.resource_roots["skill_paths"] == [str(skill_root_a.resolve())]
+
+    _write_extension(
+        extension_dir,
+        name="demo",
+        description="Demo extension",
+        source=f"""
+def register(api):
+    api.on("resources_discover", lambda event: {{"skill_paths": [r"{skill_root_b}"], "prompt_paths": [], "theme_paths": []}})
+""",
+    )
+
+    payload = reload_runtime_extensions(agent, tmp_path)
+    binding = agent.extension_registry.get("demo")
+
+    assert payload["skill_count"] == 1
+    assert "ext_b" in agent.skill_runtime.available_skills()
+    assert "ext_a" not in agent.skill_runtime.available_skills()
+    assert binding is not None
+    assert binding.resource_roots["skill_paths"] == [str(skill_root_b.resolve())]
