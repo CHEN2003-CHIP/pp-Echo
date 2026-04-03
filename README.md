@@ -1,7 +1,7 @@
 # pp-Echo
 
 <p align="center">
-  <strong>pp-Echo is a Windows-first coding agent that shows its plan, asks before risky actions, and can rewind both your repo and your conversation.</strong><br />
+  <strong>pp-Echo is a CLI-first coding agent that shows its plan, asks before risky actions, and can rewind both your repo and your conversation.</strong><br />
   面向真实仓库工作的 CLI 编码代理：先给计划，再做动作；高风险操作先审批；代码和会话都能安全回退。
 </p>
 
@@ -19,7 +19,7 @@
 
 ## Quick Start
 
-pp-Echo currently targets Windows-first CLI workflows and expects Python 3.9+.
+pp-Echo currently targets CLI-first CLI workflows and expects Python 3.9+.
 
 Before you start:
 
