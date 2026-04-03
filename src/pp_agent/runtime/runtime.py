@@ -64,6 +64,16 @@ ConfirmCallback = Callable[[str, dict], bool]
 
 
 class AgentRuntime:
+    """
+    【核心类】Agent运行时核心类
+    功能：负责Agent的对话管理、工具调用、生命周期控制、会话持久化、事件广播
+    核心职责：
+        1. 管理单轮/多轮对话流程
+        2. 执行LLM交互、工具调用、计划审批
+        3. 会话状态持久化与恢复
+        4. 运行时事件广播与钩子处理
+    依赖：LLM客户端、工具注册器、会话存储、生命周期发射器
+    """
     def __init__(
         self,
         llm_client: LLMClient,

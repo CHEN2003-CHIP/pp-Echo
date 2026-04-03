@@ -1,189 +1,156 @@
-# pp-agent
+# pp-Echo
 
-A Windows-first personal coding agent with planner/executor separation, approval gates, session branching, and git-backed safe rewind.
+<p align="center">
+  <strong>pp-Echo is a Windows-first coding agent that shows its plan, asks before risky actions, and can rewind both your repo and your conversation.</strong><br />
+  面向真实仓库工作的 CLI 编码代理：先给计划，再做动作；高风险操作先审批；代码和会话都能安全回退。
+</p>
 
-`pp-agent` is built for people who want an agent that feels practical inside a real repository:
+<p align="center">
+  <a href="#quick-start"><img alt="Quick Start" src="https://img.shields.io/badge/Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
+  <a href="#demo--screenshots"><img alt="Demo" src="https://img.shields.io/badge/Demo-163257?style=for-the-badge&logo=gitlfs&logoColor=white"></a>
+  <a href="https://github.com/CHEN2003-CHIP/pp-Echo/releases"><img alt="Releases" src="https://img.shields.io/badge/Releases-F8D66D?style=for-the-badge&logo=github&logoColor=111827"></a>
+</p>
 
-- it explains what it plans to do before it does it
-- it stages risky actions behind approvals
-- it keeps session history navigable as a tree
-- it can restore conversation state, workspace state, or both
+![pp-Echo hero](docs/assets/hero.svg)
 
-## Why pp-agent
+<p align="center">
+  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Rewind code + conversation safely</code>
+</p>
 
-Most coding agents are good at generating output but weak at helping you stay in control once a task gets messy.
+## Quick Start
 
-`pp-agent` focuses on the parts that matter during day-to-day development:
+pp-Echo currently targets Windows-first CLI workflows and expects Python 3.9+.
 
-- Visible planning
-  The runtime shows intended steps before execution, so you can review direction before tools mutate the workspace.
-- Approval-first safety
-  High-risk actions like file edits and shell commands can pause for explicit approval.
-- Session tree navigation
-  Conversations are stored as a navigable tree, making branch, resume, and rewind workflows much easier.
-- Git-backed safe rewind
-  Rewind is no longer conversation-only. You can restore the workspace, the conversation branch, or both together.
-- Repository-aware workflow
-  Search, grep, diff inspection, staged edits, approvals, and checkpoint recovery fit into one loop.
+Before you start:
 
-## What Makes It Different
+- Set `PP_AGENT_API_KEY` in your environment.
+- Prefer Windows PowerShell or `start-agent.bat` for the smoothest first run.
+- If you run the module directly from a cloned repo, you must set `PYTHONPATH=src`.
 
-### Planner before executor
+### One-click on Windows
 
-`pp-agent` separates planning from execution.
+```powershell
+set PP_AGENT_API_KEY=your_api_key
+.\start-agent.bat
+```
 
-Instead of jumping straight into tool calls, it can first show:
+This is the fastest path for people who want to clone the repo and see the agent immediately.
 
-- what it wants to do
-- which tools it intends to use
-- whether the plan should pause for approval
+### From cloned repo
 
-That makes the agent feel more trustworthy and easier to supervise.
+Run directly from source without packaging:
 
-### Safe rewind that includes the workspace
+```powershell
+git clone https://github.com/CHEN2003-CHIP/pp-Echo.git
+cd pp-Echo
+set PP_AGENT_API_KEY=your_api_key
+set PYTHONPATH=src
+python -m pp_agent.cli.main chat
+```
 
-Traditional rewind only moves conversation history.
-That creates a mismatch: the chat says you are back in time, but the files on disk are still in the later state.
+Minimal non-interactive demo:
 
-`pp-agent` solves that with git-backed checkpoints and safe rewind modes:
+```powershell
+set PP_AGENT_API_KEY=your_api_key
+set PYTHONPATH=src
+python -m pp_agent.cli.main run "Give me a quick overview of this repo"
+```
 
-- `conversation_only`
-- `workspace_only`
-- `conversation_and_workspace`
+### Installed CLI
 
-This is especially useful when:
+If you want the `pp-agent` command on your machine:
 
-- an edit round went in the wrong direction
-- you want to undo a risky experiment without losing the rest of the session graph
-- you need to recover a clean workspace while preserving a branch of thought
+```powershell
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+pp-agent chat
+```
+
+Notes:
+
+- In this local environment, editable install depends on a modern `pip` / `setuptools` toolchain.
+- If `pip install -e .` fails on an older Python setup, use the source-run path above first, then upgrade your packaging tools.
+
+## Demo / Screenshots
+
+![pp-Echo demo](docs/assets/demo.gif)
+
+- Launch with `start-agent.bat` or the source CLI entrypoint.
+- Ask the agent to inspect a repo task and preview risky work before execution.
+- Review approvals, create checkpoints, and use safe rewind to recover both code and conversation state.
+
+| Interactive chat | Checkpoint + rewind |
+| --- | --- |
+| ![Interactive chat screenshot](docs/assets/screenshot-chat.png) | ![Checkpoint screenshot](docs/assets/screenshot-checkpoint.png) |
+
+## Why pp-Echo
+
+Most coding agents are good at producing output. Fewer are good at making their behavior visible and reversible once a repository gets messy. pp-Echo is built for that real-world gap.
+
+- Planning stays visible before execution, so you can supervise direction instead of reacting after changes land.
+- High-risk operations can pause behind approvals instead of mutating the workspace immediately.
+- Sessions are stored as a tree, making branch, resume, compare, and rewind workflows easier to reason about.
+- Safe rewind is git-backed, so you can restore the conversation, the workspace, or both together.
+- Skills, extensions, and MCP-backed capabilities fit into the same repo-aware runtime rather than feeling bolted on.
+
+## Core Workflows
+
+### 1. Chat and run
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main chat
+python -m pp_agent.cli.main run "Audit this repo and summarize risky commands"
+```
+
+### 2. Sessions and tree navigation
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main sessions list
+python -m pp_agent.cli.main sessions tree
+```
+
+### 3. Approvals and staged actions
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main approvals list
+python -m pp_agent.cli.main approvals summary
+```
+
+### 4. Checkpoints and safe rewind
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main checkpoint list
+python -m pp_agent.cli.main rewind-safe --session <session_id> --turns 2
+```
+
+### 5. Capabilities, skills, and MCP
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main capabilities list
+python -m pp_agent.cli.main skills list
+```
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  U["User Prompt"] --> CLI["CLI or BAT Entry"]
-  CLI --> RT["Agent Runtime"]
+  U["User Prompt"] --> CLI["CLI / BAT entry"]
+  CLI --> RT["Agent runtime"]
   RT --> PLAN["Planner"]
-  PLAN --> CTX["System Prompt + Summary + Recent Messages"]
-  CTX --> LLM["Qwen3.5-Plus"]
-  LLM --> DECIDE["Text Response or Tool Calls"]
-  DECIDE --> GATE{"High-risk plan?"}
+  PLAN --> GATE{"Approval needed?"}
+  GATE -->|"Yes"| AQ["Approval queue"]
   GATE -->|"No"| EXEC["Executor"]
-  GATE -->|"Yes"| APPROVALS["Approval Queue"]
-  APPROVALS --> EXEC
-  EXEC --> TOOLS["Read Search Grep Stage Edit Shell Git"]
-  TOOLS --> CHECKPOINT["Checkpoint + Safe Rewind"]
-  CHECKPOINT --> REPO["Workspace + Session Tree"]
-  REPO --> CLI
+  AQ --> EXEC
+  EXEC --> TOOLS["Repo / file / shell / search / MCP tools"]
+  TOOLS --> CKPT["Git-backed checkpoint + safe rewind"]
+  CKPT --> SESS["Session tree + workspace state"]
+  SESS --> CLI
 ```
-
-## Features
-
-### Planner and approval flow
-
-- Planner/executor split for clearer intent before execution
-- Approval gates for high-risk tool calls
-- Persistent approval queue for staged actions and planner pauses
-
-### Session management
-
-- Session tree storage
-- Branch and resume workflows
-- Turn-based rewind
-- Timeline inspection
-
-### Checkpoint and rewind
-
-- `head_snapshot` for clean-worktree recovery
-- `stash_snapshot` for explicit dirty-workspace protection
-- Restore preview before rewind or checkpoint restore
-- Safe rewind orchestration across session state and workspace state
-
-### Repository workflow
-
-- staged file writes and edits
-- shell command approval
-- repo-aware search and grep
-- git status and diff inspection
-
-### Capability sources
-
-- builtin tools stay in the runtime core
-- skills are lightweight prompt packs discovered from `.pp-agent`, pi-style project roots (`.pi/skills`, `.agents/skills` up the ancestor chain), user, builtin, or custom roots
-- extensions are first-class capability sources with explicit descriptors, lifecycle status, unified event handlers, and executable runtime hooks
-- MCP is treated as an optional extension-backed adapter instead of a default runtime subsystem
-
-## Quick Start
-
-### Fastest path on Windows
-
-1. Set `PP_AGENT_API_KEY` in your terminal or system environment.
-2. Double-click `start-agent.bat`.
-3. Start chatting with the agent in the opened terminal.
-
-### CLI usage
-
-```powershell
-set PYTHONPATH=src
-python -m pp_agent.cli.main chat
-python -m pp_agent.cli.main run "Give me a quick overview of this repo"
-python -m pp_agent.cli.main sessions list
-python -m pp_agent.cli.main sessions tree
-python -m pp_agent.cli.main checkpoint list
-python -m pp_agent.cli.main config show
-python -m pp_agent.cli.main capabilities list
-python -m pp_agent.cli.main skills list
-```
-
-## Checkpoint and Safe Rewind
-
-Checkpoint data is stored independently from the session tree.
-This keeps rewind logic extensible and lets the runtime reason about git state directly.
-
-### Snapshot types
-
-- `head_snapshot`
-  Records the current `HEAD` commit and branch position without changing the workspace.
-- `stash_snapshot`
-  Used only for explicit dirty-workspace protection after preview and confirmation.
-
-### Rewind modes
-
-- `conversation_only`
-  Move the conversation branch only.
-- `workspace_only`
-  Restore the workspace only.
-- `conversation_and_workspace`
-  Restore both and keep the result as a new session branch.
-
-### CLI examples
-
-```powershell
-set PYTHONPATH=src
-python -m pp_agent.cli.main checkpoint create --session <session_id>
-python -m pp_agent.cli.main checkpoint list
-python -m pp_agent.cli.main checkpoint restore <checkpoint_id>
-python -m pp_agent.cli.main rewind-safe --session <session_id> --turns 2
-python -m pp_agent.cli.main rewind-safe --session <session_id> --checkpoint <checkpoint_id>
-python -m pp_agent.cli.main rewind-safe --session <session_id> --workspace-only --checkpoint <checkpoint_id>
-python -m pp_agent.cli.main rewind-safe --session <session_id> --conversation-only --checkpoint <checkpoint_id>
-```
-
-## Chat Commands
-
-- `/settings` show runtime settings
-- `/status` show runtime phase, queue, and planner state
-- `/session` show the current session id
-- `/approvals` open the approval queue view
-- `/approve <token>` approve a pending planner gate or staged action
-- `/reject <token>` reject a pending planner gate or staged action
-- `/model <name>` switch model
-- `/new` start a new session
-- `/resume <id>` resume a session
-- `/tree` inspect the session tree
-- `/timeline` inspect the current session timeline
-- `/queue` inspect queued messages
-- `/quit` exit
 
 ## Configuration
 
@@ -195,7 +162,7 @@ python -m pp_agent.cli.main rewind-safe --session <session_id> --conversation-on
 - `PP_AGENT_ENABLE_THINKING`
 - `PP_AGENT_HOME`
 
-### Project-level config
+### Project config
 
 Create `.pp-agent/config.json` for per-project overrides:
 
@@ -206,9 +173,7 @@ Create `.pp-agent/config.json` for per-project overrides:
   "enable_thinking": false,
   "shell_timeout_seconds": 30,
   "capabilities": {
-    "builtin_tools": {
-      "enable": true
-    },
+    "builtin_tools": { "enable": true },
     "skills": {
       "enable_project": true,
       "enable_user": true,
@@ -240,153 +205,26 @@ Create `.pp-agent/config.json` for per-project overrides:
 }
 ```
 
-### Resource manifests
+### Resources and manifests
 
-Project resources can be declared explicitly in `.pp-agent/resources.json` or `.pp-agent/package.json`.
-If no manifest is present, `pp-agent` falls back to conventional directories such as `.pp-agent/skills` and `.pp-agent/extensions`. Skills also support pi-compatible discovery from `.pi/skills` and `.agents/skills` in the current workspace and its ancestor directories.
+Project resources can be declared in `.pp-agent/resources.json` or `.pp-agent/package.json`. If no manifest is present, pp-Echo falls back to conventional directories like `.pp-agent/skills` and `.pp-agent/extensions`, and also supports pi-compatible discovery from `.pi/skills` and `.agents/skills`.
 
-```json
-{
-  "skills": ["skills"],
-  "extensions": ["extensions"],
-  "prompts": []
-}
-```
+## Releases
 
-In `.pp-agent/package.json`, the same payload can live under `pp-agent`, `pp_agent`, or `pi`.
+- Release notes for the first formal release live in [releases/v0.2.0.md](releases/v0.2.0.md).
+- A reusable template for future releases lives in [.github/release-template.md](.github/release-template.md).
+- GitHub Releases page: [github.com/CHEN2003-CHIP/pp-Echo/releases](https://github.com/CHEN2003-CHIP/pp-Echo/releases)
 
-### MCP config
+## Contributing
 
-`.pp-agent/mcp.json` supports both the legacy `servers` form and the newer extension-oriented document shape:
+Contributions are welcome across CLI behavior, docs polish, demo assets, tests, extensions, and release packaging.
 
-```json
-{
-  "settings": {
-    "tool_prefix": "mcp",
-    "idle_timeout": 300
-  },
-  "servers": [
-    {
-      "name": "docs",
-      "transport": {
-        "type": "stdio",
-        "command": "python",
-        "args": ["server.py"]
-      }
-    }
-  ]
-}
-```
+Start here:
 
-`settings` is intentionally lightweight in this phase. It exists to keep the file forward-compatible while the runtime continues to treat MCP as an optional adapter layer.
-
-## Capabilities, Skills, and Extensions
-
-The capability catalog now exposes both discovery metadata and runtime-facing status:
-
-- `builtin_tool` capabilities are part of the core runtime and typically show `status: "loaded"`
-- `skill` capabilities are discovered lazily and keep origin metadata such as `origin_type`, `precedence`, and `declared_by_manifest`
-- `extension` capabilities describe discovered extension packages, and executable extensions can now register tools, slash commands, unified event handlers, runtime hooks, and resource discovery roots
-- `mcp_tool`, `mcp_resource`, and `mcp_prompt` are emitted through the built-in `mcp_adapter` extension when MCP is enabled
-
-This keeps the core small while making capability sources observable and reloadable.
-
-### CLI examples
-
-```powershell
-set PYTHONPATH=src
-python -m pp_agent.cli.main capabilities list
-python -m pp_agent.cli.main capabilities list --kind extension
-python -m pp_agent.cli.main capabilities show skill repo_overview
-python -m pp_agent.cli.main capabilities reload --include-mcp
-python -m pp_agent.cli.main skills list
-python -m pp_agent.cli.main skills show repo_overview`r`n# extension-provided slash commands are available inside interactive chat once loaded`r`n# use /reload in chat to hot-reload executable extensions and MCP-backed runtime tools
-```
-
-`capabilities` returns structured JSON with `kind`, `name`, `source`, `status`, `origin_type`, `path`, and capability-specific metadata.
-
-### Extension runtime API
-
-Project extensions continue to use `EXTENSION.json` + `extension.py`. The recommended runtime API is now `api.on(event_name, handler)` for lifecycle-style integration points such as `context_built`, `tool_call`, `tool_result`, `tool_error`, session/checkpoint events, and `resources_discover`. The older helper methods like `on_context_built()` and `on_before_tool_call()` remain supported for compatibility.
-
-`resources_discover` is evaluated during startup and `/reload`. Extensions can contribute extra `skill_paths`, `prompt_paths`, and `theme_paths`; contributed skill roots are appended after the built-in project/user/custom roots so they stay lower precedence than explicit project configuration.
-
-### Chat Runtime Commands
-
-Inside interactive chat, runtime-managed capabilities can now be inspected and refreshed directly:
-
-- `/reload`
-- `/skills list`
-- `/skills active`
-- `/skill:<name>`
-- `/skill use <name>`
-- `/skill clear`
-- `/skills reload`
-- `/mcp status`
-- `/mcp list`
-- `/mcp reload`
-
-Skills are injected lazily into the turn context when they are activated or matched. Explicit `/skill:<name>` activation takes precedence over automatic description matching. `MCP` servers stay undiscovered until runtime management or the first discovery path asks for them.
-
-### Skill compatibility
-
-`pp-agent` now supports both its legacy project layout and pi-style layouts:
-
-- prefer `.pi/skills/<name>/SKILL.md` for pi-compatible project-local skills
-- `.agents/skills/<name>/SKILL.md` is also discovered from the current workspace upward through parent directories
-- keep `.pp-agent/skills/<name>/SKILL.md` for existing projects and backwards compatibility
-- use `/skill:<name>` as the primary interactive activation command; `/skill use <name>` remains supported
-
-Current MCP adapter settings such as `tool_prefix`, `direct_tools`, and `lifecycle` remain forward-compatibility placeholders for the next alignment pass; this phase does not change MCP runtime behavior.
-
-## Example Workflows
-
-### Review a risky file change before it lands
-
-1. Ask the agent to update code.
-2. Let the planner pause at a risky step.
-3. Review the staged diff.
-4. Approve only when the change looks right.
-
-### Recover from a bad edit round
-
-1. Let the agent modify several files.
-2. Preview a rewind to the earlier checkpoint.
-3. Restore the workspace and conversation together.
-4. Continue from the restored branch instead of manually reconstructing the state.
-
-### Keep the workspace but rethink the conversation
-
-1. Make manual local edits you want to keep.
-2. Use `conversation_only`.
-3. Rewind the session branch without touching the files.
-
-## Validation
-
-```powershell
-set PYTHONPATH=src
-python -m pytest -q
-python -m pp_agent.cli.main --help
-python -m pp_agent.cli.main sessions tree
-python -m pp_agent.cli.main approvals summary
-python -m pp_agent.cli.main checkpoint list
-python -m pp_agent.cli.main rewind-safe --help
-python -m pp_agent.cli.main capabilities list
-python -m pp_agent.cli.main skills list
-python -m pp_agent.cli.main workflow repo --query "AgentSession"
-python -m pp_agent.cli.main config show
-```
-
-If `PP_AGENT_API_KEY` is missing or the network is blocked, the CLI should fail clearly instead of dumping an unhelpful stack trace.
-
-## Project Status
-
-The active implementation lives under `src/pp_agent`.
-Legacy import paths such as `agent_cli`, `agent_core`, `storage`, and `tools` are still present as compatibility shims during migration.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md)
+- Run tests with `python -m pytest`
+- Keep documentation and demo assets in sync when user-facing behavior changes
 
 ## License
 
-Add your preferred license here.
-
-
-
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

@@ -1,3 +1,17 @@
+"""
+PP-ECHO - 命令行入口模块
+===========================
+功能描述：
+    为Windows 10系统设计的Python编码代理CLI工具，**双命令行解析模式**：
+    1. 优先使用Typer库实现现代化、带自动补全的命令行交互
+    2. 降级兼容标准argparse库，无依赖时也可正常运行
+    提供聊天交互、指令执行、会话管理、审批管理、工作流、配置查看等核心功能
+适用场景：
+    开发者通过命令行与Python编码代理交互，管理会话、代码 checkpoint、能力插件等
+作者：CHEN
+日期：2026-04-03
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -9,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover
     typer = None
 
-
+# 初始化Typer主应用
 app = typer.Typer(help="Personal Python coding agent for Windows 10.") if typer else None
 
 
@@ -19,6 +33,11 @@ if app:
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
         session_id: Optional[str] = typer.Option(None, "--session"),
     ) -> None:
+        """
+        启动交互式聊天模式
+        :param workspace: 工作目录，默认当前目录
+        :param session_id: 会话ID，可选
+        """
         from pp_agent.cli.chat import chat_main
 
         chat_main(workspace, session_id)
@@ -32,11 +51,19 @@ if app:
         json_mode: bool = typer.Option(False, "--json"),
         mode: str = typer.Option("default", "--mode"),
     ) -> None:
+        """
+        执行单条指令，非交互式调用代理
+        :param prompt: 发送给代理的指令（必传）
+        :param workspace: 工作目录
+        :param session_id: 会话ID
+        :param json_mode: 是否以JSON格式返回结果
+        :param mode: 执行模式，默认default
+        """
         from pp_agent.cli.commands.run import run_main
 
         run_main(prompt, workspace, session_id, json_mode=json_mode, mode=mode)
 
-
+    # 注册二级子命令应用，分类管理不同功能模块
     sessions_app = typer.Typer(help="Manage stored sessions.")
     approvals_app = typer.Typer(help="Manage staged approvals.")
     workflow_app = typer.Typer(help="Guided repo-aware workflows.")
@@ -45,6 +72,8 @@ if app:
     checkpoint_app = typer.Typer(help="Manage git-backed checkpoints.")
     capabilities_app = typer.Typer(help="Inspect and reload discoverable capabilities.")
     skills_app = typer.Typer(help="Inspect discovered skills.")
+
+    # 将子命令组挂载到主应用
     app.add_typer(sessions_app, name="sessions")
     app.add_typer(approvals_app, name="approvals")
     app.add_typer(workflow_app, name="workflow")
@@ -56,6 +85,7 @@ if app:
 
     @sessions_app.command("list")
     def sessions_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """列出所有会话"""
         from pp_agent.cli.commands.sessions import sessions_list_main
 
         sessions_list_main(workspace)
@@ -67,6 +97,7 @@ if app:
         session_id: Optional[str] = typer.Option(None, "--session"),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
     ) -> None:
+        """以树形结构展示会话"""
         from pp_agent.cli.commands.sessions import sessions_tree_main
 
         sessions_tree_main(workspace, session_id=session_id, sort_mode=sort_mode)
@@ -74,6 +105,7 @@ if app:
 
     @sessions_app.command("fork")
     def sessions_fork(session_id: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """分叉会话"""
         from pp_agent.cli.commands.sessions import sessions_fork_main
 
         sessions_fork_main(workspace, session_id)
@@ -81,6 +113,7 @@ if app:
 
     @sessions_app.command("branch")
     def sessions_branch(session_id: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """分支会话（复用分叉逻辑）"""
         from pp_agent.cli.commands.sessions import sessions_fork_main
 
         sessions_fork_main(workspace, session_id)
@@ -92,6 +125,7 @@ if app:
         message_count: int,
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
     ) -> None:
+        """回退会话指定消息数"""
         from pp_agent.cli.commands.sessions import sessions_rewind_main
 
         sessions_rewind_main(workspace, session_id, message_count)
@@ -103,6 +137,7 @@ if app:
         turn_count: int,
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
     ) -> None:
+        """回退会话指定轮次"""
         from pp_agent.cli.commands.sessions import sessions_rewind_turn_main
 
         sessions_rewind_turn_main(workspace, session_id, turn_count)
@@ -110,6 +145,7 @@ if app:
 
     @approvals_app.command("list")
     def approvals_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """列出待审批项"""
         from pp_agent.cli.commands.approvals import approvals_list_main
 
         approvals_list_main(workspace)
@@ -117,6 +153,7 @@ if app:
 
     @approvals_app.command("summary")
     def approvals_summary(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """审批项概览"""
         from pp_agent.cli.commands.approvals import approvals_summary_main
 
         approvals_summary_main(workspace)
@@ -124,6 +161,7 @@ if app:
 
     @approvals_app.command("show")
     def approvals_show(token: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """查看指定审批项详情"""
         from pp_agent.cli.commands.approvals import approvals_show_main
 
         approvals_show_main(workspace, token)
@@ -131,6 +169,7 @@ if app:
 
     @approvals_app.command("approve")
     def approvals_approve(token: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """通过指定审批项"""
         from pp_agent.cli.commands.approvals import approvals_approve_main
 
         approvals_approve_main(workspace, token)
@@ -138,6 +177,7 @@ if app:
 
     @approvals_app.command("reject")
     def approvals_reject(token: str, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        """拒绝指定审批项"""
         from pp_agent.cli.commands.approvals import approvals_reject_main
 
         approvals_reject_main(workspace, token)
@@ -166,6 +206,7 @@ if app:
         staged_only: bool = typer.Option(False, "--staged-only"),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
     ) -> None:
+        """仓库感知的引导式工作流"""
         from pp_agent.cli.commands.workflow import workflow_repo_main
 
         workflow_repo_main(
@@ -204,6 +245,7 @@ if app:
         force_stash: bool = typer.Option(False, "--stash"),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
     ) -> None:
+        """创建Git快照（checkpoint）"""
         from pp_agent.cli.commands.checkpoint import checkpoint_create_main
 
         checkpoint_create_main(workspace, session_id, reason=reason, snapshot_type=snapshot_type, force_stash=force_stash)
@@ -298,10 +340,15 @@ if app:
 
 
 def main() -> None:
+    """
+    命令行工具主入口
+    逻辑：优先使用Typer模式，未安装则降级为argparse标准模式
+    """
     if app and typer:
         app()
         return
-
+    
+    # 无Typer依赖时，使用Python内置argparse实现相同功能
     parser = argparse.ArgumentParser(description="Personal Python coding agent for Windows 10.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     chat_parser = subparsers.add_parser("chat")

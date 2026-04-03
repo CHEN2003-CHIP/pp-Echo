@@ -1,3 +1,5 @@
+# @Author: CHEN
+# @Desc: PP-Echo 运行时核心模块，负责扩展管理、能力发现、会话创建、存储初始化、MCP集成等核心逻辑
 from __future__ import annotations
 
 import json
@@ -40,13 +42,27 @@ from pp_agent.tools.registry import ToolRegistry
 
 @dataclass
 class _ExtensionCapabilitySource:
+    """
+    【私有】扩展能力源数据类
+    负责Agent扩展的发现、注册、能力描述生成，是扩展能力接入的核心载体
+    """
+
+    # 工作空间根路径
     workspace: Path
+    # 用户配置根路径
     user_root: Path
+    # 扩展配置对象
     config: object
+    # 扩展注册器实例
     registry: ExtensionRegistry
+    # 扩展搜索根目录列表，默认空列表
     search_roots: list[object] = field(default_factory=list)
 
     def discover(self) -> list[CapabilityDescriptor]:
+        """
+        发现并加载所有扩展，生成扩展能力描述符列表
+        :return: 扩展能力描述符集合()
+        """
         for descriptor in load_extensions(
             self.workspace,
             self.user_root,
@@ -54,6 +70,7 @@ class _ExtensionCapabilitySource:
             search_roots=self.search_roots or None,
         ).values():
             self.registry.register(descriptor, status="discovered")
+        # 过滤MCP适配器扩展，转换为标准能力描述符返回
         return [self._descriptor(binding) for binding in self.registry.list() if binding.descriptor.name != "mcp_adapter"]
 
     def reload(self) -> None:
@@ -61,6 +78,11 @@ class _ExtensionCapabilitySource:
 
     @staticmethod
     def _descriptor(binding) -> CapabilityDescriptor:
+        """
+        【私有静态】将扩展绑定对象转换为标准能力描述符
+        :param binding: 扩展绑定对象
+        :return: 标准化能力描述符
+        """
         descriptor = binding.descriptor
         return CapabilityDescriptor(
             kind="extension",
@@ -93,19 +115,37 @@ class _ExtensionCapabilitySource:
 
 @dataclass
 class _MCPExtensionBackend:
+    """
+    【私有】MCP扩展后端数据类
+    负责MCP服务器适配、集成，将MCP工具/资源/提示词暴露为Agent能力
+    """
+
+    # 工作空间根路径
     workspace: Path
+    # MCP配置对象
     mcp_config: object
     registry: ExtensionRegistry
+    # 传输工厂对象，可选
     transport_factory: object | None = None
+    # 时间函数对象，可选
     time_fn: object | None = None
+    # MCP管理器实例，初始化不赋值，内部使用
     _manager: MCPManager | None = field(default=None, init=False, repr=False)
+    # 配置指纹，用于校验配置是否变更，内部使用
     _fingerprint: str | None = field(default=None, init=False, repr=False)
 
     def discover(self) -> list[CapabilityDescriptor]:
+        """
+        发现MCP扩展能力，加载MCP服务器并生成能力描述符
+        :return: MCP相关能力描述符集合
+        """
+
+        # MCP未启用则清空并返回空列表
         if not getattr(self.mcp_config, "enable", False):
             self.reload()
             return []
 
+        # 注册MCP适配器扩展
         extension_descriptor = ExtensionDescriptor(
             name="mcp_adapter",
             description="Expose MCP servers as extension-backed capabilities.",
@@ -118,11 +158,13 @@ class _MCPExtensionBackend:
         )
         self.registry.register(extension_descriptor, status="loaded")
         try:
+            # 获取当前配置的MCP管理器
             manager = self._manager_for_current_config()
         except Exception as exc:  # pragma: no cover - defensive path
             self.registry.mark_errored("mcp_adapter", str(exc))
             return []
-
+        
+        # 初始化MCP适配器能力描述符
         descriptors: list[CapabilityDescriptor] = [
             CapabilityDescriptor(
                 kind="extension",
@@ -153,13 +195,16 @@ class _MCPExtensionBackend:
         ]
         loaded_tools: list[str] = []
         loaded_resources: list[str] = []
+        # 遍历所有MCP服务器，解析工具、资源、提示词能力
         for server_name in manager.server_names():
             if not self._includes_server(server_name):
                 continue
+            # 处理MCP工具
             for tool in manager.list_mcp_tools(server_name):
                 qualified = self._qualified_name(server_name, tool.name)
                 loaded_tools.append(qualified)
                 descriptors.append(
+                    #能力描述清单
                     CapabilityDescriptor(
                         kind="mcp_tool",
                         name=qualified,
@@ -240,6 +285,7 @@ class _MCPExtensionBackend:
                         },
                     )
                 )
+        # 更新MCP适配器扩展的加载状态
         self.registry.mark_loaded(
             "mcp_adapter",
             loaded_tools=loaded_tools,
@@ -258,6 +304,7 @@ class _MCPExtensionBackend:
         return descriptors
 
     def reload(self) -> None:
+        """重新加载MCP扩展，关闭所有会话、重置管理器和配置指纹"""
         if self._manager is not None:
             self._manager.close_all_sessions()
         binding = self.registry.get("mcp_adapter")
@@ -267,6 +314,10 @@ class _MCPExtensionBackend:
         self._fingerprint = None
 
     def _manager_for_current_config(self) -> MCPManager:
+        """
+        【私有】根据当前配置创建/获取MCP管理器，配置变更则重建
+        :return: MCP管理器实例
+        """
         project_dir = self.workspace.resolve() / ".pp-agent"
         config_paths = getattr(self.mcp_config, "resolved_config_paths")(project_dir)
         servers = [
@@ -291,10 +342,21 @@ class _MCPExtensionBackend:
 
 
 def load_settings(workspace: Path) -> Settings:
+    """
+    加载工作空间的全局配置
+    :param workspace: 工作空间路径
+    :return: 配置实例
+    """
     return Settings.load(workspace)
 
 
 def create_session_store(settings: Settings) -> SessionStore:
+    """
+    创建会话存储实例，兼容全局/项目目录，处理权限异常
+    :param settings: 配置实例
+    :return: 会话存储实例
+    :raises PermissionError: 无写入权限时抛出
+    """
     candidates = [settings.global_dir / "sessions", settings.project_dir / "global" / "sessions"]
     last_error: Optional[Exception] = None
     for candidate in candidates:
@@ -309,10 +371,21 @@ def create_session_store(settings: Settings) -> SessionStore:
 
 
 def session_store_for(workspace: Path) -> SessionStore:
+    """
+    根据工作空间获取会话存储实例
+    :param workspace: 工作空间路径
+    :return: 会话存储实例
+    """
     return create_session_store(load_settings(workspace))
 
 
 def timeline_store_for(workspace: Path) -> TimelineStore:
+    """
+    根据工作空间获取时间线存储实例
+    :param workspace: 工作空间路径
+    :return: 时间线存储实例
+    :raises PermissionError: 无写入权限时抛出
+    """
     settings = load_settings(workspace)
     candidates = [settings.global_dir / "timelines", settings.project_dir / "global" / "timelines"]
     last_error: Optional[Exception] = None
@@ -328,10 +401,21 @@ def timeline_store_for(workspace: Path) -> TimelineStore:
 
 
 def pending_action_store_for(workspace: Path) -> PendingActionStore:
+    """
+    根据工作空间获取待执行动作存储实例
+    :param workspace: 工作空间路径
+    :return: 待执行动作存储实例
+    """
     return PendingActionStore(workspace.resolve() / ".pp-agent" / "pending-edits")
 
 
 def checkpoint_store_for(workspace: Path) -> CheckpointStore:
+    """
+    根据工作空间获取检查点存储实例
+    :param workspace: 工作空间路径
+    :return: 检查点存储实例
+    :raises PermissionError: 无写入权限时抛出
+    """
     settings = load_settings(workspace)
     candidates = [settings.global_dir / "checkpoints", settings.project_dir / "global" / "checkpoints"]
     last_error: Optional[Exception] = None
@@ -347,6 +431,11 @@ def checkpoint_store_for(workspace: Path) -> CheckpointStore:
 
 
 def create_tool_registry(workspace: Path) -> ToolRegistry:
+    """
+    创建工具注册器实例
+    :param workspace: 工作空间路径
+    :return: 工具注册器实例
+    """
     settings = load_settings(workspace)
     return ToolRegistry(workspace, policy=settings.tool_policy)
 
@@ -358,6 +447,14 @@ def create_capability_catalog(
     transport_factory=None,
     time_fn=None,
 ) -> CapabilityCatalog:
+    """
+    创建能力目录，整合所有能力提供者
+    :param workspace: 工作空间路径
+    :param include_mcp: 是否包含MCP能力，可选
+    :param transport_factory: MCP传输工厂，可选
+    :param time_fn: 时间函数，可选
+    :return: 能力目录实例
+    """
     settings = load_settings(workspace)
     providers = create_capability_providers(
         workspace,
@@ -375,6 +472,13 @@ def create_capability_catalog_with_mcp(
     transport_factory=None,
     time_fn=None,
 ) -> CapabilityCatalog:
+    """
+    创建包含MCP能力的能力目录
+    :param workspace: 工作空间路径
+    :param transport_factory: MCP传输工厂，可选
+    :param time_fn: 时间函数，可选
+    :return: 能力目录实例
+    """
     return create_capability_catalog(workspace, include_mcp=True, transport_factory=transport_factory, time_fn=time_fn)
 
 
@@ -386,6 +490,15 @@ def create_capability_providers(
     transport_factory=None,
     time_fn=None,
 ) -> list[CapabilityDiscoveryProvider]:
+    """
+    创建所有能力发现提供者（技能、扩展、内置工具、MCP）
+    :param workspace: 工作空间路径
+    :param settings: 配置实例，可选
+    :param include_mcp: 是否包含MCP，可选
+    :param transport_factory: MCP传输工厂，可选
+    :param time_fn: 时间函数，可选
+    :return: 能力发现提供者列表
+    """
     settings = settings or load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
     extension_registry = ExtensionRegistry()
@@ -432,20 +545,43 @@ def create_mcp_manager(
     transport_factory=None,
     time_fn=None,
 ) -> MCPManager:
+    """
+    创建MCP管理器实例
+    :param workspace: 工作空间路径
+    :param transport_factory: 传输工厂，可选
+    :param time_fn: 时间函数，可选
+    :return: MCP管理器实例
+    """
     settings = load_settings(workspace)
     config_paths = settings.capabilities.mcp.resolved_config_paths(settings.project_dir)
     return MCPManager.from_workspace(workspace, transport_factory=transport_factory, time_fn=time_fn, config_paths=config_paths)
 
 
 def provider_config_for_llm(config: StoredProviderConfig) -> ProviderConfig:
+    """
+    转换存储的提供者配置为LLM运行时配置
+    :param config: 存储的提供者配置
+    :return: 运行时提供者配置
+    """
     return ProviderConfig(**config.model_dump(mode="python"))
 
 
 def model_config_for_llm(config: StoredModelConfig) -> ModelConfig:
+    """
+    转换存储的模型配置为LLM运行时配置
+    :param config: 存储的模型配置
+    :return: 运行时模型配置
+    """
     return ModelConfig(**config.model_dump(mode="python"))
 
 
 def confirm_tool_call(tool_name: str, args: dict) -> bool:
+    """
+    工具调用确认回调，支持命令行交互确认
+    :param tool_name: 工具名称
+    :param args: 工具参数
+    :return: 确认通过返回True
+    """
     try:
         import typer
     except ImportError:  # pragma: no cover
@@ -462,6 +598,13 @@ def create_runtime_from_record(
     record: SessionRecord,
     lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
 ) -> AgentRuntime:
+    """
+    根据会话记录创建Agent运行时实例
+    :param workspace: 工作空间路径
+    :param record: 会话记录
+    :param lifecycle_subscribers: 生命周期订阅器，可选
+    :return: Agent运行时实例
+    """
     settings = load_settings(workspace)
     session_store = session_store_for(workspace)
     tool_registry = ToolRegistry(workspace, policy=settings.tool_policy)
@@ -484,12 +627,15 @@ def create_runtime_from_record(
         runtime_hooks=runtime_hooks,
         timeline_store=timeline_store_for(workspace),
     )
+    # 安装自动检查点钩子
     _install_auto_checkpoint_hook(
         agent=agent,
         workspace=workspace,
         manager=GitCheckpointManager(workspace, checkpoint_store_for(workspace), session_store),
     )
+    # 保存运行时钩子基线快照
     setattr(agent, "_baseline_runtime_hooks_snapshot", agent.runtime_hooks.snapshot())
+    # 加载可执行扩展
     extension_runtime = load_executable_extensions(
         workspace,
         settings=settings,
@@ -497,6 +643,7 @@ def create_runtime_from_record(
         runtime_hooks=agent.runtime_hooks,
         search_roots=_extension_roots_for(workspace.resolve(), settings),
     )
+    # 发现扩展资源根目录
     extension_resource_roots = discover_extension_resource_roots(extension_runtime, workspace.resolve(), reason="startup")
     skill_runtime = SkillRuntime(
         workspace=workspace.resolve(),
@@ -504,6 +651,7 @@ def create_runtime_from_record(
         config=settings.capabilities.skills,
         search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
+    # 注册上下文转换钩子
     agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
@@ -525,6 +673,15 @@ def reload_runtime_extensions(
     transport_factory=None,
     time_fn=None,
 ) -> dict[str, object]:
+    """
+    重新加载运行时扩展，重置缓存、重建扩展/技能实例
+    :param agent: Agent运行时实例
+    :param workspace: 工作空间路径
+    :param include_mcp: 是否包含MCP，可选
+    :param transport_factory: MCP传输工厂，可选
+    :param time_fn: 时间函数，可选
+    :return: 扩展加载统计信息
+    """
     settings = load_settings(workspace)
     previous_runtime = getattr(agent, "_extension_runtime", None)
     if previous_runtime is not None:
@@ -595,11 +752,21 @@ def reload_runtime_extensions(
 
 
 def session_defaults_for(workspace: Path) -> dict[str, object]:
+    """
+    获取会话默认配置（系统提示词、模型）
+    :param workspace: 工作空间路径
+    :return: 会话默认配置字典
+    """
     settings = load_settings(workspace)
     return {"system_prompt": settings.system_prompt, "model": settings.model.model_copy(deep=True)}
 
 
 def create_session_host(workspace: Path) -> SessionHost:
+    """
+    创建会话宿主实例，统一管理会话生命周期
+    :param workspace: 工作空间路径
+    :return: 会话宿主实例
+    """
     _ = workspace
     return SessionHost(
         runtime_factory=create_runtime_from_record,
@@ -615,6 +782,13 @@ def build_agent(
     session_id: Optional[str] = None,
     lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
 ) -> AgentRuntime:
+    """
+    构建Agent运行时（创建新会话/恢复历史会话）
+    :param workspace: 工作空间路径
+    :param session_id: 会话ID，可选（不传则创建新会话）
+    :param lifecycle_subscribers: 生命周期订阅器，可选
+    :return: Agent运行时实例
+    """
     host = create_session_host(workspace)
     if session_id:
         return host.restore_session(workspace, session_id, lifecycle_subscribers=lifecycle_subscribers)
@@ -622,18 +796,40 @@ def build_agent(
 
 
 def switch_session_head(workspace: Path, session_id: str, head_id: Optional[str], subscribers: Optional[list[LifecycleSubscriber]] = None) -> str:
+    """
+    切换会话的头节点（版本回滚/切换）
+    :param workspace: 工作空间路径
+    :param session_id: 会话ID
+    :param head_id: 头节点ID
+    :param subscribers: 生命周期订阅器，可选
+    :return: 切换后的会话ID
+    """
     host = create_session_host(workspace)
     runtime = host.switch_session(workspace, session_id, session_id, target_head_id=head_id, lifecycle_subscribers=subscribers)
     return runtime.session_id
 
 
 def fork_session(workspace: Path, source_session_id: str, source_turn_id: Optional[str] = None, subscribers: Optional[list[LifecycleSubscriber]] = None) -> str:
+    """
+    从指定会话分叉出新会话
+    :param workspace: 工作空间路径
+    :param source_session_id: 源会话ID
+    :param source_turn_id: 源回合ID，可选
+    :param subscribers: 生命周期订阅器，可选
+    :return: 新会话ID
+    """
     host = create_session_host(workspace)
     result = host.fork_session(workspace, source_session_id, head_id=source_turn_id, lifecycle_subscribers=subscribers)
     return result.session_id
 
 
 def view_session_tree(workspace: Path, session_id: Optional[str] = None, subscribers: Optional[list[LifecycleSubscriber]] = None) -> None:
+    """
+    查看会话树结构（版本历史）
+    :param workspace: 工作空间路径
+    :param session_id: 会话ID，可选
+    :param subscribers: 生命周期订阅器，可选
+    """
     create_session_host(workspace).get_tree(workspace, session_id=session_id, lifecycle_subscribers=subscribers)
 
 
@@ -645,6 +841,15 @@ def rewind_session_with_events(
     turn_count: Optional[int] = None,
     subscribers: Optional[list[LifecycleSubscriber]] = None,
 ) -> str:
+    """
+    回滚会话（按消息数/回合数）
+    :param workspace: 工作空间路径
+    :param source_session_id: 源会话ID
+    :param message_count: 回滚消息数，可选
+    :param turn_count: 回滚回合数，可选
+    :param subscribers: 生命周期订阅器，可选
+    :return: 回滚后的会话ID
+    """
     result = create_session_host(workspace).rewind_session(
         workspace,
         source_session_id,
@@ -660,6 +865,13 @@ def _skill_roots_for(
     settings: Settings,
     extra_paths: Optional[list[Path]] = None,
 ) -> list[object]:
+    """
+    【私有】获取技能搜索根目录，整合清单、扩展、自定义路径
+    :param workspace: 工作空间路径
+    :param settings: 配置实例
+    :param extra_paths: 额外路径，可选
+    :return: 技能根目录列表
+    """
     manifest = load_resource_manifest(settings.project_dir)
     roots = skill_search_roots(workspace, settings.global_dir, config=settings.capabilities.skills)
     replaced = _replace_project_skill_roots(roots, settings, manifest.skills)
@@ -667,12 +879,25 @@ def _skill_roots_for(
 
 
 def _extension_roots_for(workspace: Path, settings: Settings) -> list[object]:
+    """
+    【私有】获取扩展搜索根目录，整合清单路径
+    :param workspace: 工作空间路径
+    :param settings: 配置实例
+    :return: 扩展根目录列表
+    """
     manifest = load_resource_manifest(settings.project_dir)
     roots = extension_search_roots(workspace, settings.global_dir, config=settings.capabilities.extensions)
     return _replace_project_extension_roots(roots, settings, manifest.extensions)
 
 
 def _replace_project_skill_roots(roots: list[object], settings: Settings, manifest_entries: list[str]) -> list[object]:
+    """
+    【私有】替换项目技能根目录为清单配置的路径
+    :param roots: 原始根目录列表
+    :param settings: 配置实例
+    :param manifest_entries: 清单条目
+    :return: 替换后的根目录列表
+    """
     if not manifest_entries:
         return roots
     custom_count = len(settings.capabilities.skills.custom_directories)
@@ -682,6 +907,12 @@ def _replace_project_skill_roots(roots: list[object], settings: Settings, manife
 
 
 def _append_extension_skill_roots(roots: list[object], extra_paths: list[Path]) -> list[object]:
+    """
+    【私有】追加扩展技能根目录
+    :param roots: 原始根目录列表
+    :param extra_paths: 额外路径
+    :return: 追加后的根目录列表
+    """
     if not extra_paths:
         return roots
     existing = {str(getattr(root, "path", "")) for root in roots}
@@ -711,6 +942,13 @@ def _append_extension_skill_roots(roots: list[object], extra_paths: list[Path]) 
 
 
 def _replace_project_extension_roots(roots: list[object], settings: Settings, manifest_entries: list[str]) -> list[object]:
+    """
+    【私有】替换项目扩展根目录为清单配置的路径
+    :param roots: 原始根目录列表
+    :param settings: 配置实例
+    :param manifest_entries: 清单条目
+    :return: 替换后的根目录列表
+    """
     if not manifest_entries:
         return roots
     custom_count = len(settings.capabilities.extensions.custom_directories)
@@ -720,6 +958,12 @@ def _replace_project_extension_roots(roots: list[object], settings: Settings, ma
 
 
 def _install_auto_checkpoint_hook(*, agent: AgentRuntime, workspace: Path, manager: GitCheckpointManager) -> None:
+    """
+    【私有】安装自动检查点钩子，高危工具调用前自动创建快照
+    :param agent: Agent运行时实例
+    :param workspace: 工作空间路径
+    :param manager: Git检查点管理器
+    """
     def before_tool_call(state, call, _registry):
         if not _should_auto_checkpoint(workspace, call.name, call.arguments):
             return BeforeToolCallDecision(action="allow")
@@ -761,6 +1005,13 @@ def _install_auto_checkpoint_hook(*, agent: AgentRuntime, workspace: Path, manag
 
 
 def _should_auto_checkpoint(workspace: Path, tool_name: str, arguments: dict) -> bool:
+    """
+    【私有】判断是否需要自动创建检查点（文件修改、shell执行等高危操作）
+    :param workspace: 工作空间路径
+    :param tool_name: 工具名称
+    :param arguments: 工具参数
+    :return: 需要检查点返回True
+    """
     if tool_name in {"write_file", "edit_file"}:
         return bool(arguments.get("apply"))
     if tool_name == "run_shell":

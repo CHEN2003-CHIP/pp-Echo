@@ -1,0 +1,37 @@
+<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="1180" y2="680" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08111F"/>
+      <stop offset="1" stop-color="#163257"/>
+    </linearGradient>
+    <linearGradient id="card" x1="250" y1="170" x2="1080" y2="580" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0E1A2C"/>
+      <stop offset="1" stop-color="#132844"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" rx="32" fill="url(#bg)"/>
+  <circle cx="1103" cy="125" r="132" fill="#59D0A8" fill-opacity="0.16"/>
+  <circle cx="189" cy="569" r="180" fill="#7DD3FC" fill-opacity="0.10"/>
+  <rect x="72" y="72" width="1136" height="576" rx="28" fill="url(#card)" stroke="#25446E"/>
+  <text x="124" y="162" fill="#59D0A8" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700">WINDOWS-FIRST CODING AGENT</text>
+  <text x="124" y="244" fill="#F8FBFF" font-family="Segoe UI, Arial, sans-serif" font-size="58" font-weight="700">Plan before act.</text>
+  <text x="124" y="318" fill="#F8FBFF" font-family="Segoe UI, Arial, sans-serif" font-size="58" font-weight="700">Approve risky moves.</text>
+  <text x="124" y="392" fill="#F8FBFF" font-family="Segoe UI, Arial, sans-serif" font-size="58" font-weight="700">Rewind repo + chat safely.</text>
+  <text x="124" y="458" fill="#9DB0CF" font-family="Segoe UI, Arial, sans-serif" font-size="26">pp-Echo makes coding-agent workflows feel visible, reversible, and practical inside a real repository.</text>
+  <rect x="124" y="514" width="218" height="54" rx="27" fill="#59D0A8" fill-opacity="0.15" stroke="#59D0A8"/>
+  <text x="152" y="548" fill="#59D0A8" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700">plan-before-act</text>
+  <rect x="360" y="514" width="190" height="54" rx="27" fill="#7DD3FC" fill-opacity="0.15" stroke="#7DD3FC"/>
+  <text x="392" y="548" fill="#7DD3FC" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700">approvals</text>
+  <rect x="568" y="514" width="266" height="54" rx="27" fill="#F8D66D" fill-opacity="0.15" stroke="#F8D66D"/>
+  <text x="602" y="548" fill="#F8D66D" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700">git-backed rewind</text>
+  <rect x="816" y="178" width="310" height="276" rx="24" fill="#08111F" stroke="#26486F"/>
+  <circle cx="852" cy="208" r="7" fill="#FF6B6B"/>
+  <circle cx="878" cy="208" r="7" fill="#F8D66D"/>
+  <circle cx="904" cy="208" r="7" fill="#59D0A8"/>
+  <text x="846" y="248" fill="#9DB0CF" font-family="Consolas, monospace" font-size="20">&gt; start-agent.bat</text>
+  <text x="846" y="292" fill="#F8FBFF" font-family="Consolas, monospace" font-size="18">assistant&gt; Planned steps:</text>
+  <text x="846" y="326" fill="#59D0A8" font-family="Consolas, monospace" font-size="18">1. inspect repo</text>
+  <text x="846" y="358" fill="#59D0A8" font-family="Consolas, monospace" font-size="18">2. preview risky edits</text>
+  <text x="846" y="390" fill="#59D0A8" font-family="Consolas, monospace" font-size="18">3. wait for approval</text>
+  <text x="846" y="434" fill="#F8D66D" font-family="Consolas, monospace" font-size="18">checkpoint + rewind-safe ready</text>
+</svg>

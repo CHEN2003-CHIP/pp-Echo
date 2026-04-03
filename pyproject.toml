@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pp-agent"
 version = "0.2.0"
-description = "Personal coding agent for Windows 10 with Qwen via Alibaba Bailian."
+description = "A Windows-first coding agent CLI with plan-before-act, approval gates, session branching, and git-backed safe rewind."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
