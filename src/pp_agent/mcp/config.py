@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,15 +20,37 @@ class MCPServerConfig(BaseModel):
 
     name: str
     description: str = ""
-    transport: str = "stdio"
+    transport: Optional[str] = None
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
+    url: Optional[str] = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    bearer_token: Optional[str] = None
+    bearer_token_env: Optional[str] = None
     env: dict[str, str] = Field(default_factory=dict)
     cwd: Optional[str] = None
     is_remote: bool = False
     requires_auth: bool = False
     approval_mode: str = "default"
     idle_timeout_seconds: int = 300
+    timeout_seconds: int = 30
+
+    def resolved_transport(self) -> str:
+        value = (self.transport or "").strip().lower()
+        if value and value != "auto":
+            return value
+        if self.url:
+            return "http"
+        return "stdio"
+
+    def resolved_headers(self) -> dict[str, str]:
+        headers = dict(self.headers)
+        token = self.bearer_token
+        if token is None and self.bearer_token_env:
+            token = os.getenv(self.bearer_token_env)
+        if token:
+            headers.setdefault("Authorization", f"Bearer {token}")
+        return headers
 
 
 class MCPConfigDocument(BaseModel):
@@ -78,4 +101,8 @@ def _parse_mcp_document(path: Path) -> MCPConfigDocument:
 def _apply_mcp_defaults(server: MCPServerConfig, settings: MCPTransportSettings) -> MCPServerConfig:
     if "idle_timeout_seconds" not in server.model_fields_set:
         server.idle_timeout_seconds = settings.idle_timeout
+    if "is_remote" not in server.model_fields_set and server.url:
+        server.is_remote = True
+    if server.url and not server.description:
+        server.description = f"Remote MCP server at {server.url}"
     return server

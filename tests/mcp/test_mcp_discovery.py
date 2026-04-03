@@ -83,17 +83,24 @@ def test_mcp_discovery_order_is_stable(tmp_path: Path) -> None:
     assert second == ["alpha", "beta"]
 
 
-def test_load_mcp_config_supports_legacy_and_extended_shapes(tmp_path: Path) -> None:
+def test_load_mcp_config_supports_legacy_and_extended_shapes(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("DEMO_MCP_TOKEN", "secret-token")
     legacy = project_dir / "legacy.json"
-    legacy.write_text(json.dumps({"servers": [{"name": "legacy"}]}), encoding="utf-8")
+    legacy.write_text(json.dumps({"servers": [{"name": "legacy", "command": "python", "args": ["server.py"]}]}), encoding="utf-8")
     extended = project_dir / "extended.json"
     extended.write_text(
         json.dumps(
             {
                 "settings": {"tool_prefix": "adapter", "idle_timeout": 12},
-                "servers": [{"name": "extended"}],
+                "servers": [
+                    {
+                        "name": "extended",
+                        "url": "https://example.com/mcp",
+                        "bearer_token_env": "DEMO_MCP_TOKEN",
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -103,6 +110,9 @@ def test_load_mcp_config_supports_legacy_and_extended_shapes(tmp_path: Path) -> 
 
     assert document.settings.tool_prefix == "adapter"
     assert [item.name for item in document.servers] == ["legacy", "extended"]
+    assert document.servers[0].resolved_transport() == "stdio"
+    assert document.servers[1].resolved_transport() == "http"
+    assert document.servers[1].resolved_headers()["Authorization"] == "Bearer secret-token"
     assert document.servers[-1].idle_timeout_seconds == 12
 
 
@@ -121,4 +131,5 @@ def test_load_mcp_server_configs_supports_mcp_servers_mapping(tmp_path: Path) ->
 
     assert [item.name for item in servers] == ["demo"]
     assert servers[0].command == "npx"
+    assert servers[0].resolved_transport() == "stdio"
     assert servers[0].idle_timeout_seconds == 7

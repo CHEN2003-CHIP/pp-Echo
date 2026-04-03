@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
+import threading
 
 from pp_agent.app.bootstrap import create_mcp_manager
 
@@ -155,7 +157,6 @@ for line in sys.stdin:
                     {
                         "name": "demo",
                         "description": "Echo back user text",
-                        "transport": "stdio",
                         "command": sys.executable,
                         "args": [str(server_script)],
                     }
@@ -172,3 +173,72 @@ for line in sys.stdin:
 
     assert tools[0].name == "echo"
     assert result.content == "hello"
+
+
+def test_default_http_transport_can_talk_to_demo_server(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    requests_seen: list[dict] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8")
+            request = json.loads(body)
+            requests_seen.append(request)
+            method = request.get("method")
+            params = request.get("params", {})
+            result: dict[str, object]
+            if method == "initialize":
+                result = {"ok": True}
+            elif method == "list_tools":
+                result = {"tools": [{"name": "echo", "description": "Echo tool"}]}
+            elif method == "list_resources":
+                result = {"resources": []}
+            elif method == "list_prompts":
+                result = {"prompts": []}
+            elif method == "call_tool":
+                result = {"content": params.get("arguments", {}).get("message", ""), "payload": {}, "is_error": False}
+            else:
+                result = {"ok": True}
+            payload = json.dumps({"id": request.get("id"), "result": result}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        (project_dir / "mcp.json").write_text(
+            json.dumps(
+                {
+                    "servers": [
+                        {
+                            "name": "demo-http",
+                            "url": f"http://127.0.0.1:{server.server_port}/mcp",
+                            "bearer_token": "token-123",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        manager = create_mcp_manager(tmp_path)
+
+        tools = manager.list_mcp_tools("demo-http")
+        result = manager.call_mcp_tool("demo-http", "echo", {"message": "hello"})
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert tools[0].name == "echo"
+    assert result.content == "hello"
+    assert requests_seen[0]["method"] == "initialize"
+    assert requests_seen[-1]["method"] == "call_tool"

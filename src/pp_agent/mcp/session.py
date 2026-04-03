@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol
 
@@ -121,10 +123,71 @@ class _StdioJsonMCPClient:
         return result
 
 
+class _HttpJsonMCPClient:
+    def __init__(self, config: MCPServerConfig) -> None:
+        if not config.url:
+            raise ValueError(f"MCP HTTP server {config.name!r} requires a url")
+        self._url = config.url
+        self._headers = config.resolved_headers()
+        self._timeout_seconds = config.timeout_seconds
+        self._request_id = 0
+
+    def initialize(self) -> None:
+        self._request("initialize", {})
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        payload = self._request("list_tools", {})
+        return list(payload.get("tools", []))
+
+    def list_resources(self) -> list[dict[str, Any]]:
+        payload = self._request("list_resources", {})
+        return list(payload.get("resources", []))
+
+    def list_prompts(self) -> list[dict[str, Any]]:
+        payload = self._request("list_prompts", {})
+        return list(payload.get("prompts", []))
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._request("call_tool", {"name": name, "arguments": arguments})
+
+    def read_resource(self, uri: str) -> dict[str, Any]:
+        return self._request("read_resource", {"uri": uri})
+
+    def get_prompt(self, name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return self._request("get_prompt", {"name": name, "arguments": arguments or {}})
+
+    def close(self) -> None:
+        return None
+
+    def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self._request_id += 1
+        payload = json.dumps({"id": self._request_id, "method": method, "params": params}, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "application/json", **self._headers}
+        request = urllib.request.Request(self._url, data=payload, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"MCP HTTP server returned {exc.code}: {body}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Unable to reach MCP HTTP server {self._url}: {exc.reason}") from exc
+        message = json.loads(body)
+        if "error" in message:
+            raise RuntimeError(str(message["error"]))
+        result = message.get("result", {})
+        if not isinstance(result, dict):
+            raise RuntimeError(f"MCP response for {method!r} must be an object")
+        return result
+
+
 def _default_transport_factory(config: MCPServerConfig) -> MCPClientProtocol:
-    if config.transport == "stdio":
+    transport = config.resolved_transport()
+    if transport == "stdio":
         return _StdioJsonMCPClient(config)
-    raise NotImplementedError(f"Unsupported MCP transport {config.transport!r} for server {config.name!r}.")
+    if transport == "http":
+        return _HttpJsonMCPClient(config)
+    raise NotImplementedError(f"Unsupported MCP transport {transport!r} for server {config.name!r}.")
 
 
 @dataclass
