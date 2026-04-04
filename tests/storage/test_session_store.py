@@ -4,7 +4,7 @@ from agent_core.types import ChatMessage, ModelConfig, TextPart
 from storage.sessions import SessionStore
 
 
-def test_session_store_save_and_load_uses_single_tree_file(tmp_path: Path) -> None:
+def test_session_store_save_and_load_uses_per_session_jsonl_file(tmp_path: Path) -> None:
     store = SessionStore(tmp_path)
     record = store.create("hello", ModelConfig())
     record.metadata.compaction.summary = "old messages"
@@ -12,12 +12,27 @@ def test_session_store_save_and_load_uses_single_tree_file(tmp_path: Path) -> No
     saved_path = store.save(record)
 
     assert saved_path.exists()
-    assert saved_path.name == "session-tree.jsonl"
+    assert saved_path.name == f"{record.id}.jsonl"
     loaded = store.load(record.id)
     assert loaded.id == record.id
     assert loaded.system_prompt == "hello"
     assert loaded.model.model == record.model.model
     assert loaded.compaction.summary == "old messages"
+
+
+def test_session_store_save_is_append_only_for_existing_session(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    store.save(record)
+    path = tmp_path / f"{record.id}.jsonl"
+    original_lines = path.read_text(encoding="utf-8").splitlines()
+
+    record.messages = [ChatMessage(role="user", content=[TextPart(text="hello")], timestamp=1.0)]
+    store.save(record)
+    updated_lines = path.read_text(encoding="utf-8").splitlines()
+
+    assert len(updated_lines) > len(original_lines)
+    assert updated_lines[: len(original_lines)] == original_lines
 
 
 def test_session_store_fork_creates_parent_child_link(tmp_path: Path) -> None:
@@ -250,3 +265,49 @@ def test_session_store_fork_from_compaction_head_uses_head_branch(tmp_path: Path
     assert forked.compaction.summary == "summary line"
     assert forked.messages == saved.messages
     assert forked.active_head_id is not None
+
+
+def test_session_store_turn_node_uses_indexed_lookup(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="u1")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="a1")], timestamp=2.0),
+    ]
+    store.save(record)
+    loaded = store.load(record.id)
+
+    node = store.turn_node(loaded, loaded.active_head_id)
+
+    assert node is not None
+    assert loaded._turn_index[loaded.active_head_id].id == node.id
+
+
+def test_session_store_migrates_legacy_session_tree_to_per_session_files(tmp_path: Path) -> None:
+    legacy_path = tmp_path / "session-tree.jsonl"
+    record = SessionStore(tmp_path).create("hello", ModelConfig())
+    record.messages = [ChatMessage(role="user", content=[TextPart(text="legacy")], timestamp=1.0)]
+    legacy_path.write_text(
+        '{"type":"session","data":' + record.model_dump_json() + '}\n',
+        encoding="utf-8",
+    )
+
+    store = SessionStore(tmp_path)
+    migrated = store.load(record.id)
+    session_file = tmp_path / f"{record.id}.jsonl"
+
+    assert migrated.id == record.id
+    assert session_file.exists()
+    assert "session_snapshot" in session_file.read_text(encoding="utf-8")
+
+
+def test_session_store_tree_skips_partial_session_files_without_snapshot(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    good = store.create("hello", ModelConfig())
+    store.save(good)
+    (tmp_path / "broken-session.jsonl").write_text('{"type":"metadata_created","session_id":"broken"}\n', encoding="utf-8")
+
+    tree = store.tree()
+
+    assert len(tree) == 1
+    assert tree[0].id == good.id

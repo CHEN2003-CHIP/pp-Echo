@@ -67,9 +67,9 @@ def render_event(event: AgentEvent) -> None:
         console.print("Planned steps:")
     elif event.type == "planner_step" and event.plan_step is not None:
         if event.plan_step.status == "pending":
-            console.print(f"  {format_plan_step(event.plan_step)}")
+            console.print(f"  {format_plan_step(event.plan_step)}", markup=False)
         else:
-            console.print(f"Planner update: {format_plan_step(event.plan_step)}")
+            console.print(f"Planner update: {format_plan_step(event.plan_step)}", markup=False)
     elif event.type == "planner_end":
         token = event.details.get("token")
         if event.details.get("requires_approval"):

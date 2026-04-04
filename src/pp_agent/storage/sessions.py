@@ -1,17 +1,20 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import time
 import uuid
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
-from pp_agent.domain import QueuedMessage
-from pp_agent.domain import ChatMessage, CompactionState, TextPart, ToolCall
-from pp_agent.storage.models import StoredModelConfig
+from pp_agent.domain import ChatMessage, CompactionState, QueuedMessage, TextPart, ToolCall
 from pp_agent.storage.migrations import load_legacy_session_payloads
+from pp_agent.storage.models import StoredModelConfig
+
+
+SNAPSHOT_EVENT = "session_snapshot"
+LEGACY_TREE_NAME = "session-tree.jsonl"
 
 
 class SessionTurnNode(BaseModel):
@@ -44,6 +47,7 @@ class SessionMetadata(BaseModel):
 class SessionRecord(BaseModel):
     metadata: SessionMetadata
     messages: list[ChatMessage] = Field(default_factory=list)
+    _turn_index: dict[str, SessionTurnNode] = PrivateAttr(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -119,39 +123,50 @@ class SessionStore:
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.tree_path = self.root / "session-tree.jsonl"
+        self.legacy_tree_path = self.root / LEGACY_TREE_NAME
         self._migrate_legacy_files()
 
     def create(self, system_prompt: str, model: StoredModelConfig) -> SessionRecord:
         now = time.time()
-        return SessionRecord(
-            metadata=SessionMetadata(
-                id=str(uuid.uuid4()),
-                created_at=now,
-                updated_at=now,
-                model=model.model_copy(deep=True),
-                system_prompt=system_prompt,
-            ),
-            messages=[],
+        return self._normalized_record(
+            SessionRecord(
+                metadata=SessionMetadata(
+                    id=str(uuid.uuid4()),
+                    created_at=now,
+                    updated_at=now,
+                    model=model.model_copy(deep=True),
+                    system_prompt=system_prompt,
+                ),
+                messages=[],
+            )
         )
 
     def save(self, record: SessionRecord) -> Path:
         record = self._prepare_record_for_save(record)
         record.metadata.updated_at = time.time()
-        sessions = self._load_all_records()
-        sessions[record.id] = record.model_copy(deep=True)
-        self._write_all_records(sessions)
-        return self.tree_path
+        normalized = self._normalized_record(record)
+        latest = self._load_current_record(normalized.id)
+        path = self._session_path(normalized.id)
+        self._append_events(path, self._build_append_events(latest, normalized))
+        return path
 
     def load(self, session_id: str) -> SessionRecord:
-        sessions = self._load_all_records()
-        if session_id not in sessions:
+        path = self._session_path(session_id)
+        if path.exists():
+            return self._load_from_session_file(path)
+        legacy = self._legacy_records().get(session_id)
+        if legacy is None:
             raise FileNotFoundError(f"Session not found: {session_id}")
-        return sessions[session_id].model_copy(deep=True)
+        normalized = self._normalized_record(legacy)
+        self._append_events(path, self._build_append_events(None, normalized))
+        return normalized.model_copy(deep=True)
 
     def list(self) -> list[SessionMetadata]:
-        sessions = self._load_all_records()
-        return [record.metadata.model_copy(deep=True) for record in sorted(sessions.values(), key=lambda item: item.metadata.updated_at, reverse=True)]
+        sessions = self._all_latest_records()
+        return [
+            record.metadata.model_copy(deep=True)
+            for record in sorted(sessions.values(), key=lambda item: item.metadata.updated_at, reverse=True)
+        ]
 
     def fork(self, session_id: str) -> SessionRecord:
         source = self.load(session_id)
@@ -200,15 +215,14 @@ class SessionStore:
         return self.rewind(session_id, message_count)
 
     def tree(self) -> list[SessionTreeEntry]:
-        sessions = self._load_all_records()
-        entries = [self._entry_for_record(record) for record in sessions.values()]
+        entries = [self._entry_for_record(record) for record in self._all_latest_records().values()]
         return sorted(entries, key=lambda item: (item.parent_id or "", item.updated_at, item.id))
 
     def children_of(self, session_id: str) -> list[SessionTreeEntry]:
         return [entry for entry in self.tree() if entry.parent_id == session_id]
 
     def describe(self, session_id: str) -> dict[str, object]:
-        sessions = self._load_all_records()
+        sessions = self._all_latest_records()
         if session_id not in sessions:
             raise FileNotFoundError(f"Session not found: {session_id}")
         record = sessions[session_id]
@@ -227,8 +241,7 @@ class SessionStore:
 
     def turn_entries(self, session_id: str, head_id: Optional[str] = None) -> list[SessionTurnEntry]:
         record = self.load(session_id)
-        normalized = self._normalized_record(record)
-        path = self.turn_path(normalized, head_id)
+        path = self.turn_path(record, head_id)
         entries: list[SessionTurnEntry] = []
         total_message_count = 0
         turn_number = 0
@@ -237,7 +250,7 @@ class SessionStore:
             total_message_count += message_count
             if node.entry_type == "turn":
                 turn_number += 1
-            node_messages = normalized.messages[node.start_message_index:node.end_message_index] if node.entry_type == "turn" else []
+            node_messages = record.messages[node.start_message_index:node.end_message_index] if node.entry_type == "turn" else []
             entries.append(
                 SessionTurnEntry(
                     id=node.id,
@@ -258,42 +271,38 @@ class SessionStore:
 
     def turn_tree(self, session_id: str) -> list[SessionTurnEntry]:
         record = self.load(session_id)
-        normalized = self._normalized_record(record)
-        return [self._turn_entry_for_node(normalized, node) for node in sorted(normalized.turn_nodes, key=lambda item: (item.created_at, item.id))]
+        return [self._turn_entry_for_node(record, node) for node in sorted(record.turn_nodes, key=lambda item: (item.created_at, item.id))]
 
     def describe_turn(self, session_id: str, turn_id: Optional[str]) -> Optional[dict[str, object]]:
         if not turn_id:
             return None
         record = self.load(session_id)
-        normalized = self._normalized_record(record)
-        current = self.turn_node(normalized, turn_id)
+        current = self.turn_node(record, turn_id)
         if current is None:
             raise FileNotFoundError(f"Turn not found: {turn_id}")
-        parent = self.turn_node(normalized, current.parent_id) if current.parent_id else None
-        children = [node for node in normalized.turn_nodes if node.parent_id == current.id]
+        parent = self.turn_node(record, current.parent_id) if current.parent_id else None
+        children = [node for node in record.turn_nodes if node.parent_id == current.id]
         return {
-            "current": self._turn_entry_for_node(normalized, current).model_dump(mode="json"),
-            "parent": self._turn_entry_for_node(normalized, parent).model_dump(mode="json") if parent is not None else None,
-            "children": [self._turn_entry_for_node(normalized, child).model_dump(mode="json") for child in sorted(children, key=lambda item: item.created_at, reverse=True)],
+            "current": self._turn_entry_for_node(record, current).model_dump(mode="json"),
+            "parent": self._turn_entry_for_node(record, parent).model_dump(mode="json") if parent is not None else None,
+            "children": [self._turn_entry_for_node(record, child).model_dump(mode="json") for child in sorted(children, key=lambda item: item.created_at, reverse=True)],
         }
 
     def set_active_head(self, session_id: str, head_id: Optional[str]) -> SessionRecord:
         record = self.load(session_id)
-        normalized = self._normalized_record(record)
-        if head_id is not None and self.turn_node(normalized, head_id) is None:
+        if head_id is not None and self.turn_node(record, head_id) is None:
             raise FileNotFoundError(f"Turn not found: {head_id}")
-        normalized.metadata.active_head_id = head_id
-        self.save(normalized)
-        return normalized
+        record.metadata.active_head_id = head_id
+        self.save(record)
+        return self._normalized_record(record)
 
     def branch_messages(self, record: SessionRecord, head_id: Optional[str] = None) -> list[ChatMessage]:
-        normalized = self._normalized_record(record)
-        path = self.turn_path(normalized, head_id)
+        path = self.turn_path(record, head_id)
         branch: list[ChatMessage] = []
         for node in path:
             if node.entry_type != "turn":
                 continue
-            branch.extend(message.model_copy(deep=True) for message in normalized.messages[node.start_message_index:node.end_message_index])
+            branch.extend(message.model_copy(deep=True) for message in record.messages[node.start_message_index:node.end_message_index])
         return branch
 
     def turn_path(self, record: SessionRecord, head_id: Optional[str] = None) -> list[SessionTurnNode]:
@@ -301,14 +310,13 @@ class SessionStore:
         target_id = head_id if head_id is not None else normalized.active_head_id
         if not target_id:
             return []
-        index = {node.id: node for node in normalized.turn_nodes}
         path: list[SessionTurnNode] = []
         current_id: Optional[str] = target_id
         while current_id:
-            node = index.get(current_id)
+            node = normalized._turn_index.get(current_id)
             if node is None:
                 break
-            path.append(node)
+            path.append(node.model_copy(deep=True))
             current_id = node.parent_id
         return list(reversed(path))
 
@@ -316,7 +324,8 @@ class SessionStore:
         if turn_id is None:
             return None
         normalized = self._normalized_record(record)
-        return next((node.model_copy(deep=True) for node in normalized.turn_nodes if node.id == turn_id), None)
+        node = normalized._turn_index.get(turn_id)
+        return node.model_copy(deep=True) if node is not None else None
 
     def sync_branch_state(
         self,
@@ -337,6 +346,7 @@ class SessionStore:
             for node in normalized.turn_nodes
             if not (node.status == "draft" and self._is_descendant(normalized.turn_nodes, node.id, base_head_id))
         ]
+        self._refresh_turn_index(normalized)
         if not tail_messages:
             normalized.metadata.active_head_id = base_head_id
             return self._normalized_record(normalized)
@@ -358,13 +368,6 @@ class SessionStore:
         return self._normalized_record(normalized)
 
     def best_base_head_id(self, record: SessionRecord, branch_messages: list[ChatMessage]) -> Optional[str]:
-        """Return the head id whose branch messages best match the given branch prefix.
-
-        This is primarily a recovery helper for cases where the caller's cached base head
-        is stale (e.g. external navigation/rewind) and `sync_branch_state` would otherwise
-        raise. The returned head id is the one with the longest matching message prefix.
-        """
-
         normalized = self._normalized_record(record)
         if not branch_messages or not normalized.turn_nodes:
             return None
@@ -374,9 +377,7 @@ class SessionStore:
         best_length = 0
         for node in normalized.turn_nodes:
             candidate = self.branch_messages(normalized, node.id)
-            if not candidate:
-                continue
-            if len(candidate) > len(branch_messages):
+            if not candidate or len(candidate) > len(branch_messages):
                 continue
             candidate_dump = [message.model_dump(mode="json") for message in candidate]
             if target_dump[: len(candidate_dump)] != candidate_dump:
@@ -465,12 +466,13 @@ class SessionStore:
             normalized = self._append_compaction_node(normalized, normalized.metadata.compaction)
         if normalized.turn_nodes:
             normalized.metadata.compaction = self._compaction_state_for_head(normalized, normalized.metadata.active_head_id)
-        if normalized.metadata.active_head_id and not any(node.id == normalized.metadata.active_head_id for node in normalized.turn_nodes):
+        if normalized.metadata.active_head_id and normalized.metadata.active_head_id not in {node.id for node in normalized.turn_nodes}:
             normalized.metadata.active_head_id = normalized.turn_nodes[-1].id if normalized.turn_nodes else None
+        self._refresh_turn_index(normalized)
         return normalized
 
     def _sync_compaction_to_entries(self, record: SessionRecord) -> SessionRecord:
-        normalized = record.model_copy(deep=True)
+        normalized = self._normalized_record(record)
         latest = self._compaction_node_for_head(normalized, normalized.active_head_id)
         target = normalized.metadata.compaction
         if not target.summary:
@@ -495,17 +497,20 @@ class SessionStore:
         normalized.metadata.turn_nodes.append(node)
         normalized.metadata.active_head_id = node.id
         normalized.metadata.compaction = CompactionState(summary=state.summary, summarized_message_count=state.summarized_message_count)
+        self._refresh_turn_index(normalized)
         return normalized
 
     def _compaction_node_for_head(self, record: SessionRecord, head_id: Optional[str]) -> Optional[SessionTurnNode]:
-        index = {node.id: node for node in record.turn_nodes}
+        normalized = record.model_copy(deep=True)
+        if len(normalized._turn_index) != len(normalized.turn_nodes):
+            self._refresh_turn_index(normalized)
         current_id = head_id
         while current_id:
-            node = index.get(current_id)
+            node = normalized._turn_index.get(current_id)
             if node is None:
                 return None
             if node.entry_type == "compaction":
-                return node
+                return node.model_copy(deep=True)
             current_id = node.parent_id
         return None
 
@@ -533,6 +538,7 @@ class SessionStore:
             status=status,
         )
         record.metadata.turn_nodes.append(node)
+        record._turn_index[node.id] = node
         return node.id
 
     @staticmethod
@@ -612,47 +618,184 @@ class SessionStore:
             return clean
         return clean[: limit - 3] + "..."
 
-    def _load_all_records(self) -> dict[str, SessionRecord]:
-        if not self.tree_path.exists():
-            return {}
+    def _session_path(self, session_id: str) -> Path:
+        return self.root / f"{session_id}.jsonl"
+
+    def _session_files(self) -> list[Path]:
+        return sorted(path for path in self.root.glob("*.jsonl") if path.name != self.legacy_tree_path.name)
+
+    def _load_current_record(self, session_id: str) -> Optional[SessionRecord]:
+        path = self._session_path(session_id)
+        if path.exists():
+            return self._load_from_session_file(path)
+        return self._legacy_records().get(session_id)
+
+    def _load_from_session_file(self, path: Path) -> SessionRecord:
+        latest_snapshot: Optional[SessionRecord] = None
+        for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not raw.strip():
+                continue
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                session_id = path.stem
+                raise ValueError(f"Invalid JSONL entry for session {session_id} at line {line_no}: {exc}") from exc
+            if item.get("type") != SNAPSHOT_EVENT:
+                continue
+            latest_snapshot = SessionRecord.model_validate(item["data"])
+        if latest_snapshot is None:
+            raise ValueError(f"No {SNAPSHOT_EVENT!r} entry found for session {path.stem}")
+        return self._normalized_record(latest_snapshot)
+
+    def _append_events(self, path: Path, events: list[dict[str, Any]]) -> None:
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            for event in events:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def _build_append_events(self, previous: Optional[SessionRecord], current: SessionRecord) -> list[dict[str, Any]]:
+        previous = self._normalized_record(previous) if previous is not None else None
+        current = self._normalized_record(current)
+        events: list[dict[str, Any]] = []
+        now = current.metadata.updated_at
+
+        if previous is None:
+            events.append(
+                {
+                    "type": "metadata_created",
+                    "session_id": current.id,
+                    "at": now,
+                    "data": {
+                        "id": current.id,
+                        "parent_id": current.parent_id,
+                        "created_at": current.metadata.created_at,
+                        "system_prompt": current.system_prompt,
+                        "model": current.model.model_dump(mode="json"),
+                    },
+                }
+            )
+        elif self._metadata_changed(previous, current):
+            events.append(
+                {
+                    "type": "metadata_updated",
+                    "session_id": current.id,
+                    "at": now,
+                    "data": {
+                        "parent_id": current.parent_id,
+                        "system_prompt": current.system_prompt,
+                        "model": current.model.model_dump(mode="json"),
+                    },
+                }
+            )
+
+        message_event = self._messages_event(previous, current, now)
+        if message_event is not None:
+            events.append(message_event)
+
+        events.extend(self._turn_node_events(previous, current, now))
+
+        if previous is None or previous.active_head_id != current.active_head_id:
+            events.append({"type": "head_updated", "session_id": current.id, "at": now, "data": {"active_head_id": current.active_head_id}})
+
+        if previous is None or previous.compaction.model_dump(mode="json") != current.compaction.model_dump(mode="json"):
+            events.append({"type": "compaction_recorded", "session_id": current.id, "at": now, "data": current.compaction.model_dump(mode="json")})
+
+        if previous is None or self._pending_state_dump(previous) != self._pending_state_dump(current):
+            events.append({"type": "pending_state_updated", "session_id": current.id, "at": now, "data": self._pending_state_dump(current)})
+
+        events.append({"type": SNAPSHOT_EVENT, "session_id": current.id, "at": now, "data": current.model_dump(mode="json")})
+        return events
+
+    @staticmethod
+    def _metadata_changed(previous: SessionRecord, current: SessionRecord) -> bool:
+        return (
+            previous.parent_id != current.parent_id
+            or previous.system_prompt != current.system_prompt
+            or previous.model.model_dump(mode="json") != current.model.model_dump(mode="json")
+        )
+
+    def _messages_event(self, previous: Optional[SessionRecord], current: SessionRecord, now: float) -> Optional[dict[str, Any]]:
+        if previous is None:
+            if not current.messages:
+                return None
+            appended = [message.model_dump(mode="json") for message in current.messages]
+            return {"type": "messages_appended", "session_id": current.id, "at": now, "data": {"count": len(appended), "messages": appended}}
+
+        previous_dump = [message.model_dump(mode="json") for message in previous.messages]
+        current_dump = [message.model_dump(mode="json") for message in current.messages]
+        if current_dump[: len(previous_dump)] == previous_dump and len(current_dump) > len(previous_dump):
+            appended = current_dump[len(previous_dump) :]
+            return {"type": "messages_appended", "session_id": current.id, "at": now, "data": {"count": len(appended), "messages": appended}}
+        if previous_dump != current_dump:
+            return {"type": "messages_replaced", "session_id": current.id, "at": now, "data": {"count": len(current_dump)}}
+        return None
+
+    def _turn_node_events(self, previous: Optional[SessionRecord], current: SessionRecord, now: float) -> list[dict[str, Any]]:
+        if previous is None:
+            return [{"type": "turn_node_added", "session_id": current.id, "at": now, "data": node.model_dump(mode="json")} for node in current.turn_nodes]
+
+        previous_dump = [node.model_dump(mode="json") for node in previous.turn_nodes]
+        current_dump = [node.model_dump(mode="json") for node in current.turn_nodes]
+        if current_dump[: len(previous_dump)] == previous_dump and len(current_dump) > len(previous_dump):
+            return [{"type": "turn_node_added", "session_id": current.id, "at": now, "data": node.model_dump(mode="json")} for node in current.turn_nodes[len(previous.turn_nodes) :]]
+        if previous_dump != current_dump:
+            return [{"type": "turn_nodes_replaced", "session_id": current.id, "at": now, "data": {"count": len(current_dump)}}]
+        return []
+
+    @staticmethod
+    def _pending_state_dump(record: SessionRecord) -> dict[str, Any]:
+        return {
+            "pending_plan_token": record.pending_plan_token,
+            "pending_tool_calls": [call.model_dump(mode="json") for call in record.pending_tool_calls],
+            "queued_messages": [message.model_dump(mode="json") for message in record.queued_messages],
+        }
+
+    def _all_latest_records(self) -> dict[str, SessionRecord]:
         sessions: dict[str, SessionRecord] = {}
-        for line in self.tree_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
+        for path in self._session_files():
+            try:
+                record = self._load_from_session_file(path)
+            except ValueError:
                 continue
-            item = json.loads(line)
-            if item.get("type") != "session":
-                continue
-            record = self._normalized_record(SessionRecord.model_validate(item["data"]))
             sessions[record.id] = record
+        for session_id, record in self._legacy_records().items():
+            sessions.setdefault(session_id, self._normalized_record(record))
         return sessions
 
-    def _write_all_records(self, sessions: dict[str, SessionRecord]) -> None:
-        ordered = sorted(sessions.values(), key=lambda item: (item.metadata.created_at, item.id))
-        lines = [json.dumps({"type": "session", "data": self._normalized_record(record).model_dump(mode="json")}, ensure_ascii=False) for record in ordered]
-        self.tree_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    def _legacy_records(self) -> dict[str, SessionRecord]:
+        sessions: dict[str, SessionRecord] = {}
+        if self.legacy_tree_path.exists():
+            for line_no, raw in enumerate(self.legacy_tree_path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not raw.strip():
+                    continue
+                try:
+                    item = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid legacy session-tree entry at line {line_no}: {exc}") from exc
+                if item.get("type") != "session":
+                    continue
+                record = SessionRecord.model_validate(item["data"])
+                sessions[record.id] = self._normalized_record(record)
+        for session_id, payload in load_legacy_session_payloads(self.root, LEGACY_TREE_NAME).items():
+            sessions.setdefault(session_id, self._normalized_record(SessionRecord.model_validate(payload)))
+        return sessions
 
     def _migrate_legacy_files(self) -> None:
-        if self.tree_path.exists():
-            return
-        legacy_paths = sorted(path for path in self.root.glob("*.jsonl") if path.name != self.tree_path.name)
-        if not legacy_paths:
-            return
-        sessions: dict[str, SessionRecord] = {}
-        for path in legacy_paths:
-            metadata: Optional[SessionMetadata] = None
-            messages: list[ChatMessage] = []
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                item = json.loads(line)
-                if item.get("type") == "metadata":
-                    metadata = SessionMetadata.model_validate(item["data"])
-                elif item.get("type") == "message":
-                    messages.append(ChatMessage.model_validate(item["data"]))
-            if metadata is not None:
-                sessions[metadata.id] = self._normalized_record(SessionRecord(metadata=metadata, messages=messages))
-        if sessions:
-            self._write_all_records(sessions)
+        for session_id, record in self._legacy_records().items():
+            path = self._session_path(session_id)
+            if path.exists():
+                continue
+            self._append_events(path, self._build_append_events(None, self._normalized_record(record)))
+
+    @staticmethod
+    def _refresh_turn_index(record: SessionRecord) -> None:
+        record._turn_index = {node.id: node for node in record.turn_nodes}
 
 
-
+__all__ = [
+    "SessionMetadata",
+    "SessionRecord",
+    "SessionStore",
+    "SessionTreeEntry",
+    "SessionTurnEntry",
+    "SessionTurnNode",
+]

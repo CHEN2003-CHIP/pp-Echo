@@ -51,3 +51,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 *.log
+# Local MCP tooling
+.mcp-tools/
+.npm-cache/
+

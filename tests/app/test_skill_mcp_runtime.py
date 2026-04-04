@@ -250,3 +250,139 @@ def test_mcp_call_command_supports_text_and_json_args(tmp_path: Path, monkeypatc
 
     assert handle_command(agent, '/mcp call demo.echo {"message":"json"}', tmp_path) == "handled"
     assert "call_tool:echo" in events
+
+
+class TrackingFetchMCPClient:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def initialize(self) -> None:
+        self.events.append("initialize")
+
+    def list_tools(self) -> list[dict]:
+        self.events.append("list_tools")
+        return [
+            {"name": "fetch_markdown", "description": "Fetch webpage markdown", "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}}},
+            {"name": "fetch_readable", "description": "Fetch readable article", "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}}},
+        ]
+
+    def list_resources(self) -> list[dict]:
+        self.events.append("list_resources")
+        return []
+
+    def list_prompts(self) -> list[dict]:
+        self.events.append("list_prompts")
+        return []
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        self.events.append(f"call_tool:{name}")
+        return {"content": f"{name}:{arguments.get('url', '')}", "payload": {}, "is_error": False}
+
+    def read_resource(self, uri: str) -> dict:
+        raise AssertionError(uri)
+
+    def get_prompt(self, name: str, arguments: dict | None = None) -> dict:
+        raise AssertionError(name)
+
+    def close(self) -> None:
+        self.events.append("close")
+
+
+def test_mcp_runtime_matches_chinese_web_request_to_fetch_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "config.json").write_text(json.dumps({"capabilities": {"mcp": {"enable": True}}}), encoding="utf-8")
+    (project_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "fetch",
+                        "description": "Community standard MCP server for fetching web pages as HTML, text, markdown, JSON, and readable article content.",
+                        "transport": "memory",
+                        "intent_tags": ["web", "url", "fetch", "article", "缃戦〉", "缃戠珯", "鏂伴椈", "鎶撳彇", "閾炬帴"],
+                        "auto_match_examples": ["鑾峰彇缃戦〉鍐呭", "鎬荤粨杩欎釜閾炬帴", "fetch this url"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = Settings.load(tmp_path)
+    tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    events: list[str] = []
+    runtime = load_executable_extensions(
+        tmp_path,
+        settings=settings,
+        tool_registry=tool_registry,
+        runtime_hooks=RuntimeHooks(),
+        transport_factory=lambda _config: TrackingFetchMCPClient(events),
+    )
+
+    messages = runtime.mcp_runtime.transform_context(
+        type("State", (), {"messages": [ChatMessage(role="user", content=[TextPart(text="鑾峰彇 https://example.com 杩欎釜缃戦〉鍐呭锛屽苟绠€瑕佸憡璇夋垜閲嶇偣")], timestamp=0)]})(),
+        [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
+    )
+
+    assert len(messages) == 2
+    system_text = messages[1].content[0].text
+    assert "fetch.fetch_markdown" in system_text
+    assert "fetch.fetch_readable" in system_text
+    assert "Do not say you cannot access the internet" in system_text
+    assert runtime.mcp_runtime.status()["last_match"]["matched_server"] == "fetch"
+    assert runtime.mcp_runtime.status()["last_match"]["matched_by"] in {"tags", "url_intent"}
+    assert events == ["initialize", "list_tools", "list_resources", "list_prompts"]
+
+
+def test_mcp_runtime_matches_url_only_and_does_not_match_local_file_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "config.json").write_text(json.dumps({"capabilities": {"mcp": {"enable": True}}}), encoding="utf-8")
+    (project_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "fetch",
+                        "description": "Fetch webpages and links.",
+                        "transport": "memory",
+                        "intent_tags": ["web", "url", "缃戦〉", "閾炬帴"],
+                    },
+                    {
+                        "name": "demo",
+                        "description": "Echo local text only.",
+                        "transport": "memory",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = Settings.load(tmp_path)
+    tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    events: list[str] = []
+    runtime = load_executable_extensions(
+        tmp_path,
+        settings=settings,
+        tool_registry=tool_registry,
+        runtime_hooks=RuntimeHooks(),
+        transport_factory=lambda _config: TrackingFetchMCPClient(events),
+    )
+
+    url_only = runtime.mcp_runtime.transform_context(
+        type("State", (), {"messages": [ChatMessage(role="user", content=[TextPart(text="https://example.com")], timestamp=0)]})(),
+        [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
+    )
+    assert len(url_only) == 2
+    assert runtime.mcp_runtime.status()["last_match"]["matched_server"] == "fetch"
+
+    events.clear()
+    no_match = runtime.mcp_runtime.transform_context(
+        type("State", (), {"messages": [ChatMessage(role="user", content=[TextPart(text="甯垜鐪?src 鐩綍")], timestamp=0)]})(),
+        [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
+    )
+    assert len(no_match) == 1
+    assert runtime.mcp_runtime.status()["last_match"] == {}
+    assert events == []

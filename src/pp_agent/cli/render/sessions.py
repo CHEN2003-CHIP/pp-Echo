@@ -193,7 +193,20 @@ def render_session_tree(
     focus_turn_id: Optional[str] = None
     if focus_id and "@" in focus_id:
         focus_id, focus_turn_id = focus_id.split("@", 1)
-    description = store.describe(focus_id) if focus_id else {"current": None, "parent": None, "children": [], "turns": [], "turn_focus": None}
+    if focus_id:
+        try:
+            description = store.describe(focus_id)
+        except FileNotFoundError:
+            transient_focus = entry_index.get(focus_id)
+            description = {
+                "current": transient_focus.model_dump(mode="json") if transient_focus is not None else None,
+                "parent": None,
+                "children": [],
+                "turns": [],
+                "turn_focus": None,
+            }
+    else:
+        description = {"current": None, "parent": None, "children": [], "turns": [], "turn_focus": None}
     lines.extend([("", None), ("Focus", None)])
     for row in render_tree_entry_preview("Current", description.get("current")):
         lines.append((row, None))

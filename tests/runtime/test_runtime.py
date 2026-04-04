@@ -45,6 +45,15 @@ class NoopLLMClient:
         yield {"text": "ok", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
+class EmptyLLMClient:
+    def __init__(self) -> None:
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        if False:  # pragma: no cover
+            yield {"text": "", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
 
 
 class RecordingLLMClient:
@@ -79,6 +88,25 @@ class ToolThenRecordLLMClient:
             }
         else:
             yield {"text": f"ack:{latest_user}", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
+class ToolThenEmptyLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": "",
+                "tool_calls": [{"id": "call-1", "name": "list_files", "arguments_chunk": '{"path":"src"}'}],
+                "finish_reason": "tool_calls",
+                "raw": {},
+            }
+        else:
+            if False:  # pragma: no cover
+                yield {"text": "", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
 class FailingToolLLMClient:
@@ -183,6 +211,28 @@ def test_agent_session_emits_error_for_bad_tool_arguments(tmp_path: Path) -> Non
     events = agent.prompt("create a file")
 
     assert any(event.type == "error" for event in events)
+
+
+def test_agent_session_emits_error_for_empty_provider_response(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, EmptyLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("say something")
+
+    assert any(event.type == "provider_error" for event in events)
+    assert any(event.type == "error" and "empty response" in (event.message or "").lower() for event in events)
+    assert not any(message.role == "assistant" and not message.content for message in agent.state.messages)
+
+
+def test_agent_session_falls_back_to_tool_result_when_follow_up_provider_is_empty(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "demo.txt").write_text("hello", encoding="utf-8")
+    agent = build_agent(tmp_path, ToolThenEmptyLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("show me src")
+
+    assert not any(event.type == "error" for event in events)
+    assert agent.state.messages[-1].role == "assistant"
+    assert "demo.txt" in agent.state.messages[-1].content[0].text
 
 
 def test_agent_session_marks_plan_step_failed_when_tool_fails(tmp_path: Path) -> None:

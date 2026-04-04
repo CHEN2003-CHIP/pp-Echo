@@ -20,7 +20,10 @@ class MCPServerConfig(BaseModel):
 
     name: str
     description: str = ""
+    intent_tags: list[str] = Field(default_factory=list)
+    auto_match_examples: list[str] = Field(default_factory=list)
     transport: Optional[str] = None
+    protocol: str = "auto"
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
     url: Optional[str] = None
@@ -42,6 +45,12 @@ class MCPServerConfig(BaseModel):
         if self.url:
             return "http"
         return "stdio"
+
+    def resolved_protocol(self) -> str:
+        value = (self.protocol or "auto").strip().lower()
+        if value not in {"auto", "compat", "standard"}:
+            raise ValueError(f"Unsupported MCP protocol {self.protocol!r} for server {self.name!r}.")
+        return value
 
     def resolved_headers(self) -> dict[str, str]:
         headers = dict(self.headers)

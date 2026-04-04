@@ -22,6 +22,66 @@ from pp_agent.storage.settings import Settings
 from pp_agent.tools.base import ToolExecutionResult
 from pp_agent.tools.registry import ToolRegistry
 
+_WEB_FETCH_TAGS = {
+    "web",
+    "url",
+    "fetch",
+    "article",
+    "website",
+    "webpage",
+    "page",
+    "link",
+    "news",
+    "content",
+    "html",
+    "markdown",
+    "readable",
+    "网页",
+    "网站",
+    "链接",
+    "页面",
+    "文章",
+    "新闻",
+    "网址",
+    "抓取",
+    "网页内容",
+}
+_WEB_CN_KEYWORDS = (
+    "网页",
+    "网站",
+    "链接",
+    "页面",
+    "文章",
+    "新闻",
+    "网址",
+    "抓取",
+    "网页内容",
+    "获取内容",
+    "获取网页",
+    "网页数据",
+    "网页正文",
+    "总结这个链接",
+    "这个链接",
+    "这篇文章",
+    "这个网页",
+)
+_WEB_EN_KEYWORDS = (
+    "fetch",
+    "webpage",
+    "website",
+    "web page",
+    "url",
+    "link",
+    "article",
+    "read page",
+    "readable",
+    "html",
+    "markdown",
+    "summarize this webpage",
+    "summarize this link",
+)
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
 
 @dataclass
 class MCPRuntime:
@@ -37,6 +97,7 @@ class MCPRuntime:
     _server_summaries: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _discovered_servers: set[str] = field(default_factory=set, init=False, repr=False)
     _last_auto_servers: list[str] = field(default_factory=list, init=False, repr=False)
+    _last_match_details: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.registry.register(self._descriptor(), status="discovered")
@@ -51,6 +112,7 @@ class MCPRuntime:
             "tool_count": len(self._registered_tool_names),
             "resource_count": len(self._resource_names),
             "auto_servers": list(self._last_auto_servers),
+            "last_match": dict(self._last_match_details),
         }
 
     def list_servers(self) -> list[dict[str, object]]:
@@ -74,6 +136,7 @@ class MCPRuntime:
         self._server_summaries = {}
         self._discovered_servers = set()
         self._last_auto_servers = []
+        self._last_match_details = {}
         self.registry.register(self._descriptor(), status="discovered")
 
     def close(self) -> None:
@@ -144,26 +207,44 @@ class MCPRuntime:
         text = self._latest_user_text(state)
         if not text:
             self._last_auto_servers = []
+            self._last_match_details = {}
             return messages
-        matched = self._match_server_names(text)
+        matched = self._match_servers(text)
         if not matched:
             self._last_auto_servers = []
+            self._last_match_details = {}
             return messages
-        activated: list[str] = []
-        for server_name in matched[:1]:
-            already_ready = server_name in self._discovered_servers
+        activated: list[tuple[str, str, str]] = []
+        for server_name, matched_by, reason in matched[:1]:
             self.ensure_server_ready(server_name)
-            activated.append(server_name)
-            if already_ready:
-                continue
-        self._last_auto_servers = activated
+            activated.append((server_name, matched_by, reason))
+        self._last_auto_servers = [server_name for server_name, _, _ in activated]
+        self._last_match_details = {
+            "matched_server": activated[0][0],
+            "matched_by": activated[0][1],
+            "mcp_match_reason": activated[0][2],
+        }
         if not activated:
             return messages
         lines = ["Relevant MCP server loaded for this turn:"]
-        for server_name in activated:
+        for server_name, matched_by, reason in activated:
             summary = self._server_summaries.get(server_name, {"tools": []})
-            tools = ", ".join(summary.get("tools", [])) or "no tools"
-            lines.append(f"- {server_name}: {tools}")
+            tools = list(summary.get("tools", []))
+            rendered_tools = ", ".join(tools) or "no tools"
+            lines.append(f"- {server_name}: {rendered_tools}")
+            lines.append(f"  matched_by={matched_by}; reason={reason}")
+            preferred = self._preferred_tools_for_request(server_name, tools, text)
+            if preferred:
+                lines.append(f"  preferred_tools={', '.join(preferred)}")
+        lines.append("")
+        lines.append("MCP routing guidance:")
+        if self._looks_like_web_fetch_request(text):
+            lines.append("- This request matches webpage/link retrieval. Prefer a fetch MCP tool before answering.")
+            lines.append("- Prefer readable or markdown page extraction when the user asked for a summary.")
+            lines.append("- Do not say you cannot access the internet when one of these MCP tools can satisfy the request.")
+            lines.append("- If the fetch tool fails, explain the fetch error or site limitation instead of denying capability.")
+        else:
+            lines.append("- Prefer the matched MCP tools when they directly satisfy the user request.")
         directive = ChatMessage(
             role="system",
             content=[TextPart(text="\n".join(lines))],
@@ -171,7 +252,16 @@ class MCPRuntime:
         )
         return [messages[0], directive, *messages[1:]] if messages else [directive]
 
-    def _match_server_names(self, text: str) -> list[str]:
+    def _match_servers(self, text: str) -> list[tuple[str, str, str]]:
+        explicit = self._explicit_server_matches(text)
+        if explicit:
+            return explicit
+        intent = self._intent_router_matches(text)
+        if intent:
+            return intent
+        return self._description_matches(text)
+
+    def _explicit_server_matches(self, text: str) -> list[tuple[str, str, str]]:
         lowered = text.lower()
         explicit: list[tuple[int, str]] = []
         manager = self._manager_for_current_config()
@@ -181,11 +271,28 @@ class MCPRuntime:
             pos = _mention_position(lowered, server_name)
             if pos is not None:
                 explicit.append((pos, server_name))
-        if explicit:
-            return [name for _, name in sorted(explicit, key=lambda item: (item[0], item[1]))]
+        return [(name, "name", f"explicit server name mention: {name}") for _, name in sorted(explicit, key=lambda item: (item[0], item[1]))]
 
+    def _intent_router_matches(self, text: str) -> list[tuple[str, str, str]]:
+        if not self._looks_like_web_fetch_request(text):
+            return []
+        manager = self._manager_for_current_config()
+        candidates: list[tuple[float, str, str]] = []
+        for server_name in manager.server_names():
+            if not self.settings.capabilities.mcp.includes_server(server_name):
+                continue
+            server = manager.server_config(server_name)
+            score, matched_by, reason = self._intent_score(server, text)
+            if score <= 0:
+                continue
+            candidates.append((score, server_name, f"{matched_by}:{reason}"))
+        ordered = sorted(candidates, key=lambda item: (-item[0], item[1]))
+        return [(server_name, reason.split(":", 1)[0], reason.split(":", 1)[1]) for _, server_name, reason in ordered]
+
+    def _description_matches(self, text: str) -> list[tuple[str, str, str]]:
         user_terms = _match_terms(text)
-        candidates: list[tuple[float, str]] = []
+        candidates: list[tuple[float, str, str]] = []
+        manager = self._manager_for_current_config()
         for server_name in manager.server_names():
             if not self.settings.capabilities.mcp.includes_server(server_name):
                 continue
@@ -201,8 +308,65 @@ class MCPRuntime:
                 score += 1.0
             score += _phrase_bonus(text, server.description)
             if score >= 2.0:
-                candidates.append((score, server_name))
-        return [name for _, name in sorted(candidates, key=lambda item: (-item[0], item[1]))]
+                candidates.append((score, server_name, f"description overlap score={score:.1f}"))
+        return [(name, "description", reason) for score, name, reason in sorted(candidates, key=lambda item: (-item[0], item[1], item[2]))]
+
+    def _intent_score(self, server, text: str) -> tuple[float, str, str]:
+        lowered = text.lower()
+        score = 0.0
+        reasons: list[str] = []
+        tag_hits = [tag for tag in server.intent_tags if tag and tag.lower() in lowered]
+        if tag_hits:
+            score += 8.0 + float(len(tag_hits))
+            reasons.append(f"tag hit {', '.join(tag_hits[:3])}")
+        example_hits = [example for example in server.auto_match_examples if example and example.lower() in lowered]
+        if example_hits:
+            score += 7.0 + float(len(example_hits))
+            reasons.append(f"example hit {', '.join(example_hits[:2])}")
+        server_tags = {tag.lower() for tag in server.intent_tags}
+        if _URL_RE.search(text) and (server_tags & _WEB_FETCH_TAGS or self._looks_fetch_like(server)):
+            score += 6.0
+            reasons.append("URL present with web-capable server")
+        if self._looks_fetch_like(server):
+            score += 4.0
+            reasons.append("server looks like fetch/web reader")
+        if score > 0:
+            matched_by = "tags" if tag_hits or example_hits else "url_intent"
+            return score, matched_by, "; ".join(reasons)
+        return 0.0, "", ""
+
+    def _preferred_tools_for_request(self, server_name: str, tools: list[str], text: str) -> list[str]:
+        if not tools:
+            return []
+        lowered = text.lower()
+        if self._looks_like_web_fetch_request(text):
+            preferred = [tool for tool in tools if tool.endswith(".fetch_readable") or tool.endswith(".fetch_markdown")]
+            if preferred:
+                return preferred
+            preferred = [tool for tool in tools if tool.endswith(".fetch_txt") or tool.endswith(".fetch_html")]
+            if preferred:
+                return preferred
+        return tools[:2]
+
+    def _looks_like_web_fetch_request(self, text: str) -> bool:
+        lowered = text.lower()
+        if _URL_RE.search(text):
+            return True
+        if any(keyword in text for keyword in _WEB_CN_KEYWORDS):
+            return True
+        return any(keyword in lowered for keyword in _WEB_EN_KEYWORDS)
+
+    @staticmethod
+    def _looks_fetch_like(server) -> bool:
+        lowered_name = server.name.lower()
+        lowered_desc = server.description.lower()
+        lowered_tags = {tag.lower() for tag in server.intent_tags}
+        return (
+            lowered_name == "fetch"
+            or "fetch" in lowered_name
+            or bool(lowered_tags & _WEB_FETCH_TAGS)
+            or any(term in lowered_desc for term in ("web page", "webpage", "website", "url", "article", "html", "markdown", "readable"))
+        )
 
     def _manager_for_current_config(self) -> MCPManager:
         if self._manager is None:

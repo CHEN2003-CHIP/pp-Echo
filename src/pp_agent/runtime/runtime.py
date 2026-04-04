@@ -102,6 +102,15 @@ class AgentRuntime:
         self.compactor = ConversationCompactor(keep_recent_messages=compact_after_messages)
         self.turn_controller = TurnController()
         self.state = AgentState(system_prompt=system_prompt, model=llm_client.model.model_copy(deep=True))
+
+        """
+        这一段是在做 session 恢复场景：
+        上次压缩过的 summary 恢复回来
+        上次 pending 的 tool calls 恢复回来
+        上 次 planner token 恢复回来
+        上次队列消息恢复回来
+        也就是说，这个 runtime 可以从“半路停住的状态”继续，而不是只能从空白对话开始。
+        """
         if initial_compaction is not None:
             self.state.compaction = initial_compaction.model_copy(deep=True)
         if initial_pending_tool_calls:
@@ -109,6 +118,8 @@ class AgentRuntime:
         self.state.pending_plan_token = initial_pending_plan_token
         if initial_queued_messages:
             self.state.queued_messages = [item.model_copy(deep=True) for item in initial_queued_messages]
+
+            
         self._subscribers: list[Subscriber] = []
         self._approved_pending_plan = False
         self._queue_lock = threading.RLock()
@@ -378,8 +389,14 @@ class AgentRuntime:
         list(self._emit(request_event))
         text_chunks: list[str] = []
         partial_calls: dict[int, dict[str, str]] = {}
+        finish_reasons: list[str] = []
+        streamed_event_count = 0
         try:
             for event in self.llm_client.stream_chat(request_decision.messages or messages, tools=request_decision.tools if request_decision.tools is not None else tools):
+                streamed_event_count += 1
+                finish_reason = str(event.get("finish_reason") or "").strip()
+                if finish_reason:
+                    finish_reasons.append(finish_reason)
                 if event["text"]:
                     text_chunks.append(event["text"])
                     list(self._emit(self._event(MESSAGE_DELTA, delta=event["text"])))
@@ -412,11 +429,60 @@ class AgentRuntime:
                 list(self._emit(provider_error_event))
                 raise ValueError(f"Invalid tool arguments for {partial['name']}: {partial['arguments']}") from exc
             tool_calls.append(ToolCall(id=partial["id"] or str(uuid.uuid4()), name=partial["name"], arguments=arguments))
-        response_event = self._event(PROVIDER_RESPONSE, details={"provider": self._provider_name(), "model": self.llm_client.model.model, "message_count": len(messages), "tool_count": len(tool_calls)})
+        response_event = self._event(
+            PROVIDER_RESPONSE,
+            details={
+                "provider": self._provider_name(),
+                "model": self.llm_client.model.model,
+                "message_count": len(messages),
+                "tool_count": len(tool_calls),
+                "text_length": len("".join(text_chunks)),
+                "streamed_event_count": streamed_event_count,
+                "finish_reasons": finish_reasons,
+            },
+        )
         response_decision = self.lifecycle.emit_provider_response(response_event, "".join(text_chunks), tool_calls)
         response_event.details.update(response_decision.details)
         list(self._emit(response_event))
-        return response_decision.assistant_text or "".join(text_chunks), response_decision.tool_calls or tool_calls
+        assistant_text = response_decision.assistant_text or "".join(text_chunks)
+        resolved_tool_calls = response_decision.tool_calls or tool_calls
+        if not assistant_text.strip() and not resolved_tool_calls:
+            fallback_text = self._tool_result_fallback(messages)
+            if fallback_text:
+                response_event.details["fallback"] = "tool_results"
+                return fallback_text, []
+            message = "Provider returned an empty response with no tool calls."
+            provider_error_event = self._event(
+                PROVIDER_ERROR,
+                message=message,
+                is_error=True,
+                details={
+                    "provider": self._provider_name(),
+                    "model": self.llm_client.model.model,
+                    "message_count": len(messages),
+                    "streamed_event_count": streamed_event_count,
+                    "finish_reasons": finish_reasons,
+                },
+            )
+            list(self._emit(provider_error_event))
+            raise ValueError(message)
+        return assistant_text, resolved_tool_calls
+
+    @staticmethod
+    def _tool_result_fallback(messages: list[ChatMessage]) -> str:
+        tool_texts: list[str] = []
+        for message in reversed(messages):
+            if message.role != "tool":
+                if tool_texts:
+                    break
+                continue
+            parts = [part.text.strip() for part in message.content if getattr(part, "text", "").strip()]
+            text = "\n".join(parts).strip()
+            if text:
+                tool_texts.append(text)
+        if not tool_texts:
+            return ""
+        return "\n\n".join(reversed(tool_texts))
 
     def _build_plan_steps(self, tool_calls: list[ToolCall]) -> list[PlanStep]:
         steps: list[PlanStep] = []
@@ -706,5 +772,3 @@ class AgentRuntime:
 
 
 AgentSession = AgentRuntime
-
-

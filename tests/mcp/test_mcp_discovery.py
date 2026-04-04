@@ -133,3 +133,28 @@ def test_load_mcp_server_configs_supports_mcp_servers_mapping(tmp_path: Path) ->
     assert servers[0].command == "npx"
     assert servers[0].resolved_transport() == "stdio"
     assert servers[0].idle_timeout_seconds == 7
+
+
+def test_load_mcp_config_preserves_intent_routing_metadata(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "fetch",
+                        "description": "Fetch web pages",
+                        "intent_tags": ["web", "url", "缃戦〉"],
+                        "auto_match_examples": ["鑾峰彇缃戦〉鍐呭", "summarize this webpage"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    document = load_mcp_config(project_dir)
+
+    assert document.servers[0].intent_tags == ["web", "url", "缃戦〉"]
+    assert document.servers[0].auto_match_examples == ["鑾峰彇缃戦〉鍐呭", "summarize this webpage"]

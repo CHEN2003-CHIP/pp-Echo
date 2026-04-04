@@ -63,11 +63,26 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
             def runner() -> None:
                 try:
                     fn()
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[Error] {exc}")
                 finally:
                     console.print()
 
             worker = threading.Thread(target=runner, name=f"pp-agent-{action}", daemon=True)
             worker.start()
+
+        def safe_handle_command(raw_command: str):
+            try:
+                return handle_command(agent, raw_command, workspace)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[Error] {exc}")
+                return "handled"
+
+        def safe_handle_queue_command(raw_command: str) -> None:
+            try:
+                handle_queue_command(agent, raw_command)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[Error] {exc}")
         # 渲染基础信息：会话ID、模型名称
         console.print(f"pp-agent session={agent.session_id} model={agent.llm_client.model.model}")
         # 提示待审批的计划令牌
@@ -96,7 +111,7 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
                 continue
             #优先处理队列任务
             if raw.startswith("/queue"):
-                handle_queue_command(agent, raw)
+                safe_handle_queue_command(raw)
                 # 空闲状态下自动执行队列消息
                 if not is_busy() and not agent.state.pending_plan_token and agent.state.queued_messages:
                     start_worker("queue", agent.continue_)
@@ -106,7 +121,7 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
                 if raw.startswith("/"):
                     #TODO: maybe skill or mcp allowed here?
                     if raw in {"/session", "/settings", "/status", "/approvals", "/timeline"} or raw.startswith("/tree"):
-                        result = handle_command(agent, raw, workspace)
+                        result = safe_handle_command(raw)
                         if result == "quit":
                             console.print("Wait for the current task to finish before quitting.")
                         continue
@@ -126,7 +141,7 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
             # 快捷拒绝：输入reject/no
             if agent.state.pending_plan_token and raw.strip().lower() in {"reject", "no", "拒绝","不允许","不同意","不好"}:
                 token = agent.state.pending_plan_token
-                result = handle_command(agent, f"/reject {token}", workspace)
+                result = safe_handle_command(f"/reject {token}")
                 # 处理退出/新建会话逻辑
                 if result == "quit":
                     return
@@ -157,7 +172,7 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
 
             # 处理拒绝命令
             if raw.startswith("/reject "):
-                result = handle_command(agent, raw, workspace)
+                result = safe_handle_command(raw)
                 if result == "quit":
                     return
                 if result == "new":
@@ -170,7 +185,7 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
             
             # 处理通用系统命令
             if raw.startswith("/"):
-                result = handle_command(agent, raw, workspace)
+                result = safe_handle_command(raw)
                 if result == "handled":
                     continue
                 #退出命令
