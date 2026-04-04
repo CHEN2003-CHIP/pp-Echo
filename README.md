@@ -2,8 +2,7 @@
 
 <p align="center">
   <strong>pp-Echo is a CLI-first coding agent that shows its plan, asks before risky actions, and can rewind both your repo and your conversation.</strong><br />
-  面向真实仓库工作的 CLI 编码代理：先给计划，再做动作；高风险操作先审批；代码和会话都能安全回退。
-</p>
+  闈㈠悜鐪熷疄浠撳簱宸ヤ綔鐨?CLI 缂栫爜浠ｇ悊锛氬厛缁欒鍒掞紝鍐嶅仛鍔ㄤ綔锛涢珮椋庨櫓鎿嶄綔鍏堝鎵癸紱浠ｇ爜鍜屼細璇濋兘鑳藉畨鍏ㄥ洖閫€銆?</p>
 
 <p align="center">
   <a href="#quick-start"><img alt="Quick Start" src="https://img.shields.io/badge/Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
@@ -215,6 +214,12 @@ Project resources can be declared in `.pp-agent/resources.json` or `.pp-agent/pa
 - A reusable template for future releases lives in [.github/release-template.md](.github/release-template.md).
 - GitHub Releases page: [github.com/CHEN2003-CHIP/pp-Echo/releases](https://github.com/CHEN2003-CHIP/pp-Echo/releases)
 
+## Benchmarks
+
+- Latest benchmark report: [docs/benchmarks/latest.md](docs/benchmarks/latest.md)
+- Generated benchmark artifacts: [artifacts/benchmarks](artifacts/benchmarks)
+- The suite is deterministic, offline, and focuses on planner gating, safe rewind, MCP lazy activation, session branching, and long-context compaction.
+
 ## Contributing
 
 Contributions are welcome across CLI behavior, docs polish, demo assets, tests, extensions, and release packaging.
@@ -228,3 +233,4 @@ Start here:
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
+

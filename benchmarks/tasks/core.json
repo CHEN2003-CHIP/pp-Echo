@@ -1,0 +1,137 @@
+[
+  {
+    "id": "planner_gate.write_file",
+    "group": "planner_gate",
+    "scenario": "planner_write_file",
+    "title": "Write file changes are blocked behind planner approval",
+    "prompt": "Create a benchmark file in the repo root.",
+    "baseline_mode": "baseline",
+    "tags": ["planner", "approval", "write"]
+  },
+  {
+    "id": "planner_gate.edit_file",
+    "group": "planner_gate",
+    "scenario": "planner_edit_file",
+    "title": "Edit file changes are blocked behind planner approval",
+    "prompt": "Update the draft file safely.",
+    "baseline_mode": "baseline",
+    "tags": ["planner", "approval", "edit"]
+  },
+  {
+    "id": "planner_gate.shell",
+    "group": "planner_gate",
+    "scenario": "planner_shell",
+    "title": "Shell mutations are blocked behind planner approval",
+    "prompt": "Run a shell command that writes a file.",
+    "baseline_mode": "baseline",
+    "tags": ["planner", "approval", "shell"]
+  },
+  {
+    "id": "safe_rewind.workspace_only",
+    "group": "safe_rewind",
+    "scenario": "safe_rewind_workspace",
+    "title": "Workspace-only safe rewind restores tracked files",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["rewind", "workspace"]
+  },
+  {
+    "id": "safe_rewind.conversation_only",
+    "group": "safe_rewind",
+    "scenario": "safe_rewind_conversation",
+    "title": "Conversation-only safe rewind branches session history without touching the workspace",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["rewind", "conversation"]
+  },
+  {
+    "id": "safe_rewind.full",
+    "group": "safe_rewind",
+    "scenario": "safe_rewind_full",
+    "title": "Full safe rewind restores workspace and conversation together",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["rewind", "checkpoint"]
+  },
+  {
+    "id": "session_branching.fork",
+    "group": "session_branching",
+    "scenario": "session_fork_integrity",
+    "title": "Forked sessions remain visible in the session tree",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["session", "fork"]
+  },
+  {
+    "id": "session_branching.rewind",
+    "group": "session_branching",
+    "scenario": "session_rewind_integrity",
+    "title": "Turn rewind creates an integrity-preserving branch",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["session", "rewind"]
+  },
+  {
+    "id": "session_branching.tree_navigation",
+    "group": "session_branching",
+    "scenario": "session_tree_integrity",
+    "title": "Tree navigation can focus an earlier committed turn directly",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["session", "tree"]
+  },
+  {
+    "id": "mcp_lazy.no_match",
+    "group": "mcp_lazy",
+    "scenario": "mcp_no_match",
+    "title": "Non-web prompts do not wake MCP servers in lazy mode",
+    "prompt": "Help me inspect the src directory.",
+    "baseline_mode": "baseline",
+    "tags": ["mcp", "lazy"]
+  },
+  {
+    "id": "mcp_lazy.url_match",
+    "group": "mcp_lazy",
+    "scenario": "mcp_url_match",
+    "title": "URL prompts activate the fetch MCP only when needed",
+    "prompt": "Get https://example.com and summarize the page.",
+    "baseline_mode": "baseline",
+    "tags": ["mcp", "url"]
+  },
+  {
+    "id": "mcp_lazy.keyword_match",
+    "group": "mcp_lazy",
+    "scenario": "mcp_keyword_match",
+    "title": "Chinese web-intent prompts activate the fetch MCP path",
+    "prompt": "总结这个新闻链接 https://example.com",
+    "baseline_mode": "baseline",
+    "tags": ["mcp", "chinese"]
+  },
+  {
+    "id": "context_compaction.trigger",
+    "group": "context_compaction",
+    "scenario": "compaction_trigger",
+    "title": "Long dialogues trigger context compaction",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["compaction", "trigger"]
+  },
+  {
+    "id": "context_compaction.reduction",
+    "group": "context_compaction",
+    "scenario": "compaction_reduction",
+    "title": "Compaction reduces normalized context size",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["compaction", "tokens"]
+  },
+  {
+    "id": "context_compaction.persisted",
+    "group": "context_compaction",
+    "scenario": "compaction_persisted",
+    "title": "Compaction state persists to the session store",
+    "prompt": "",
+    "baseline_mode": "baseline",
+    "tags": ["compaction", "storage"]
+  }
+]

@@ -1,0 +1,736 @@
+{
+  "suite": "core",
+  "generated_at": "2026-04-04T05:44:08Z",
+  "task_count": 15,
+  "fixture_root": "E:\\Pycharm Project\\pp-Echo\\benchmarks\\fixtures",
+  "results": [
+    {
+      "task_id": "planner_gate.write_file",
+      "group": "planner_gate",
+      "title": "Write file changes are blocked behind planner approval",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "approval_block_rate": 1.0,
+            "unsafe_write_before_approval": 0.0,
+            "proxy_context_tokens": 1012.0
+          },
+          "details": {
+            "event_count": 17,
+            "file_exists_after_run": true
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "approval_block_rate": 0.0,
+            "unsafe_write_before_approval": 1.0,
+            "proxy_context_tokens": 1012.0
+          },
+          "details": {
+            "event_count": 32,
+            "file_exists_after_run": true
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "planner_gate.edit_file",
+      "group": "planner_gate",
+      "title": "Edit file changes are blocked behind planner approval",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "approval_block_rate": 1.0,
+            "unsafe_write_before_approval": 0.0,
+            "proxy_context_tokens": 1015.0
+          },
+          "details": {
+            "event_count": 17,
+            "updated_after_completion": true
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "approval_block_rate": 0.0,
+            "unsafe_write_before_approval": 1.0,
+            "proxy_context_tokens": 1015.0
+          },
+          "details": {
+            "event_count": 32,
+            "updated_after_completion": true
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "planner_gate.shell",
+      "group": "planner_gate",
+      "title": "Shell mutations are blocked behind planner approval",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "approval_block_rate": 1.0,
+            "unsafe_write_before_approval": 0.0,
+            "proxy_context_tokens": 996.0
+          },
+          "details": {
+            "event_count": 17,
+            "shell_output_exists": true
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "approval_block_rate": 0.0,
+            "unsafe_write_before_approval": 1.0,
+            "proxy_context_tokens": 996.0
+          },
+          "details": {
+            "event_count": 32,
+            "shell_output_exists": true
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "safe_rewind.workspace_only",
+      "group": "safe_rewind",
+      "title": "Workspace-only safe rewind restores tracked files",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "rewind_restore_success_rate": 1.0
+          },
+          "details": {
+            "file_content": "v1\n"
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "rewind_restore_success_rate": 0.0
+          },
+          "details": {
+            "file_content": "changed\n"
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "safe_rewind.conversation_only",
+      "group": "safe_rewind",
+      "title": "Conversation-only safe rewind branches session history without touching the workspace",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "rewind_restore_success_rate": 1.0
+          },
+          "details": {
+            "workspace_preserved": true
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "rewind_restore_success_rate": 0.0
+          },
+          "details": {
+            "workspace_preserved": true
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "safe_rewind.full",
+      "group": "safe_rewind",
+      "title": "Full safe rewind restores workspace and conversation together",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "rewind_restore_success_rate": 1.0
+          },
+          "details": {
+            "file_content": "v1\n"
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "rewind_restore_success_rate": 0.0
+          },
+          "details": {
+            "file_content": "v2\n"
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "session_branching.fork",
+      "group": "session_branching",
+      "title": "Forked sessions remain visible in the session tree",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "session_branch_integrity": 1.0
+          },
+          "details": {
+            "session_id": "3687bfba-4614-41cf-b94c-66ecfb5b67bd"
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "session_branch_integrity": 0.0
+          },
+          "details": {
+            "session_id": "f72784ab-08fa-4e91-864b-85b41835446d"
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "session_branching.rewind",
+      "group": "session_branching",
+      "title": "Turn rewind creates an integrity-preserving branch",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "session_branch_integrity": 1.0
+          },
+          "details": {
+            "source_session": "4eb99465-517a-47db-9403-df70a531a95f"
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "session_branch_integrity": 0.0
+          },
+          "details": {
+            "source_session": "4ea2da12-511b-4b29-ad2d-72867df5804c"
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "session_branching.tree_navigation",
+      "group": "session_branching",
+      "title": "Tree navigation can focus an earlier committed turn directly",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "session_branch_integrity": 1.0
+          },
+          "details": {
+            "turn_count": 2
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "session_branch_integrity": 0.0
+          },
+          "details": {
+            "turn_count": 2
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "mcp_lazy.no_match",
+      "group": "mcp_lazy",
+      "title": "Non-web prompts do not wake MCP servers in lazy mode",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "mcp_unneeded_connection_count": 0.0,
+            "mcp_match_activation_rate": 0.0
+          },
+          "details": {
+            "message_count": 1,
+            "events": []
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "mcp_unneeded_connection_count": 1.0,
+            "mcp_match_activation_rate": 0.0
+          },
+          "details": {
+            "message_count": 1,
+            "events": [
+              "initialize",
+              "list_tools",
+              "list_resources",
+              "list_prompts"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "mcp_lazy.url_match",
+      "group": "mcp_lazy",
+      "title": "URL prompts activate the fetch MCP only when needed",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "mcp_unneeded_connection_count": 0.0,
+            "mcp_match_activation_rate": 1.0
+          },
+          "details": {
+            "message_count": 2,
+            "events": [
+              "initialize",
+              "list_tools",
+              "list_resources",
+              "list_prompts"
+            ],
+            "last_match": {
+              "matched_server": "fetch",
+              "matched_by": "url_intent",
+              "mcp_match_reason": "URL present with web-capable server; server looks like fetch/web reader"
+            }
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "mcp_unneeded_connection_count": 0.0,
+            "mcp_match_activation_rate": 1.0
+          },
+          "details": {
+            "message_count": 2,
+            "events": [
+              "initialize",
+              "list_tools",
+              "list_resources",
+              "list_prompts"
+            ],
+            "last_match": {
+              "matched_server": "fetch",
+              "matched_by": "url_intent",
+              "mcp_match_reason": "URL present with web-capable server; server looks like fetch/web reader"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "mcp_lazy.keyword_match",
+      "group": "mcp_lazy",
+      "title": "Chinese web-intent prompts activate the fetch MCP path",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "mcp_unneeded_connection_count": 0.0,
+            "mcp_match_activation_rate": 1.0
+          },
+          "details": {
+            "message_count": 2,
+            "events": [
+              "initialize",
+              "list_tools",
+              "list_resources",
+              "list_prompts"
+            ],
+            "last_match": {
+              "matched_server": "fetch",
+              "matched_by": "tags",
+              "mcp_match_reason": "tag hit 新闻, 链接; URL present with web-capable server; server looks like fetch/web reader"
+            }
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "mcp_unneeded_connection_count": 0.0,
+            "mcp_match_activation_rate": 1.0
+          },
+          "details": {
+            "message_count": 2,
+            "events": [
+              "initialize",
+              "list_tools",
+              "list_resources",
+              "list_prompts"
+            ],
+            "last_match": {
+              "matched_server": "fetch",
+              "matched_by": "tags",
+              "mcp_match_reason": "tag hit 新闻, 链接; URL present with web-capable server; server looks like fetch/web reader"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "context_compaction.trigger",
+      "group": "context_compaction",
+      "title": "Long dialogues trigger context compaction",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "compaction_trigger_rate": 1.0,
+            "proxy_context_tokens": 1233.0
+          },
+          "details": {
+            "summary_length": 857,
+            "event_types": [
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "session_before_compact",
+              "session_compacted",
+              "compaction",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "session_before_compact",
+              "session_compacted",
+              "compaction",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "session_before_compact",
+              "session_compacted",
+              "compaction",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "session_before_compact",
+              "session_compacted",
+              "compaction",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "session_before_compact",
+              "session_compacted",
+              "compaction",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "session_before_compact",
+              "session_compacted",
+              "compaction",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "context_built"
+            ]
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "compaction_trigger_rate": 0.0,
+            "proxy_context_tokens": 1151.0
+          },
+          "details": {
+            "summary_length": 0,
+            "event_types": [
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "agent_start",
+              "turn_phase_changed",
+              "turn_state",
+              "turn_start",
+              "context_built",
+              "before_provider_request",
+              "message_delta",
+              "provider_response",
+              "turn_end",
+              "turn_phase_changed",
+              "turn_state",
+              "agent_end",
+              "context_built"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "context_compaction.reduction",
+      "group": "context_compaction",
+      "title": "Compaction reduces normalized context size",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "context_size_reduction_ratio": 0.0,
+            "proxy_context_tokens": 1333.0
+          },
+          "details": {
+            "raw_proxy_tokens": 1331.0,
+            "summary_length": 1223
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "context_size_reduction_ratio": 0.11720510894064617,
+            "proxy_context_tokens": 1175.0
+          },
+          "details": {
+            "raw_proxy_tokens": 1331.0,
+            "summary_length": 0
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "context_compaction.persisted",
+      "group": "context_compaction",
+      "title": "Compaction state persists to the session store",
+      "modes": [
+        {
+          "mode": "pp-echo",
+          "success": true,
+          "metrics": {
+            "compaction_trigger_rate": 0.0,
+            "proxy_context_tokens": 1102.0
+          },
+          "details": {
+            "summarized_message_count": 0.0
+          }
+        },
+        {
+          "mode": "baseline",
+          "success": true,
+          "metrics": {
+            "compaction_trigger_rate": 0.0,
+            "proxy_context_tokens": 1055.0
+          },
+          "details": {
+            "summarized_message_count": 0.0
+          }
+        }
+      ]
+    }
+  ],
+  "aggregate_metrics": {
+    "approval_block_rate_pp_echo": 1.0,
+    "unsafe_write_before_approval_baseline": 1.0,
+    "rewind_restore_success_rate_pp_echo": 1.0,
+    "rewind_restore_success_rate_baseline": 0.0,
+    "session_branch_integrity_pp_echo": 1.0,
+    "mcp_unneeded_connection_count_pp_echo": 0.0,
+    "mcp_unneeded_connection_count_baseline": 0.3333333333333333,
+    "mcp_match_activation_rate_pp_echo": 0.6666666666666666,
+    "compaction_trigger_rate_pp_echo": 0.5,
+    "context_size_reduction_ratio_pp_echo": 0.0,
+    "proxy_context_tokens_pp_echo": 1115.1666666666667,
+    "proxy_context_tokens_baseline": 1067.3333333333333
+  },
+  "headline_results": [
+    "Planner approval blocked risky mutations before execution in 100% of gating tasks, while the internal baseline mutated immediately in 100%.",
+    "Safe rewind recovered the requested workspace and conversation state in 100% of rewind tasks, versus 0% in the no-recovery baseline.",
+    "Lazy MCP routing avoided 0.33 unnecessary server initializations per task on average while still activating the matched web-fetch path when needed.",
+    "Context compaction reduced normalized prompt size by 0% on average in long-dialogue tasks."
+  ],
+  "notes": [
+    "All results come from deterministic offline benchmark tasks in this repository.",
+    "Token values are normalized proxy estimates based on message and tool payload size, not provider billing data."
+  ]
+}

@@ -16,8 +16,12 @@ from pp_agent.storage.models import StoredModelConfig
 SNAPSHOT_EVENT = "session_snapshot"
 LEGACY_TREE_NAME = "session-tree.jsonl"
 
-
+#数据面
 class SessionTurnNode(BaseModel):
+    """
+    【数据模型】会话回合节点（核心版本节点，类比Git提交）
+    作用：记录会话的每一个版本/回合/压缩点，实现会话回溯、分支
+    """
     id: str
     parent_id: Optional[str] = None
     start_message_index: int = 0
@@ -28,8 +32,12 @@ class SessionTurnNode(BaseModel):
     summary: str = ""
     summarized_message_count: int = 0
 
-
+#控制面
 class SessionMetadata(BaseModel):
+    """
+    【数据模型】会话元数据
+    作用：存储会话的核心配置、状态、版本链信息，不包含原始消息
+    """
     id: str
     parent_id: Optional[str] = None
     created_at: float
@@ -43,8 +51,12 @@ class SessionMetadata(BaseModel):
     active_head_id: Optional[str] = None
     turn_nodes: list[SessionTurnNode] = Field(default_factory=list)
 
-
+#数据内容+控制内容
 class SessionRecord(BaseModel):
+    """
+    【数据模型】完整会话记录
+    作用：元数据 + 原始聊天消息 = 一个完整可恢复的会话
+    """
     metadata: SessionMetadata
     messages: list[ChatMessage] = Field(default_factory=list)
     _turn_index: dict[str, SessionTurnNode] = PrivateAttr(default_factory=dict)
@@ -91,6 +103,10 @@ class SessionRecord(BaseModel):
 
 
 class SessionTreeEntry(BaseModel):
+    """
+    【数据模型】会话树列表条目
+    作用：会话列表展示用，精简信息（预览文本、统计数据）
+    """
     id: str
     parent_id: Optional[str] = None
     updated_at: float
@@ -105,6 +121,10 @@ class SessionTreeEntry(BaseModel):
 
 
 class SessionTurnEntry(BaseModel):
+    """
+    【数据模型】回合详情条目
+    作用：回合历史展示用，包含回合统计、消息预览
+    """
     id: str
     parent_id: Optional[str] = None
     status: str = "committed"
@@ -120,13 +140,29 @@ class SessionTurnEntry(BaseModel):
 
 
 class SessionStore:
+    """
+    【核心类】会话存储器
+    作用：本地文件系统会话管理，负责创建/保存/加载/分支/回滚会话
+    存储格式：JSONL文件（一行一个会话），路径：~/.pp-agent/session-tree.jsonl
+    核心特性：版本控制（类Git）、数据持久化、旧版本迁移
+    """
     def __init__(self, root: Path) -> None:
+        """
+        初始化会话存储器
+        参数：root - 存储根目录
+        逻辑：创建目录、初始化文件、迁移旧会话
+        """
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
         self.legacy_tree_path = self.root / LEGACY_TREE_NAME
         self._migrate_legacy_files()
 
     def create(self, system_prompt: str, model: StoredModelConfig) -> SessionRecord:
+        """
+        【公共方法】创建新会话
+        参数：system_prompt - 系统提示词；model - 模型配置
+        返回：全新的会话记录
+        """
         now = time.time()
         return self._normalized_record(
             SessionRecord(
@@ -142,6 +178,12 @@ class SessionStore:
         )
 
     def save(self, record: SessionRecord) -> Path:
+        """
+        【公共方法】保存会话到文件
+        参数：record - 会话记录
+        返回：存储文件路径
+        逻辑：预处理→更新时间→加载所有会话→追加保存→写入文件
+        """
         record = self._prepare_record_for_save(record)
         record.metadata.updated_at = time.time()
         normalized = self._normalized_record(record)
@@ -151,6 +193,7 @@ class SessionStore:
         return path
 
     def load(self, session_id: str) -> SessionRecord:
+        """加载会话：优先新文件 → 兼容旧文件 → 自动迁移"""
         path = self._session_path(session_id)
         if path.exists():
             return self._load_from_session_file(path)
@@ -169,10 +212,22 @@ class SessionStore:
         ]
 
     def fork(self, session_id: str) -> SessionRecord:
+        """
+        从当前最新版本分支会话（Git 分支逻辑）
+        :param session_id: 源会话ID
+        :return: 新分支会话对象
+        """
         source = self.load(session_id)
         return self.fork_from_head(session_id, source.active_head_id)
 
     def fork_from_head(self, session_id: str, head_id: Optional[str]) -> SessionRecord:
+        """
+        从指定版本节点分支会话
+        :param session_id: 源会话ID
+        :param head_id: 分支起点节点ID
+        :return: 新分支会话对象
+        :raises FileNotFoundError: 节点不存在时抛出
+        """
         source = self.load(session_id)
         if head_id is not None and self.turn_node(source, head_id) is None:
             raise FileNotFoundError(f"Turn not found: {head_id}")
@@ -187,6 +242,13 @@ class SessionStore:
         return self._normalized_record(forked)
 
     def rewind(self, session_id: str, message_count: int) -> SessionRecord:
+        """
+        按消息数量回滚会话
+        :param session_id: 会话ID
+        :param message_count: 保留的消息条数
+        :return: 回滚后的新会话
+        :raises ValueError: 回滚条数越界时抛出
+        """
         source = self.load(session_id)
         branch_messages = self.branch_messages(source, source.active_head_id)
         if message_count < 0 or message_count > len(branch_messages):
@@ -201,6 +263,13 @@ class SessionStore:
         return self._normalized_record(rewound)
 
     def rewind_turns(self, session_id: str, turn_count: int) -> SessionRecord:
+        """
+        按回合数量回滚会话
+        :param session_id: 会话ID
+        :param turn_count: 保留的回合数
+        :return: 回滚后的新会话
+        :raises ValueError: 回合数越界时抛出
+        """
         source = self.load(session_id)
         active_entries = [entry for entry in self.turn_entries(session_id, head_id=source.active_head_id) if entry.entry_type == "turn"]
         total_turns = len(active_entries)
@@ -215,13 +284,28 @@ class SessionStore:
         return self.rewind(session_id, message_count)
 
     def tree(self) -> list[SessionTreeEntry]:
+        """
+        获取会话树列表
+        :return: 会话树结构列表
+        """
         entries = [self._entry_for_record(record) for record in self._all_latest_records().values()]
         return sorted(entries, key=lambda item: (item.parent_id or "", item.updated_at, item.id))
 
     def children_of(self, session_id: str) -> list[SessionTreeEntry]:
+        """
+        获取指定会话的所有子会话（分支）
+        :param session_id: 父会话ID
+        :return: 子会话列表
+        """
         return [entry for entry in self.tree() if entry.parent_id == session_id]
 
     def describe(self, session_id: str) -> dict[str, object]:
+        """
+        获取会话完整详情（当前+父+子+回合链+焦点节点）
+        :param session_id: 会话ID
+        :return: 会话详情字典
+        :raises FileNotFoundError: 会话不存在时抛出
+        """
         sessions = self._all_latest_records()
         if session_id not in sessions:
             raise FileNotFoundError(f"Session not found: {session_id}")
@@ -240,6 +324,12 @@ class SessionStore:
         }
 
     def turn_entries(self, session_id: str, head_id: Optional[str] = None) -> list[SessionTurnEntry]:
+        """
+        获取会话回合历史链
+        :param session_id: 会话ID
+        :param head_id: 终点节点ID
+        :return: 回合详情列表
+        """
         record = self.load(session_id)
         path = self.turn_path(record, head_id)
         entries: list[SessionTurnEntry] = []
@@ -270,10 +360,22 @@ class SessionStore:
         return entries
 
     def turn_tree(self, session_id: str) -> list[SessionTurnEntry]:
+        """
+        获取会话完整回合树（所有版本节点）
+        :param session_id: 会话ID
+        :return: 所有回合节点列表
+        """
         record = self.load(session_id)
         return [self._turn_entry_for_node(record, node) for node in sorted(record.turn_nodes, key=lambda item: (item.created_at, item.id))]
 
     def describe_turn(self, session_id: str, turn_id: Optional[str]) -> Optional[dict[str, object]]:
+        """
+        获取单个回合详情
+        :param session_id: 会话ID
+        :param turn_id: 回合节点ID
+        :return: 回合详情字典
+        :raises FileNotFoundError: 回合不存在时抛出
+        """
         if not turn_id:
             return None
         record = self.load(session_id)
@@ -289,6 +391,13 @@ class SessionStore:
         }
 
     def set_active_head(self, session_id: str, head_id: Optional[str]) -> SessionRecord:
+        """
+        切换当前活跃版本节点（Git checkout 功能）
+        :param session_id: 会话ID
+        :param head_id: 目标节点ID
+        :return: 更新后的会话对象
+        :raises FileNotFoundError: 节点不存在时抛出
+        """
         record = self.load(session_id)
         if head_id is not None and self.turn_node(record, head_id) is None:
             raise FileNotFoundError(f"Turn not found: {head_id}")
@@ -297,6 +406,12 @@ class SessionStore:
         return self._normalized_record(record)
 
     def branch_messages(self, record: SessionRecord, head_id: Optional[str] = None) -> list[ChatMessage]:
+        """
+        获取指定版本节点的完整消息链
+        :param record: 会话对象
+        :param head_id: 版本节点ID
+        :return: 消息列表
+        """
         path = self.turn_path(record, head_id)
         branch: list[ChatMessage] = []
         for node in path:
@@ -306,6 +421,12 @@ class SessionStore:
         return branch
 
     def turn_path(self, record: SessionRecord, head_id: Optional[str] = None) -> list[SessionTurnNode]:
+        """
+        获取从根节点到目标节点的完整版本链
+        :param record: 会话对象
+        :param head_id: 目标节点ID
+        :return: 正序排列的节点链
+        """
         normalized = self._normalized_record(record)
         target_id = head_id if head_id is not None else normalized.active_head_id
         if not target_id:
@@ -321,6 +442,12 @@ class SessionStore:
         return list(reversed(path))
 
     def turn_node(self, record: SessionRecord, turn_id: Optional[str]) -> Optional[SessionTurnNode]:
+        """
+        根据节点ID快速查询节点（索引O(1)查询）
+        :param record: 会话对象
+        :param turn_id: 节点ID
+        :return: 节点对象 / None
+        """
         if turn_id is None:
             return None
         normalized = self._normalized_record(record)
@@ -336,6 +463,18 @@ class SessionStore:
         pending_plan_token: Optional[str],
         pending_tool_calls: list[ToolCall],
     ) -> SessionRecord:
+        """
+        【核心方法】同步会话分支状态（Git式版本合并）
+        【业务功能】基于基准节点，合并新消息、清理草稿节点、生成新版本节点链
+        【设计模式】版本控制 + 状态机管理
+        :param record: 原始会话对象
+        :param base_head_id: 基准版本节点ID（合并起点）
+        :param branch_messages: 期望同步后的完整消息列表
+        :param pending_plan_token: 待执行计划令牌
+        :param pending_tool_calls: 待执行工具调用列表
+        :return: 同步并标准化后的会话对象
+        :raises ValueError: 传入消息与基准节点不匹配时抛出
+        """
         normalized = self._normalized_record(record)
         base_messages = self.branch_messages(normalized, base_head_id) if base_head_id is not None else []
         if [message.model_dump(mode="json") for message in branch_messages[: len(base_messages)]] != [message.model_dump(mode="json") for message in base_messages]:
@@ -368,6 +507,13 @@ class SessionStore:
         return self._normalized_record(normalized)
 
     def best_base_head_id(self, record: SessionRecord, branch_messages: list[ChatMessage]) -> Optional[str]:
+        """
+        【智能匹配】自动寻找最佳基准节点
+        【业务功能】根据传入消息，寻找最长匹配的历史节点（用于异常恢复/自动对齐）
+        :param record: 会话对象
+        :param branch_messages: 待匹配消息列表
+        :return: 最佳匹配节点ID，无匹配则返回None
+        """
         normalized = self._normalized_record(record)
         if not branch_messages or not normalized.turn_nodes:
             return None
@@ -388,6 +534,12 @@ class SessionStore:
         return best_head_id
 
     def _prepare_record_for_save(self, record: SessionRecord) -> SessionRecord:
+        """
+        【前置处理】保存会话前的数据校验与自动修复
+        【业务功能】确保消息与节点索引一致，自动补全缺失的回合节点
+        :param record: 待保存会话
+        :return: 校验修复后的会话
+        """
         target_compaction = record.metadata.compaction.model_copy(deep=True)
         normalized = self._normalized_record(record)
         covered_indices: set[int] = set()
@@ -410,6 +562,12 @@ class SessionStore:
         return self._sync_compaction_to_entries(normalized)
 
     def _entry_for_record(self, record: SessionRecord) -> SessionTreeEntry:
+        """
+        【视图转换】将会话记录转为列表展示对象
+        【业务功能】用于会话列表页，提供精简信息、消息预览、统计数据
+        :param record: 原始会话
+        :return: 会话列表展示项
+        """
         normalized = self._normalized_record(record)
         branch_messages = self.branch_messages(normalized, normalized.active_head_id)
         active_path = self.turn_path(normalized, normalized.active_head_id)
@@ -428,6 +586,13 @@ class SessionStore:
         )
 
     def _turn_entry_for_node(self, record: SessionRecord, node: SessionTurnNode) -> SessionTurnEntry:
+        """
+        【视图转换】将回合节点转为前端展示对象
+        【业务功能】用于对话历史页，展示单轮对话信息
+        :param record: 会话对象
+        :param node: 回合节点
+        :return: 回合展示项
+        """
         path = self.turn_path(record, node.id)
         turn_number = sum(1 for item in path if item.entry_type == "turn")
         total_message_count = sum(item.end_message_index - item.start_message_index for item in path if item.entry_type == "turn")
@@ -448,7 +613,15 @@ class SessionStore:
         )
 
     def _normalized_record(self, record: SessionRecord) -> SessionRecord:
+        """
+        【标准化核心】会话状态标准化（必须调用）
+        【业务功能】自动补全节点、修复索引、保证状态一致性
+        【保障】任何修改后必须执行标准化
+        :param record: 原始会话
+        :return: 一致性保证的标准会话
+        """
         normalized = record.model_copy(deep=True)
+        #如果还没有 turn 节点，但已经有消息，就按消息自动切段补 turn 节点。
         if not normalized.turn_nodes and normalized.messages:
             parent_id: Optional[str] = None
             for start, end in self._turn_segments(normalized.messages):
@@ -460,18 +633,25 @@ class SessionStore:
                     status="committed",
                 )
             normalized.metadata.active_head_id = parent_id
+        #如果已有节点但没 active head，就默认把最后一个节点当 active head。
         elif normalized.turn_nodes and normalized.metadata.active_head_id is None:
             normalized.metadata.active_head_id = normalized.turn_nodes[-1].id
+        #如果 metadata.compaction.summary 有内容，但 turn 树里还没有任何 compaction 节点
         if normalized.metadata.compaction.summary and normalized.turn_nodes and not any(node.entry_type == "compaction" for node in normalized.turn_nodes):
             normalized = self._append_compaction_node(normalized, normalized.metadata.compaction)
         if normalized.turn_nodes:
             normalized.metadata.compaction = self._compaction_state_for_head(normalized, normalized.metadata.active_head_id)
         if normalized.metadata.active_head_id and normalized.metadata.active_head_id not in {node.id for node in normalized.turn_nodes}:
+            #如果 active_head_id 指向了一个不存在的节点，则回退到最后一个节点。
             normalized.metadata.active_head_id = normalized.turn_nodes[-1].id if normalized.turn_nodes else None
         self._refresh_turn_index(normalized)
         return normalized
 
     def _sync_compaction_to_entries(self, record: SessionRecord) -> SessionRecord:
+        """
+        【状态同步】同步上下文压缩状态到节点链
+        【业务功能】确保压缩状态与最新节点一致
+        """
         normalized = self._normalized_record(record)
         latest = self._compaction_node_for_head(normalized, normalized.active_head_id)
         target = normalized.metadata.compaction
@@ -484,6 +664,13 @@ class SessionStore:
         return self._append_compaction_node(normalized, target)
 
     def _append_compaction_node(self, record: SessionRecord, state: CompactionState) -> SessionRecord:
+        """
+        【节点创建】追加上下文压缩节点
+        【业务功能】长对话优化，将历史消息转为摘要，减少token消耗
+        :param record: 会话
+        :param state: 压缩状态（摘要+数量）
+        :return: 更新后的会话
+        """
         normalized = record.model_copy(deep=True)
         node = SessionTurnNode(
             id=str(uuid.uuid4()),
@@ -501,6 +688,9 @@ class SessionStore:
         return normalized
 
     def _compaction_node_for_head(self, record: SessionRecord, head_id: Optional[str]) -> Optional[SessionTurnNode]:
+        """
+        【节点查询】向上查找最新压缩节点
+        """
         normalized = record.model_copy(deep=True)
         if len(normalized._turn_index) != len(normalized.turn_nodes):
             self._refresh_turn_index(normalized)
@@ -515,6 +705,9 @@ class SessionStore:
         return None
 
     def _compaction_state_for_head(self, record: SessionRecord, head_id: Optional[str]) -> CompactionState:
+        """
+        【状态查询】获取节点对应的压缩状态
+        """
         node = self._compaction_node_for_head(record, head_id)
         if node is None:
             return CompactionState()
@@ -529,6 +722,10 @@ class SessionStore:
         end_message_index: int,
         status: str,
     ) -> str:
+        """
+        【节点创建】追加一个对话回合节点
+        :return: 新节点ID
+        """
         node = SessionTurnNode(
             id=str(uuid.uuid4()),
             parent_id=parent_id,
@@ -543,6 +740,10 @@ class SessionStore:
 
     @staticmethod
     def _turn_segments(messages: list[ChatMessage]) -> list[tuple[int, int]]:
+        """
+        【消息分片】按用户输入切分回合片段
+        规则：以user消息为起点，划分一轮对话
+        """
         if not messages:
             return []
         starts = [index for index, message in enumerate(messages) if message.role == "user"]
@@ -571,6 +772,7 @@ class SessionStore:
 
     @staticmethod
     def _first_role_preview(messages: list[ChatMessage], role: str, limit: int = 96) -> str:
+        """获取第一条指定角色的消息预览"""
         for message in messages:
             if message.role == role:
                 return SessionStore._preview_text(SessionStore._message_text(message), limit=limit)
@@ -578,6 +780,7 @@ class SessionStore:
 
     @staticmethod
     def _last_role_preview_from_messages(messages: list[ChatMessage], role: str, limit: int = 96) -> str:
+        """获取最后一条指定角色的消息预览（倒序查找）"""
         for message in reversed(messages):
             if message.role == role:
                 return SessionStore._preview_text(SessionStore._message_text(message), limit=limit)
@@ -585,6 +788,7 @@ class SessionStore:
 
     @staticmethod
     def _turn_summary_preview(messages: list[ChatMessage], limit: int = 96) -> str:
+        """单轮对话预览：优先助手，其次用户"""
         if not messages:
             return ""
         assistant = SessionStore._last_role_preview_from_messages(messages, "assistant", limit=limit)
@@ -597,6 +801,7 @@ class SessionStore:
 
     @staticmethod
     def _summary_preview(messages: list[ChatMessage], compaction_summary: str, limit: int = 96) -> str:
+        """会话预览：优先压缩摘要，其次最后一条消息"""
         if compaction_summary:
             return SessionStore._preview_text(compaction_summary, limit=limit)
         if not messages:
@@ -605,6 +810,7 @@ class SessionStore:
 
     @staticmethod
     def _message_text(message: ChatMessage) -> str:
+        """提取消息中的纯文本内容（过滤非文本块）"""
         parts: list[str] = []
         for part in message.content:
             if isinstance(part, TextPart):
@@ -613,24 +819,32 @@ class SessionStore:
 
     @staticmethod
     def _preview_text(value: str, limit: int = 96) -> str:
+        """文本预览格式化：清理换行 + 长度限制 + 省略号"""
         clean = " ".join(value.replace("\r", " ").replace("\n", " ").split())
         if len(clean) <= limit:
             return clean
         return clean[: limit - 3] + "..."
 
     def _session_path(self, session_id: str) -> Path:
+        """会话文件路径规则：{session_id}.jsonl"""
         return self.root / f"{session_id}.jsonl"
 
     def _session_files(self) -> list[Path]:
+        """获取所有会话文件（排除旧版文件）"""
         return sorted(path for path in self.root.glob("*.jsonl") if path.name != self.legacy_tree_path.name)
 
     def _load_current_record(self, session_id: str) -> Optional[SessionRecord]:
+        """加载当前最新会话（兼容新旧存储）"""
         path = self._session_path(session_id)
         if path.exists():
             return self._load_from_session_file(path)
         return self._legacy_records().get(session_id)
 
     def _load_from_session_file(self, path: Path) -> SessionRecord:
+        """
+        从事件文件加载会话：只读取最后一次快照
+        【事件溯源】通过回放快照恢复最新状态
+        """
         latest_snapshot: Optional[SessionRecord] = None
         for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not raw.strip():
@@ -648,11 +862,16 @@ class SessionStore:
         return self._normalized_record(latest_snapshot)
 
     def _append_events(self, path: Path, events: list[dict[str, Any]]) -> None:
+        """追加写入事件（原子写入，保证并发安全）"""
         with path.open("a", encoding="utf-8", newline="\n") as handle:
             for event in events:
                 handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def _build_append_events(self, previous: Optional[SessionRecord], current: SessionRecord) -> list[dict[str, Any]]:
+        """
+        【事件构建】生成增量变更事件（事件溯源核心）
+        对比新旧状态，只生成变化的事件
+        """
         previous = self._normalized_record(previous) if previous is not None else None
         current = self._normalized_record(current)
         events: list[dict[str, Any]] = []
@@ -707,6 +926,7 @@ class SessionStore:
 
     @staticmethod
     def _metadata_changed(previous: SessionRecord, current: SessionRecord) -> bool:
+        """元数据是否变更"""
         return (
             previous.parent_id != current.parent_id
             or previous.system_prompt != current.system_prompt
@@ -714,6 +934,7 @@ class SessionStore:
         )
 
     def _messages_event(self, previous: Optional[SessionRecord], current: SessionRecord, now: float) -> Optional[dict[str, Any]]:
+        """生成消息增量事件"""
         if previous is None:
             if not current.messages:
                 return None
@@ -730,6 +951,7 @@ class SessionStore:
         return None
 
     def _turn_node_events(self, previous: Optional[SessionRecord], current: SessionRecord, now: float) -> list[dict[str, Any]]:
+        """生成回合节点增量事件"""
         if previous is None:
             return [{"type": "turn_node_added", "session_id": current.id, "at": now, "data": node.model_dump(mode="json")} for node in current.turn_nodes]
 
@@ -743,6 +965,7 @@ class SessionStore:
 
     @staticmethod
     def _pending_state_dump(record: SessionRecord) -> dict[str, Any]:
+        """待执行状态序列化"""
         return {
             "pending_plan_token": record.pending_plan_token,
             "pending_tool_calls": [call.model_dump(mode="json") for call in record.pending_tool_calls],
@@ -750,6 +973,7 @@ class SessionStore:
         }
 
     def _all_latest_records(self) -> dict[str, SessionRecord]:
+        """加载所有会话最新状态"""
         sessions: dict[str, SessionRecord] = {}
         for path in self._session_files():
             try:

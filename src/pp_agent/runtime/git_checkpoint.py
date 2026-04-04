@@ -10,7 +10,20 @@ from pp_agent.storage.sessions import SessionRecord, SessionStore
 
 
 class GitCheckpointManager:
+    """
+    【核心服务】Git 检查点管理器
+    【业务功能】基于 Git 实现 AI 对话过程的代码快照、版本回退、状态保护
+    【设计模式】仓储模式 + 门面模式
+    【核心能力】创建快照、预览恢复、执行恢复、删除快照、自动匹配回滚点
+    【安全保障】工作区脏状态检测、覆盖风险提示、Git 命令原子操作
+    """
     def __init__(self, workspace: Path, checkpoint_store: CheckpointStore, session_store: SessionStore) -> None:
+        """
+        初始化 Git 检查点管理器
+        :param workspace: 工作区根目录（Git 仓库根路径）
+        :param checkpoint_store: 检查点数据存储实例
+        :param session_store: 会话数据存储实例
+        """
         self.workspace = workspace.resolve()
         self.checkpoint_store = checkpoint_store
         self.session_store = session_store
@@ -26,6 +39,19 @@ class GitCheckpointManager:
         summary: str = "",
         test_summary: Optional[str] = None,
     ) -> CheckpointEntry:
+        """
+        【公共入口】创建检查点（统一入口）
+        【业务功能】根据类型自动分发：HEAD快照 / Stash快照
+        :param session_id: 会话ID
+        :param head_id: 会话活跃节点ID
+        :param turn_id: 对话回合ID
+        :param reason: 创建原因（用于描述快照用途）
+        :param snapshot_type: 快照类型（head_snapshot/stash_snapshot）
+        :param summary: 快照摘要
+        :param test_summary: 测试摘要
+        :return: 创建完成的检查点实体
+        :raises RuntimeError: 非Git仓库时抛出
+        """
         if not self.is_git_repository():
             raise RuntimeError("Checkpointing requires a git repository workspace")
         if snapshot_type == "stash_snapshot":
@@ -56,6 +82,11 @@ class GitCheckpointManager:
         summary: str = "",
         test_summary: Optional[str] = None,
     ) -> CheckpointEntry:
+        """
+        【核心方法】创建 Git HEAD 快照
+        【业务功能】基于当前 Git 提交记录创建轻量检查点
+        【特点】不产生 stash，仅记录 commit + 分支 + 文件状态
+        """
         entry = CheckpointEntry(
             workspace_root=str(self.workspace),
             session_id=session_id,
@@ -81,6 +112,11 @@ class GitCheckpointManager:
         summary: str = "",
         test_summary: Optional[str] = None,
     ) -> CheckpointEntry:
+        """
+        【核心方法】创建 Git Stash 快照
+        【业务功能】将当前工作区修改存入 Git Stash，创建保护性快照
+        【用途】AI 执行危险操作前的一键回退点
+        """
         message = f"pp-agent:{session_id}:{head_id or 'none'}:{turn_id or 'none'}:{reason}"
         before = self._stash_list()
         self._git(["stash", "push", "--include-untracked", "-m", message])
@@ -104,9 +140,20 @@ class GitCheckpointManager:
         return self.checkpoint_store.create(entry)
 
     def list_checkpoints(self, *, session_id: Optional[str] = None) -> list[CheckpointEntry]:
+        """
+        【公共方法】列出检查点
+        :param session_id: 可选，按会话过滤
+        :return: 检查点列表
+        """
         return self.checkpoint_store.list(workspace=self.workspace, session_id=session_id)
 
     def preview_restore(self, checkpoint_id: str) -> CheckpointRestorePreview:
+        """
+        【公共方法】预览恢复检查点
+        【业务功能】展示恢复后的效果、风险、受影响文件
+        :param checkpoint_id: 检查点ID
+        :return: 预览信息（含警告、文件列表、状态）
+        """
         entry = self.checkpoint_store.load(checkpoint_id)
         status_output = self._git_status_output()
         stats = self._file_stats()
@@ -137,6 +184,13 @@ class GitCheckpointManager:
         )
 
     def restore_checkpoint(self, checkpoint_id: str) -> CheckpointEntry:
+        """
+        【核心方法】恢复检查点
+        【业务功能】将代码恢复到快照状态，自动处理 HEAD / Stash 类型
+        :param checkpoint_id: 检查点ID
+        :return: 已恢复的检查点
+        :raises FileNotFoundError: 检查点缺失
+        """
         entry = self.checkpoint_store.load(checkpoint_id)
         try:
             if entry.snapshot_type == "stash_snapshot":
@@ -152,6 +206,12 @@ class GitCheckpointManager:
         return self.checkpoint_store.mark_restored(checkpoint_id)
 
     def drop_checkpoint(self, checkpoint_id: str) -> CheckpointEntry:
+        """
+        【公共方法】删除检查点
+        【业务功能】删除存储记录 + 清理对应 Git Stash
+        :param checkpoint_id: 检查点ID
+        :return: 已删除的检查点
+        """
         entry = self.checkpoint_store.load(checkpoint_id)
         if entry.snapshot_type == "stash_snapshot" and entry.stash_ref:
             try:
@@ -169,6 +229,11 @@ class GitCheckpointManager:
         turn_id: Optional[str] = None,
         allow_stash_snapshot: bool = False,
     ) -> Optional[CheckpointEntry]:
+        """
+        【智能匹配】为回滚自动寻找最佳匹配检查点
+        【匹配策略】精确匹配 → 同head匹配 → 最近快照
+        :return: 最佳检查点 / None
+        """
         exact = self.checkpoint_store.find_for_session_head(session_id, head_id, turn_id=turn_id, snapshot_type="head_snapshot")
         if exact:
             return exact[0]
@@ -184,10 +249,18 @@ class GitCheckpointManager:
         return None
 
     def current_head_context(self, session_id: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        【公共方法】获取当前会话的 head_id 和 turn_id
+        :param session_id: 会话ID
+        :return: (head_id, turn_id)
+        """
         record = self.session_store.load(session_id)
         return self._head_and_turn_for_record(record)
 
     def is_git_repository(self) -> bool:
+        """
+        【校验方法】判断当前工作区是否为 Git 仓库
+        """
         try:
             self._git(["rev-parse", "--show-toplevel"])
         except RuntimeError:
@@ -195,6 +268,7 @@ class GitCheckpointManager:
         return True
 
     def _restore_head_snapshot(self, entry: CheckpointEntry) -> None:
+        """私有方法：恢复到指定 Git commit"""
         target_files = set(self._git_lines(["ls-tree", "-r", "--name-only", entry.head_commit]))
         current_tracked = set(self._git_lines(["ls-files"]))
         self._git(["restore", f"--source={entry.head_commit}", "--worktree", "--", "."])
@@ -204,6 +278,7 @@ class GitCheckpointManager:
                 path.unlink()
 
     def _restore_stash_snapshot(self, entry: CheckpointEntry) -> None:
+        """私有方法：恢复 Stash 快照"""
         if not entry.stash_ref:
             raise FileNotFoundError(f"Checkpoint stash ref is missing for {entry.checkpoint_id}")
         stash_refs = {item.split(":", 1)[0] for item in self._stash_list()}
@@ -212,6 +287,7 @@ class GitCheckpointManager:
         self._git(["stash", "apply", entry.stash_ref])
 
     def _affected_files(self, entry: CheckpointEntry) -> list[str]:
+        """私有方法：获取受影响的文件列表"""
         files = set(self._git_lines(["diff", "--name-only", entry.head_commit, "--"]))
         files.update(self._file_stats().files)
         if entry.snapshot_type == "stash_snapshot" and entry.file_stats.files:

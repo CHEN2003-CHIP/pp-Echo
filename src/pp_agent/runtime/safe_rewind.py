@@ -11,6 +11,17 @@ SafeRewindMode = str
 
 
 class SafeRewindOrchestrator:
+    """
+    【核心服务】安全回滚编排器
+    【业务定位】AI 对话 + 代码工作区 统一安全回滚中心
+    【设计模式】编排模式 + 策略模式
+    【核心能力】
+        1. 支持三种回滚模式：仅对话 / 仅代码 / 全部回滚
+        2. 回滚前自动风险预览（文件覆盖、脏工作区、未跟踪文件）
+        3. 自动匹配最佳检查点，无需手动指定
+        4. 原子化执行：先预览 → 再回滚 → 状态统一
+    【安全保障】所有危险操作必须预览，支持脏工作区检测
+    """
     def __init__(self, session_store: SessionStore, checkpoint_manager: GitCheckpointManager) -> None:
         self.session_store = session_store
         self.checkpoint_manager = checkpoint_manager
@@ -25,6 +36,23 @@ class SafeRewindOrchestrator:
         turn_count: Optional[int] = None,
         allow_stash_snapshot: bool = False,
     ) -> SafeRewindPreview:
+        """
+        【公共方法】回滚预览（执行前必须调用）
+        【业务功能】
+            1. 自动寻找最佳检查点
+            2. 生成风险警告
+            3. 返回目标节点信息（head/turn）
+            4. 根据模式过滤无关警告
+        :param session_id: 会话ID
+        :param mode: 回滚模式
+        :param checkpoint_id: 手动指定检查点（可选）
+        :param message_count: 按消息数回滚（可选）
+        :param turn_count: 按回合数回滚（可选）
+        :param allow_stash_snapshot: 是否允许使用保护快照
+        :return: 完整回滚预览信息
+        """
+
+        # 自动解析最佳检查点
         checkpoint = self._resolve_checkpoint(
             session_id=session_id,
             checkpoint_id=checkpoint_id,
@@ -66,6 +94,22 @@ class SafeRewindOrchestrator:
         turn_count: Optional[int] = None,
         allow_stash_snapshot: bool = False,
     ) -> SafeRewindResult:
+        """
+        【核心方法】执行安全回滚
+        【执行流程】预览 → 恢复工作区 → 回滚对话 → 返回结果
+        【模式策略】
+            - conversation_only: 仅执行回调回滚对话
+            - workspace_only: 仅恢复Git检查点
+            - conversation_and_workspace: 全部执行
+        :param session_id: 会话ID
+        :param mode: 回滚模式
+        :param rewind_callback: 对话回滚回调（外部实现）
+        :param checkpoint_id: 指定检查点（可选）
+        :param message_count: 按消息数回滚
+        :param turn_count: 按回合数回滚
+        :param allow_stash_snapshot: 是否允许保护快照
+        :return: 回滚执行结果
+        """
         preview = self.preview_rewind(
             session_id=session_id,
             mode=mode,
@@ -105,6 +149,7 @@ class SafeRewindOrchestrator:
         turn_count: Optional[int],
         allow_stash_snapshot: bool,
     ) -> Optional[CheckpointEntry]:
+        
         if checkpoint_id is not None:
             return self.checkpoint_manager.checkpoint_store.load(checkpoint_id)
         if message_count is not None or turn_count is not None:
@@ -124,6 +169,11 @@ class SafeRewindOrchestrator:
         message_count: Optional[int],
         turn_count: Optional[int],
     ) -> tuple[Optional[str], Optional[str]]:
+        """
+        【私有方法】根据消息数/回合数计算目标回滚节点
+        【业务功能】将“回滚N条消息/回合”转换为可匹配的head/turn节点
+        :return: (target_head_id, target_turn_id)
+        """
         record = self.session_store.load(session_id)
         branch_messages = self.session_store.branch_messages(record, record.active_head_id)
         if message_count is not None:
