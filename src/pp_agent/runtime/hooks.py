@@ -34,7 +34,7 @@ class ToolErrorDecision(BaseModel):
     continue_loop: bool = False
     details: dict[str, object] = Field(default_factory=dict)
 
-
+# 定义各种钩子类型
 TransformContextHook = Callable[[AgentState, list[ChatMessage]], list[ChatMessage]]
 BeforeToolCallHook = Callable[[AgentState, ToolCall, ToolRegistry], BeforeToolCallDecision]
 AfterToolCallHook = Callable[[AgentState, ToolCall, ToolExecutionResult], AfterToolCallDecision]
@@ -57,6 +57,7 @@ class RuntimeHooks:
         self.lifecycle_event_hooks = lifecycle_event or []
 
     def snapshot(self) -> dict[str, list[Callable]]:
+        # 创建当前钩子配置的快照，便于后续恢复
         return {
             "transform_context": list(self.transform_context_hooks),
             "before_tool_call": list(self.before_tool_call_hooks),
@@ -66,6 +67,7 @@ class RuntimeHooks:
         }
 
     def restore(self, snapshot: dict[str, list[Callable]]) -> None:
+        # 恢复之前的钩子配置
         self.transform_context_hooks = list(snapshot.get("transform_context", []))
         self.before_tool_call_hooks = list(snapshot.get("before_tool_call", []))
         self.after_tool_call_hooks = list(snapshot.get("after_tool_call", []))
@@ -73,12 +75,14 @@ class RuntimeHooks:
         self.lifecycle_event_hooks = list(snapshot.get("lifecycle_event", []))
 
     def transform_context(self, state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
+        # 调用所有 transform_context 钩子，对传入的消息列表进行转换
         current = messages
         for hook in self.transform_context_hooks:
             current = hook(state, current)
         return current
 
     def before_tool_call(self, state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
+        # 调用所有 before_tool_call 钩子，获取最终的工具调用决策（如是否允许调用/修改调用参数等）
         final = BeforeToolCallDecision()
         for hook in self.before_tool_call_hooks:
             decision = hook(state, call, registry)
@@ -93,6 +97,7 @@ class RuntimeHooks:
         return final
 
     def after_tool_call(self, state: AgentState, call: ToolCall, result: ToolExecutionResult) -> AfterToolCallDecision:
+        # 调用所有 after_tool_call 钩子，获取工具执行后的决策（如是否继续执行后续计划/修改结果内容等）
         final = AfterToolCallDecision()
         for hook in self.after_tool_call_hooks:
             decision = hook(state, call, result)
@@ -102,6 +107,7 @@ class RuntimeHooks:
         return final
 
     def on_tool_error(self, state: AgentState, call: ToolCall, error: Exception) -> ToolErrorDecision:
+        # 调用所有 on_tool_error 钩子，获取工具执行出错时的决策（如是否忽略错误/继续执行后续计划等）
         final = ToolErrorDecision()
         for hook in self.on_tool_error_hooks:
             decision = hook(state, call, error)
@@ -111,6 +117,7 @@ class RuntimeHooks:
         return final
 
     def register_with_lifecycle(self, emitter: LifecycleEmitter) -> None:
+        # 将当前钩子注册到生命周期事件发射器中，以便在相应事件发生时触发钩子逻辑
         emitter.subscribe(self._handle_lifecycle_event)
         emitter.on_context_built(self._handle_context_built)
         emitter.on_tool_call(self._handle_tool_call)

@@ -15,6 +15,15 @@ class TurnSnapshot(BaseModel):
 
 
 class AgentState(BaseModel):
+    """
+    AgentState.system_prompt/model = 当前程序配置
+    AgentState.messages = 当前对话上下文
+    AgentState.pending_tool_calls/pending_plan_token = 待审批/待执行计划
+    AgentState.queued_messages = 排队消息
+    AgentState.compaction = 历史压缩状态
+    AgentState.turn = 当前轮次与阶段
+    AgentState.is_streaming/error_message = 当前运行标志与错误状态。z
+    """
     system_prompt: str
     model: ModelConfig = Field(default_factory=ModelConfig)
     messages: list[ChatMessage] = Field(default_factory=list)
@@ -28,6 +37,7 @@ class AgentState(BaseModel):
 
 
 class AgentEvent(BaseModel):
+    """运行时事件模型，包含各种事件类型和相关数据"""
     type: str
     session_id: str = ""
     turn_id: Optional[int] = None

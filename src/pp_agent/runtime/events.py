@@ -10,6 +10,7 @@ FORMAL_TURN_PHASES = {"idle", "planning", "awaiting_approval", "executing", "dra
 
 class RuntimeMonitor:
     def snapshot_from_state(self, state: AgentState, **overrides: Any) -> RuntimeStatusSnapshot:
+        """核心：从Agent实时状态 生成 标准化运行时快照"""
         payload = {
             "turn_id": state.turn.turn_id,
             "phase": state.turn.phase,
@@ -23,6 +24,7 @@ class RuntimeMonitor:
         return RuntimeStatusSnapshot(**payload)
 
     def attach(self, details: dict[str, Any], state: AgentState, **overrides: Any) -> dict[str, Any]:
+        """生成附加信息"""
         enriched = dict(details)
         snapshot = self.snapshot_from_state(state, **overrides)
         enriched["turn_id"] = snapshot.turn_id
@@ -31,6 +33,7 @@ class RuntimeMonitor:
         return enriched
 
     def attach_event(self, event: AgentEvent, state: AgentState, **overrides: Any) -> AgentEvent:
+        """核心：为Agent事件 附加完整状态信息（事件增强）"""
         if event.type == "message_delta":
             return event
         if state.turn.turn_id == 0 and event.type not in {"agent_start", "agent_end"}:
