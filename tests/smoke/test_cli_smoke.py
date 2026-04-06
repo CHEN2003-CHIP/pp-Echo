@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def _run_module(*args: str, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT / "src")
+    env["COLUMNS"] = "240"
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
@@ -94,6 +95,13 @@ def test_agent_cli_shim_help_smoke() -> None:
 
     assert result.returncode == 0
     assert "Personal Python coding agent" in result.stdout
+
+
+def test_pp_agent_tui_help_smoke() -> None:
+    result = _run_module("pp_agent.cli.main", "tui", "--help")
+
+    assert result.returncode == 0
+    assert "workspace" in result.stdout
 
 
 def test_run_hello_wiring_smoke(monkeypatch, tmp_path: Path) -> None:

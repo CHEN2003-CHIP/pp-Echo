@@ -5,18 +5,25 @@ from typing import Literal, Optional
 
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
+LogLevel = Literal["info", "warning", "error", "success"]
 
 
 @dataclass
 class TuiMessage:
+    id: str
     role: MessageRole
     text: str
+    highlight: bool = False
+    muted: bool = False
+    kind: Literal["message", "status"] = "message"
 
 
 @dataclass
 class ActiveAssistantMessage:
     text: str = ""
     streaming: bool = False
+    started_at: float = 0.0
+    has_content: bool = False
 
 
 @dataclass
@@ -39,6 +46,9 @@ class ApprovalState:
     pending_plan_token: Optional[str] = None
     awaiting_approval: bool = False
     prompt: str = ""
+    actionable: bool = False
+    status_label: str = "clear"
+    token_preview: str = ""
 
 
 @dataclass
@@ -50,22 +60,52 @@ class RuntimePhase:
     pending_tool_count: int = 0
     queue_count: int = 0
     busy: bool = False
+    status_line: str = ""
+
+
+@dataclass
+class EphemeralLogEntry:
+    message: str
+    level: LogLevel = "info"
+    important: bool = False
+
+
+@dataclass
+class ComposerState:
+    prompt_prefix: str = ">"
+    mode_label: str = "READY"
+    helper_text: str = "Agent is ready."
+    command_hint: str = "Commands: /approve /reject /new /resume <session_id>"
+    focus_label: str = "INPUT"
+    placeholder: str = "Ask pp-Echo what to do next"
+    accent_variant: Literal["ready", "waiting", "busy", "approval"] = "ready"
+    show_pending_badge: bool = False
 
 
 @dataclass
 class TuiState:
+    session_epoch: int = 0
     messages: list[TuiMessage] = field(default_factory=list)
     active_assistant_message: ActiveAssistantMessage = field(default_factory=ActiveAssistantMessage)
     plan_steps: list[TuiPlanStep] = field(default_factory=list)
     queue_summary: QueueSummary = field(default_factory=QueueSummary)
     approval_state: ApprovalState = field(default_factory=ApprovalState)
     runtime_phase: RuntimePhase = field(default_factory=RuntimePhase)
-    ephemeral_logs: list[str] = field(default_factory=list)
+    composer: ComposerState = field(default_factory=ComposerState)
+    ephemeral_logs: list[EphemeralLogEntry] = field(default_factory=list)
+    awaiting_assistant: bool = False
 
 
-def append_log(state: TuiState, message: str, *, limit: int = 100) -> None:
+def append_log(
+    state: TuiState,
+    message: str,
+    *,
+    level: LogLevel = "info",
+    important: bool = False,
+    limit: int = 100,
+) -> None:
     if not message:
         return
-    state.ephemeral_logs.append(message)
+    state.ephemeral_logs.append(EphemeralLogEntry(message=message, level=level, important=important))
     if len(state.ephemeral_logs) > limit:
         del state.ephemeral_logs[:-limit]
