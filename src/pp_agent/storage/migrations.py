@@ -6,6 +6,7 @@ from typing import Optional
 
 
 def load_legacy_session_payloads(root: Path, tree_name: str) -> dict[str, dict]:
+    """【迁移工具】加载旧版会话数据"""
     tree_path = root / tree_name
     if tree_path.exists():
         return {}

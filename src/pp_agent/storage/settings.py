@@ -17,6 +17,11 @@ For high-risk plans, pause at the planner layer and wait for approval before exe
 
 
 class ToolPolicyConfig(BaseModel):
+    """
+    【AI工具调用安全策略】
+    管控文件操作、Shell执行、高危计划的**人工确认规则**和**超时限制**
+    所有确认项默认开启，遵循「最小权限、安全优先」原则
+    """
     shell_timeout_seconds: int = 30
     confirm_write_file: bool = True
     confirm_edit_file: bool = True
@@ -29,17 +34,32 @@ class BuiltinToolCapabilityConfig(BaseModel):
 
 
 class SkillCapabilityConfig(BaseModel):
+    """
+    【AI Agent 技能能力配置】
+    控制：启用哪些类型的技能、自定义技能路径、技能白名单/黑名单过滤
+    用于精准管控 Agent 能加载、使用哪些技能
+    """
+
+    # 1. 技能启用开关（分层控制）
     enable_project: bool = True
     enable_user: bool = True
     enable_builtin: bool = True
-    custom_directories: list[str] = Field(default_factory=list)
-    ignored: list[str] = Field(default_factory=list)
-    include: list[str] = Field(default_factory=list)
+    # 2. 自定义/路径配置
+    custom_directories: list[str] = Field(default_factory=list)# 自定义技能目录（字符串路径）
+    ignored: list[str] = Field(default_factory=list) # 技能黑名单（通配符匹配）
+    include: list[str] = Field(default_factory=list)# 技能白名单（通配符匹配）
+
 
     def custom_paths(self) -> list[Path]:
+        """将自定义字符串目录 → 标准化Path对象（支持~展开用户目录）"""
         return [Path(value).expanduser() for value in self.custom_directories]
 
     def includes_name(self, name: str) -> bool:
+        """
+        【核心过滤方法】判断技能名称是否允许加载
+        规则：白名单优先 → 黑名单拦截
+        支持 fnmatch 通配符（如 *file*, shell_*）
+        """
         if self.include and not any(fnmatch.fnmatch(name, pattern) for pattern in self.include):
             return False
         if any(fnmatch.fnmatch(name, pattern) for pattern in self.ignored):
@@ -48,22 +68,40 @@ class SkillCapabilityConfig(BaseModel):
 
 
 class MCPCapabilityConfig(BaseModel):
+    """
+    【MCP（Model Context Protocol）能力配置】
+    控制AI是否启用MCP协议扩展、MCP配置文件路径、允许连接的MCP服务器
+    用于安全管控AI的外部服务连接能力
+    """
     enable: bool = False
     config_paths: list[str] = Field(default_factory=list)
     server_filters: list[str] = Field(default_factory=list)
 
     def resolved_config_paths(self, project_dir: Path) -> list[Path]:
+        """
+        解析并返回标准化的MCP配置文件路径
+        规则：用户自定义路径优先 → 无自定义则默认使用项目目录下的 mcp.json
+        """
         if self.config_paths:
             return [Path(value).expanduser() for value in self.config_paths]
         return [project_dir / "mcp.json"]
 
     def includes_server(self, name: str) -> bool:
+        """
+        【核心过滤】判断是否允许连接指定名称的MCP服务器
+        规则：无过滤器 → 全部允许；有过滤器 → 仅允许通配符匹配的服务器
+        """
         if not self.server_filters:
             return True
         return any(fnmatch.fnmatch(name, pattern) for pattern in self.server_filters)
 
 
 class ExtensionCapabilityConfig(BaseModel):
+    """
+    【AI Agent 扩展插件能力配置】
+    控制 Agent 扩展插件的加载范围、启用层级、自定义路径与黑白名单过滤
+    区别于 Skill（可执行技能），Extension 是框架级/功能级插件扩展
+    """
     enable_project: bool = True
     enable_user: bool = True
     enable_builtin: bool = False
@@ -72,9 +110,18 @@ class ExtensionCapabilityConfig(BaseModel):
     include: list[str] = Field(default_factory=list)
 
     def custom_paths(self) -> list[Path]:
+        """
+        将自定义目录字符串转换为标准化 Path 对象
+        支持 ~ 自动解析用户主目录
+        """
         return [Path(value).expanduser() for value in self.custom_directories]
 
     def includes_name(self, name: str) -> bool:
+        """
+        【核心过滤】判断插件名称是否允许加载
+        校验规则：白名单优先校验 → 黑名单拦截 → 放行合规插件
+        支持 fnmatch 通配符匹配（* ? []）
+        """
         if self.include and not any(fnmatch.fnmatch(name, pattern) for pattern in self.include):
             return False
         if any(fnmatch.fnmatch(name, pattern) for pattern in self.ignored):
@@ -83,6 +130,11 @@ class ExtensionCapabilityConfig(BaseModel):
 
 
 class CapabilitySettings(BaseModel):
+    """
+    【AI Agent 能力配置总入口】
+    聚合所有能力维度的配置，统一管理Agent的全部权限、功能、扩展开关
+    是系统初始化能力模块的唯一顶层配置
+    """
     builtin_tools: BuiltinToolCapabilityConfig = Field(default_factory=BuiltinToolCapabilityConfig)
     skills: SkillCapabilityConfig = Field(default_factory=SkillCapabilityConfig)
     mcp: MCPCapabilityConfig = Field(default_factory=MCPCapabilityConfig)
@@ -90,6 +142,11 @@ class CapabilitySettings(BaseModel):
 
 
 class Settings(BaseModel):
+    """
+    【AI Agent 系统顶层总配置】
+    聚合：环境路径、模型服务、安全策略、能力开关、AI指令
+    是整个系统**唯一的、完整的**配置来源
+    """
     workspace: Path
     global_dir: Path
     project_dir: Path
@@ -101,34 +158,52 @@ class Settings(BaseModel):
 
     @classmethod
     def load(cls, workspace: Path) -> "Settings":
+        # 1. 将工作区路径转换为【绝对路径】，消除相对路径/符号链接风险
         workspace = workspace.resolve()
+        # 2. 定义项目专属配置目录：工作区下的隐藏文件夹 .pp-agent
         project_dir = workspace / ".pp-agent"
+        # 3. 递归创建项目目录，已存在则不报错（安全创建）
         project_dir.mkdir(parents=True, exist_ok=True)
+        # 4. 解析全局配置目录（用户级，跨项目共享）
         global_dir = cls._resolve_global_dir(project_dir)
 
+        # 5. 初始化 Settings 总配置对象（传入核心路径）
         settings = cls(workspace=workspace, global_dir=global_dir, project_dir=project_dir)
+        #应用环境变量覆盖和项目配置覆盖，确保最终配置正确反映用户意图和项目需求
         settings._apply_environment_overrides()
+        #应用本地配置
         settings._apply_project_config()
 
         agents_md = workspace / "AGENTS.md"
         system_md = project_dir / "SYSTEM.md"
-        if agents_md.exists():
-            settings.system_prompt += "\n\nWorkspace instructions:\n" + agents_md.read_text(encoding="utf-8")
         if system_md.exists():
             settings.system_prompt = system_md.read_text(encoding="utf-8")
+        
+        if agents_md.exists():
+            settings.system_prompt += "\n\nWorkspace instructions:\n" + agents_md.read_text(encoding="utf-8")
         return settings
 
     @staticmethod
     def _resolve_global_dir(project_dir: Path) -> Path:
+        """
+        【核心】自动解析并创建 全局配置目录（跨项目共享）
+        按优先级寻找可写入的目录，Windows 优先，兼容自定义环境变量
+        """
+        # 1. 获取 Windows 系统的本地应用数据目录（LOCALAPPDATA）
+        # 无环境变量时，使用默认路径：用户目录/AppData/Local
         local_app_data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        # 2. 定义【候选目录列表】（按优先级从高到低排序）
         candidates = []
+        # 优先级1：用户自定义环境变量 PP_AGENT_HOME（最高优先级）
         if os.getenv("PP_AGENT_HOME"):
             candidates.append(Path(os.environ["PP_AGENT_HOME"]))
+        # 优先级2：Windows 系统级全局目录
         candidates.extend([
             local_app_data / "pp-agent",
+            # 优先级3：项目配置目录内的 global 文件夹（兜底方案）
             project_dir / "global",
         ])
-
+        # 3. 遍历候选目录列表，尝试创建目录，成功则返回
         for candidate in candidates:
             try:
                 candidate.mkdir(parents=True, exist_ok=True)
@@ -138,6 +213,11 @@ class Settings(BaseModel):
         raise PermissionError("Unable to create a writable pp-agent state directory")
 
     def _apply_environment_overrides(self) -> None:
+        """
+        【环境变量覆盖配置】
+        读取系统环境变量，动态覆盖模型/服务商的默认配置
+        仅在环境变量存在时生效，不修改原有默认配置
+        """
         if os.getenv("PP_AGENT_BASE_URL"):
             self.provider.base_url = os.environ["PP_AGENT_BASE_URL"]
         if os.getenv("PP_AGENT_MODEL"):
@@ -146,10 +226,15 @@ class Settings(BaseModel):
             self.model.enable_thinking = os.environ["PP_AGENT_ENABLE_THINKING"].strip().lower() in {"1", "true", "yes", "on"}
 
     def _apply_project_config(self) -> None:
+        """
+        加载并应用【项目专属配置文件】
+        配置文件路径：工作区/.pp-agent/config.json
+        优先级：高于默认配置、环境变量，低于SYSTEM.md
+        """
         config_path = self.project_dir / "config.json"
         if not config_path.exists():
             return
-
+        # 读取并解析JSON配置文件
         data = json.loads(config_path.read_text(encoding="utf-8"))
         if "model" in data:
             self.model.model = data["model"]
@@ -174,10 +259,17 @@ class Settings(BaseModel):
             self._apply_capability_config(capability_config)
 
     def _apply_capability_config(self, capability_config: dict) -> None:
+        """
+        解析并应用 config.json 中的 capabilities 能力配置
+        逐项覆盖：内置工具、技能、MCP、扩展插件 的所有配置项
+        仅覆盖配置文件中存在的字段，不修改未配置的默认值
+        """
+        #1. 内置工具能力配置
         builtin_tools = capability_config.get("builtin_tools", {})
         if "enable" in builtin_tools:
             self.capabilities.builtin_tools.enable = bool(builtin_tools["enable"])
 
+        #2. 技能能力配置
         skill_config = capability_config.get("skills", {})
         if "enable_project" in skill_config:
             self.capabilities.skills.enable_project = bool(skill_config["enable_project"])
@@ -191,7 +283,8 @@ class Settings(BaseModel):
             self.capabilities.skills.ignored = [str(value) for value in skill_config["ignored"]]
         if "include" in skill_config:
             self.capabilities.skills.include = [str(value) for value in skill_config["include"]]
-
+        
+        #3. MCP能力配置
         mcp_config = capability_config.get("mcp", {})
         if "enable" in mcp_config:
             self.capabilities.mcp.enable = bool(mcp_config["enable"])
@@ -200,6 +293,7 @@ class Settings(BaseModel):
         if "server_filters" in mcp_config:
             self.capabilities.mcp.server_filters = [str(value) for value in mcp_config["server_filters"]]
 
+        #4. 扩展插件能力配置
         extension_config = capability_config.get("extensions", {})
         if "enable_project" in extension_config:
             self.capabilities.extensions.enable_project = bool(extension_config["enable_project"])

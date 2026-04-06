@@ -9,11 +9,13 @@ TurnPhase = Literal["idle", "planning", "awaiting_approval", "executing", "drain
 
 
 class CompactionState(BaseModel):
+    """State of message compaction for a conversation."""
     summary: str = ""
     summarized_message_count: int = 0
 
 
 class QueuedMessage(BaseModel):
+    """A message that is queued for delivery to the assistant, along with its delivery method and metadata."""
     id: str
     delivery: Literal["steering", "follow_up"] = "follow_up"
     text: str
@@ -21,6 +23,7 @@ class QueuedMessage(BaseModel):
 
 
 class PlanStep(BaseModel):
+    """A step in a plan, representing a task or action to be taken by the assistant."""
     title: str
     tool_name: Optional[str] = None
     tool_args: dict[str, Any] = Field(default_factory=dict)
@@ -28,6 +31,7 @@ class PlanStep(BaseModel):
 
 
 class RuntimeStatusSnapshot(BaseModel):
+    """A snapshot of the runtime status of the assistant."""
     turn_id: int = 0
     phase: TurnPhase = "idle"
     queue_count: int = 0

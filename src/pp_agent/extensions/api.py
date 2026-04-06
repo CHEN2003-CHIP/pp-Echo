@@ -17,37 +17,57 @@ ExtensionResourceDiscoveryHandler = Callable[[dict[str, Any]], Optional[dict[str
 
 @dataclass
 class ExtensionToolDefinition:
+    # 工具唯一名称（必填）
     name: str
+    # 工具规范/元数据（必填）
     spec: ToolSpec
+    # 工具执行处理器（必填，核心逻辑）
     handler: ExtensionToolHandler
+    # 工具分类（默认值：extension）
     category: str = "extension"
 
 
 @dataclass
 class ExtensionCommandDefinition:
+    # 命令唯一名称（必填）
     name: str
+    # 命令处理程序（必填）
     handler: ExtensionCommandHandler
+    # 命令描述（默认值：空字符串）
     description: str = ""
 
 
 @dataclass
 class LoadedExtension:
+    # 插件描述符（必填）
     descriptor: ExtensionDescriptor
+    # 工具定义列表（默认值：空列表）
     tools: list[ExtensionToolDefinition] = field(default_factory=list)
+    # 命令定义列表（默认值：空列表）
     commands: list[ExtensionCommandDefinition] = field(default_factory=list)
+    # 转换上下文钩子列表（默认值：空列表）
     transform_context_hooks: list[TransformContextHook] = field(default_factory=list)
+    # 工具调用前钩子列表（默认值：空列表）
     before_tool_call_hooks: list[BeforeToolCallHook] = field(default_factory=list)
+    # 工具调用后钩子列表（默认值：空列表）
     after_tool_call_hooks: list[AfterToolCallHook] = field(default_factory=list)
+    # 工具错误钩子列表（默认值：空列表）
     tool_error_hooks: list[ToolErrorHook] = field(default_factory=list)
+    # 生命周期事件订阅者列表（默认值：空列表）
     lifecycle_event_hooks: list[LifecycleSubscriber] = field(default_factory=list)
+    # 资源发现处理器列表（默认值：空列表）
     resource_discovery_handlers: list[ExtensionResourceDiscoveryHandler] = field(default_factory=list)
+    # 事件计数器（默认值：空字典）
     event_counts: dict[str, int] = field(default_factory=dict)
+    # 资源列表（默认值：空列表）
     resources: list[str] = field(default_factory=list)
+    # 卸载回调列表（默认值：空列表）
     cleanup_callbacks: list[ExtensionCleanupHandler] = field(default_factory=list)
 
 
 @dataclass
 class ExtensionCommandRegistry:
+    
     commands: dict[str, ExtensionCommandDefinition] = field(default_factory=dict)
 
     def register(self, definition: ExtensionCommandDefinition, *, replace: bool = False) -> None:
@@ -56,6 +76,7 @@ class ExtensionCommandRegistry:
         self.commands[definition.name] = definition
 
     def dispatch(self, raw: str, agent: Any, workspace: Path) -> Optional[str]:
+        """简单的命令调度器，根据输入文本匹配注册的命令并执行对应处理程序"""
         if not raw.startswith("/"):
             return None
         command, _, arg_text = raw[1:].partition(" ")
@@ -91,6 +112,7 @@ class ExtensionAPI:
         requires_confirmation: bool = False,
         category: str = "extension",
     ) -> None:
+        """注册工具，提供名称、描述、处理器等元信息，供Agent调用"""
         self._loaded.tools.append(
             ExtensionToolDefinition(
                 name=name,
@@ -106,9 +128,11 @@ class ExtensionAPI:
         )
 
     def register_command(self, name: str, handler: ExtensionCommandHandler, *, description: str = "") -> None:
+        """注册命令，提供名称、处理器和描述，供用户输入触发"""
         self._loaded.commands.append(ExtensionCommandDefinition(name=name, handler=handler, description=description))
 
     def on(self, event_name: str, handler: Callable[..., object]) -> None:
+        """通用事件订阅接口，支持生命周期事件、工具调用事件、资源发现事件等多种类型的订阅"""
         if event_name == "context_built":
             self._register_event_count(event_name)
             self._loaded.transform_context_hooks.append(lambda state, messages, callback=handler: callback(state, messages))

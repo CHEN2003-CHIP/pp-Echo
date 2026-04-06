@@ -15,6 +15,7 @@ from pp_agent.mcp.config import MCPServerConfig
 
 
 class MCPClientProtocol(Protocol):
+    """ Protocol for MCP client implementations, supporting both stdio and HTTP transports."""
     def initialize(self) -> None:
         ...
 

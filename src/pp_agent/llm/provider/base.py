@@ -13,6 +13,7 @@ class LLMClientError(RuntimeError):
 
 
 class BaseLLMClient(ABC):
+    """LLM客户端基类，定义通用接口和属性"""
     def __init__(
         self,
         provider: Optional[ProviderConfig] = None,

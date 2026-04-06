@@ -83,6 +83,7 @@ def load_mcp_config(project_dir: Path, config_paths: Optional[list[Path]] = None
 
 
 def load_mcp_server_configs(project_dir: Path, config_paths: Optional[list[Path]] = None) -> list[MCPServerConfig]:
+    """Load MCP server configs from one or more config files."""
     return load_mcp_config(project_dir, config_paths=config_paths).servers
 
 

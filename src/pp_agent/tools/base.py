@@ -9,6 +9,7 @@ from pp_agent.domain import ChatMessage, TextPart, ToolCall, ToolResult, ToolSpe
 
 
 class ToolExecutionResult(ToolResult):
+    """工具执行结果"""
     def as_chat_message(self) -> ChatMessage:
         return ChatMessage(
             role="tool",
@@ -20,6 +21,7 @@ class ToolExecutionResult(ToolResult):
 
 
 class BaseTool(ABC):
+    """工具接口定义"""
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace.resolve()
 
@@ -42,6 +44,7 @@ class BaseTool(ABC):
         return resolved
 
     def pending_root(self) -> Path:
+        """获取待处理文件的根目录"""
         root = self.workspace / ".pp-agent" / "pending-edits"
         root.mkdir(parents=True, exist_ok=True)
         return root
