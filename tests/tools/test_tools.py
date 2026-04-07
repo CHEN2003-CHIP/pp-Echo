@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from pp_agent.domain import ToolCall
+from pp_agent.tools import session_tools
 from storage.settings import ToolPolicyConfig
 from tools.pending_actions import PendingActionStore
 from tools.registry import ToolRegistry
@@ -114,6 +115,8 @@ def test_confirmation_policy_is_applied(tmp_path: Path) -> None:
     assert registry.get_spec("write_file").requires_confirmation is False
     assert registry.get_spec("edit_file").requires_confirmation is True
     assert registry.get_spec("approve_pending_action").requires_confirmation is True
+    assert registry.get_spec("preview_safe_rewind").requires_confirmation is False
+    assert registry.get_spec("execute_safe_rewind").requires_confirmation is True
 
 
 def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> None:
@@ -141,6 +144,8 @@ def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> Non
         "grep_code",
         "git_status",
         "git_diff_worktree",
+        "preview_safe_rewind",
+        "execute_safe_rewind",
         "run_shell",
     ]
 
@@ -207,3 +212,98 @@ def test_unregistered_tool_behavior_matches_current_errors(tmp_path: Path) -> No
 
     with pytest.raises(KeyError):
         registry.error_result(call, "nope")
+
+
+def test_preview_safe_rewind_uses_sdk_preview_and_returns_structured_details(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: dict[str, object] = {}
+
+    def fake_preview_rewind(workspace, session_id, **kwargs):
+        seen["workspace"] = workspace
+        seen["session_id"] = session_id
+        seen["kwargs"] = kwargs
+        return {
+            "mode": "workspace_only",
+            "checkpoint": {"checkpoint_id": "cp-1", "snapshot_type": "head_snapshot"},
+            "restore_preview": {"affected_files": ["a.py", "b.py"]},
+            "source_session_id": session_id,
+            "target_session_id": "session-2",
+            "target_head_id": "head-1",
+            "target_turn_id": "turn-1",
+            "message_count": 3,
+            "turn_count": 1,
+            "warning_messages": ["dirty workspace"],
+        }
+
+    monkeypatch.setattr(session_tools, "_preview_rewind", fake_preview_rewind)
+
+    result = registry.execute(
+        "preview_safe_rewind",
+        {"session_id": "session-1", "mode": "workspace_only", "message_count": 3},
+    )
+
+    assert seen["workspace"] == tmp_path.resolve()
+    assert seen["session_id"] == "session-1"
+    assert seen["kwargs"] == {"mode": "workspace_only", "message_count": 3}
+    assert result.is_error is False
+    assert result.details["session_id"] == "session-1"
+    assert result.details["checkpoint_id"] == "cp-1"
+    assert result.details["snapshot_type"] == "head_snapshot"
+    assert result.details["mode"] == "workspace_only"
+    assert result.details["preview_only"] is True
+    assert result.details["restored_workspace"] is False
+    assert result.details["affected_message_count"] == 3
+    assert result.details["affected_turn_count"] == 1
+    assert result.details["target_head_id"] == "head-1"
+    assert result.details["workspace_file_count"] == 2
+    assert "Preview safe rewind" in result.content
+
+
+def test_execute_safe_rewind_uses_sdk_execute_and_returns_structured_details(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: dict[str, object] = {}
+
+    def fake_rewind_safe(workspace, session_id, **kwargs):
+        seen["workspace"] = workspace
+        seen["session_id"] = session_id
+        seen["kwargs"] = kwargs
+        return {
+            "mode": "conversation_and_workspace",
+            "checkpoint_id": "cp-2",
+            "snapshot_type": "stash_snapshot",
+            "source_session_id": session_id,
+            "session_id": "session-3",
+            "active_head_id": "head-2",
+            "restored_workspace": True,
+            "restored_conversation": True,
+            "warning_messages": [],
+        }
+
+    monkeypatch.setattr(session_tools, "_execute_rewind", fake_rewind_safe)
+
+    result = registry.execute(
+        "execute_safe_rewind",
+        {
+            "session_id": "session-1",
+            "mode": "conversation_and_workspace",
+            "turn_count": 2,
+            "allow_stash_snapshot": True,
+        },
+    )
+
+    assert seen["workspace"] == tmp_path.resolve()
+    assert seen["session_id"] == "session-1"
+    assert seen["kwargs"] == {
+        "mode": "conversation_and_workspace",
+        "turn_count": 2,
+        "allow_stash_snapshot": True,
+    }
+    assert result.is_error is False
+    assert result.details["session_id"] == "session-3"
+    assert result.details["checkpoint_id"] == "cp-2"
+    assert result.details["snapshot_type"] == "stash_snapshot"
+    assert result.details["mode"] == "conversation_and_workspace"
+    assert result.details["preview_only"] is False
+    assert result.details["restored_workspace"] is True
+    assert result.details["target_head_id"] == "head-2"
+    assert "Executed safe rewind" in result.content

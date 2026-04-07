@@ -20,6 +20,7 @@ from pp_agent.tools.file_tools import (
 from pp_agent.tools.metadata import ToolMetadata
 from pp_agent.tools.repo_tools import GitDiffWorktreeTool, GitStatusTool, GrepCodeTool
 from pp_agent.tools.search_tool import SearchTextTool
+from pp_agent.tools.session_tools import ExecuteSafeRewindTool, PreviewSafeRewindTool
 from pp_agent.tools.shell_tool import PowerShellTool
 
 
@@ -230,6 +231,8 @@ class ToolRegistry:
             self._registration("grep_code", self._spec_grep_code, lambda: GrepCodeTool(self.workspace)),
             self._registration("git_status", self._spec_git_status, lambda: GitStatusTool(self.workspace)),
             self._registration("git_diff_worktree", self._spec_git_diff_worktree, lambda: GitDiffWorktreeTool(self.workspace)),
+            self._registration("preview_safe_rewind", self._spec_preview_safe_rewind, lambda: PreviewSafeRewindTool(self.workspace)),
+            self._registration("execute_safe_rewind", self._spec_execute_safe_rewind, lambda: ExecuteSafeRewindTool(self.workspace)),
             self._registration(
                 "run_shell",
                 self._spec_run_shell,
@@ -401,12 +404,56 @@ class ToolRegistry:
         )
 
     @staticmethod
+    def _spec_preview_safe_rewind() -> ToolSpec:
+        return ToolSpec(
+            name="preview_safe_rewind",
+            description="Preview a safe rewind for the conversation, workspace, or both without changing state.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "checkpoint_id": {"type": "string"},
+                    "turn_count": {"type": "integer"},
+                    "message_count": {"type": "integer"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["conversation_and_workspace", "workspace_only", "conversation_only"],
+                    },
+                    "allow_stash_snapshot": {"type": "boolean"},
+                },
+                "required": ["session_id"],
+            },
+        )
+
+    @staticmethod
+    def _spec_execute_safe_rewind() -> ToolSpec:
+        return ToolSpec(
+            name="execute_safe_rewind",
+            description="Execute a safe rewind for the conversation, workspace, or both.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "checkpoint_id": {"type": "string"},
+                    "turn_count": {"type": "integer"},
+                    "message_count": {"type": "integer"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["conversation_and_workspace", "workspace_only", "conversation_only"],
+                    },
+                    "allow_stash_snapshot": {"type": "boolean"},
+                },
+                "required": ["session_id"],
+            },
+            requires_confirmation=True,
+        )
+
+    @staticmethod
     def _category_for(name: str) -> str:
         if name in {"read_file", "write_file", "edit_file", "list_files"}:
             return "files"
-        if name in {"git_status", "git_diff_worktree", "grep_code", "search_text"}:
+        if name in {"git_status", "git_diff_worktree", "grep_code", "search_text", "preview_safe_rewind", "execute_safe_rewind"}:
             return "repo"
         if name == "run_shell":
             return "shell"
         return "approvals"
-
