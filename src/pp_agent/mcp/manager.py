@@ -32,6 +32,7 @@ class MCPManager:
         time_fn: TimeFn | None = None,
         config_paths: Optional[list[Path]] = None,
     ) -> "MCPManager":
+        """Loads MCP config from a workspace directory."""
         project_dir = workspace.resolve() / ".pp-agent"
         return cls(load_mcp_server_configs(project_dir, config_paths=config_paths), transport_factory=transport_factory, time_fn=time_fn)
 

@@ -6,6 +6,7 @@ from pp_agent.mcp.session import MCPSession
 
 
 def discover_mcp_tools(server: MCPServerConfig, session: MCPSession) -> list[MCPToolDescriptor]:
+    """Discovers available MCP tools from a session and returns a list of descriptors."""
     descriptors: list[MCPToolDescriptor] = []
     for item in session.list_tools():
         is_destructive = bool(item.get("is_destructive", False))

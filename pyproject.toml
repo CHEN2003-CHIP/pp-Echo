@@ -20,6 +20,9 @@ dependencies = [
 dev = [
   "pytest>=8.2,<9",
 ]
+tui = [
+  "textual>=0.61,<1",
+]
 
 [project.scripts]
 pp-agent = "pp_agent.cli.main:main"

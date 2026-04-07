@@ -9,6 +9,7 @@ from pp_agent.llm.provider.openai_compatible import LLMClient
 
 
 class BailianLLMClient(LLMClient):
+    """阿里云百炼LLM客户端，兼容OpenAI接口"""
     def __init__(
         self,
         provider: Optional[ProviderConfig] = None,

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class ExtensionDescriptor(BaseModel):
+    """Agent扩展描述符，包含扩展的基本信息和元数据，用于注册和管理扩展"""
     name: str
     description: str
     path: Optional[Path] = None

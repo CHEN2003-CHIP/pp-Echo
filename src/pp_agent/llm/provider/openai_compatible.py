@@ -13,6 +13,7 @@ from pp_agent.llm.provider.base import BaseLLMClient, LLMClientError
 
 
 class LLMClient(BaseLLMClient):
+    """"""
     def __init__(
         self,
         provider: Optional[ProviderConfig] = None,
@@ -30,6 +31,7 @@ class LLMClient(BaseLLMClient):
         messages: list[ChatMessage],
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> Iterator[dict[str, Any]]:
+        """流式输出"""
         api_key = os.getenv(self.provider.api_key_env)
         if not api_key:
             raise LLMClientError(f"Missing API key in environment variable: {self.provider.api_key_env}")
@@ -109,6 +111,7 @@ class LLMClient(BaseLLMClient):
 
     @staticmethod
     def _normalize_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
+        """大模型流式响应标准化工具方法"""
         choice = chunk.get("choices", [{}])[0]
         delta = choice.get("delta", {})
         normalized: dict[str, Any] = {

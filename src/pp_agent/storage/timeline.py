@@ -13,6 +13,11 @@ FORMAL_TURN_PHASES = {"idle", "planning", "awaiting_approval", "executing", "dra
 
 
 class TimelineEntry(BaseModel):
+    """
+    【会话时间线事件条目】
+    标准化记录 AI Agent 会话中的每一个运行事件
+    用于：会话回放、调试日志、行为审计、错误追溯、运行监控
+    """
     id: str
     session_id: str
     created_at: float
@@ -28,6 +33,11 @@ class TimelineEntry(BaseModel):
 
 
 class TimelineStore:
+    """
+    【会话时间线本地文件存储】
+    采用 JSONL 格式（每行一个 JSON 对象）持久化存储所有会话事件
+    支持实时追加写入，不丢失日志，便于后续读取/回放/调试
+    """
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)

@@ -15,4 +15,5 @@ class MCPToolAdapter:
         self.tool_name = tool_name
 
     def execute(self, arguments: dict[str, Any]) -> MCPResult:
+        """Execute the MCP tool with the given arguments and return the result."""
         return self.manager.call_mcp_tool(self.server_name, self.tool_name, arguments)

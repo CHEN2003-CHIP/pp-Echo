@@ -7,6 +7,7 @@ from pp_agent.tools.base import BaseTool, ToolExecutionResult
 
 
 class SearchTextTool(BaseTool):
+    """在工作区内的文件中搜索文本"""
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec(

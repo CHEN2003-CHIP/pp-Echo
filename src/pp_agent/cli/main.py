@@ -63,6 +63,15 @@ if app:
 
         run_main(prompt, workspace, session_id, json_mode=json_mode, mode=mode)
 
+    @app.command()
+    def tui(
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+        session_id: Optional[str] = typer.Option(None, "--session"),
+    ) -> None:
+        from pp_agent.tui.main import tui_main
+
+        tui_main(workspace, session_id)
+
     # 注册二级子命令应用，分类管理不同功能模块
     sessions_app = typer.Typer(help="Manage stored sessions.")
     approvals_app = typer.Typer(help="Manage staged approvals.")
@@ -354,6 +363,9 @@ def main() -> None:
     chat_parser = subparsers.add_parser("chat")
     chat_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     chat_parser.add_argument("--session", default=None)
+    tui_parser = subparsers.add_parser("tui")
+    tui_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    tui_parser.add_argument("--session", default=None)
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("prompt")
     run_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
@@ -464,6 +476,10 @@ def main() -> None:
         from pp_agent.cli.chat import chat_main
 
         chat_main(Path(args.workspace), args.session)
+    elif command == "tui":
+        from pp_agent.tui.main import tui_main
+
+        tui_main(Path(args.workspace), args.session)
     elif command == "run":
         from pp_agent.cli.commands.run import run_main
 

@@ -42,6 +42,7 @@ class SkillSearchRoot(BaseModel):
     path: Path
     origin_type: str
     root_name: Optional[str] = None
+    # 加载优先级（数字越大，优先级越高）
     precedence: int = 0
     declared_by_manifest: bool = False
     discovery_root: Optional[str] = None
@@ -73,6 +74,8 @@ def skill_search_roots(
     user_root: Path,
     config: Any = None,
 ) -> list[SkillSearchRoot]:
+    # 按优先级顺序生成搜索根目录：
+    # 自定义目录 → 项目目录 → 用户目录 → 内置目录
     config = config or DEFAULT_SKILL_CONFIG
     roots: list[SkillSearchRoot] = []
     precedence = 0

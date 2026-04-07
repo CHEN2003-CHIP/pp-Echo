@@ -8,6 +8,7 @@ BUILTIN_PROMPTS_DIR = Path(__file__).resolve().parent
 
 
 def prompt_search_paths(workspace: Path, user_root: Path, extra_paths: Optional[list[Path]] = None) -> list[Path]:
+    """生成提示模板的搜索路径列表"""
     paths = [
         workspace.resolve() / '.pp-agent' / 'prompts',
         user_root.resolve() / 'prompts',
@@ -21,6 +22,7 @@ def prompt_search_paths(workspace: Path, user_root: Path, extra_paths: Optional[
 
 
 def load_prompt_templates(workspace: Path, user_root: Path, extra_paths: Optional[list[Path]] = None) -> dict[str, str]:
+    """加载提示模板，按照搜索路径的优先级覆盖"""
     templates: dict[str, str] = {}
     for root in reversed(prompt_search_paths(workspace, user_root, extra_paths=extra_paths)):
         if not root.exists():

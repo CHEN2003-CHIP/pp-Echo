@@ -12,6 +12,7 @@ CheckpointStatus = Literal["active", "restored", "dropped", "failed", "missing"]
 
 
 class CheckpointFileStats(BaseModel):
+    """Statistics about the files in the workspace at the time of checkpoint creation."""
     changed_file_count: int = 0
     has_dirty_workspace: bool = False
     has_untracked_files: bool = False
@@ -19,6 +20,7 @@ class CheckpointFileStats(BaseModel):
 
 
 class CheckpointEntry(BaseModel):
+    """A entry representing a checkpoint in the system."""
     checkpoint_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     workspace_root: str
     session_id: str

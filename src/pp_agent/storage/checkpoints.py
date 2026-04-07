@@ -8,6 +8,7 @@ from pp_agent.domain.checkpoints import CheckpointEntry
 
 
 class CheckpointStore:
+    """【检查点本地文件存储】"""
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)

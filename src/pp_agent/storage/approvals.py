@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 
 class PendingActionStore:
+    """【待处理操作本地文件存储】"""
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -22,6 +23,7 @@ class PendingActionStore:
         command: Optional[str] = None,
         details: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        """将一个待处理操作添加到存储中"""
         token = str(uuid.uuid4())
         payload = {
             "token": token,

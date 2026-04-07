@@ -19,6 +19,7 @@ def load_extension_entrypoint(descriptor: ExtensionDescriptor) -> LoadedExtensio
 
 
 def _import_extension_module(descriptor: ExtensionDescriptor) -> tuple[ModuleType, Optional[str]]:
+    """统一支持两种扩展加载模式，完美兼容本地文件扩展和第三方包扩展"""
     entrypoint = descriptor.entrypoint or "extension.py"
     if entrypoint.endswith(".py"):
         if descriptor.path is None:
@@ -39,6 +40,7 @@ def _import_extension_module(descriptor: ExtensionDescriptor) -> tuple[ModuleTyp
 
 
 def _resolve_entrypoint(module: ModuleType, explicit_attr: Optional[str]) -> Callable[[ExtensionAPI], None]:
+    """自动查找 / 定位扩展的初始化注册函数"""
     if explicit_attr:
         candidate = getattr(module, explicit_attr, None)
         if callable(candidate):

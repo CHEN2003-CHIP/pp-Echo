@@ -11,7 +11,7 @@ MCPResultKind = Literal["mcp_tool", "mcp_resource", "mcp_prompt"]
 
 class MCPResult(BaseModel):
     """Unified MCP execution/read result model."""
-
+    # Note: content is optional because some MCP interactions may only return structured payloads without a main text content.
     server_name: str
     kind: MCPResultKind
     name_or_uri: str
