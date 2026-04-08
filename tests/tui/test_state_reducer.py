@@ -121,3 +121,49 @@ def test_reduce_event_queue_summary_and_plan_reset() -> None:
         AgentEvent(type="turn_end", session_id="s1", details={"runtime": {"turn_id": 2, "phase": "idle", "pending_plan": False}}),
     )
     assert state.plan_steps == []
+
+
+def test_reduce_event_captures_planner_preview_details() -> None:
+    state = TuiState()
+
+    state = reduce_event(
+        state,
+        AgentEvent(
+            type="planner_gate_pending",
+            session_id="s1",
+            details={
+                "token": "tok-12345678",
+                "summary": ["Read README.md [read_file]", "Edit README.md [edit_file]"],
+                "files_touched_guess": ["README.md"],
+                "shell_commands_guess": ["pytest -q"],
+                "high_risk_tools": ["edit_file"],
+                "runtime": {"turn_id": 2, "phase": "awaiting_approval", "pending_plan": True},
+            },
+        ),
+    )
+
+    assert state.plan_summary[:2] == ["Read README.md [read_file]", "Edit README.md [edit_file]"]
+    assert state.plan_files == ["README.md"]
+    assert state.plan_shell_commands == ["pytest -q"]
+    assert state.plan_high_risk_tools == ["edit_file"]
+    assert state.plan_token_preview == "tok-1234"
+
+
+def test_reduce_event_preserves_existing_preview_when_new_details_are_empty() -> None:
+    state = TuiState()
+    state.plan_summary = ["Edit README.md [edit_file]"]
+    state.plan_files = ["README.md"]
+    state.plan_shell_commands = ["pytest -q"]
+    state.plan_high_risk_tools = ["edit_file"]
+    state.plan_token_preview = "tok-1234"
+
+    state = reduce_event(
+        state,
+        AgentEvent(type="planner_start", session_id="s1", details={"runtime": {"turn_id": 3, "phase": "planning"}}),
+    )
+
+    assert state.plan_summary == ["Edit README.md [edit_file]"]
+    assert state.plan_files == ["README.md"]
+    assert state.plan_shell_commands == ["pytest -q"]
+    assert state.plan_high_risk_tools == ["edit_file"]
+    assert state.plan_token_preview == "tok-1234"

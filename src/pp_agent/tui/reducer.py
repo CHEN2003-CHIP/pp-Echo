@@ -18,11 +18,16 @@ from pp_agent.tui.state import (
 )
 
 
-def hydrate_state_from_runtime(state: TuiState, runtime, *, session_epoch: int = 0) -> TuiState:
+def hydrate_state_from_runtime(state: TuiState, runtime, *, session_epoch: int = 0, pending_plan_details: dict | None = None) -> TuiState:
     state.session_epoch = session_epoch
     state.messages = _messages_from_runtime(runtime)
     state.active_assistant_message = ActiveAssistantMessage()
     state.plan_steps = []
+    state.plan_summary = []
+    state.plan_files = []
+    state.plan_shell_commands = []
+    state.plan_high_risk_tools = []
+    state.plan_token_preview = ""
     state.awaiting_assistant = False
     state.runtime_phase = RuntimePhase(
         session_id=runtime.session_id,
@@ -36,6 +41,9 @@ def hydrate_state_from_runtime(state: TuiState, runtime, *, session_epoch: int =
     state.runtime_phase.status_line = _make_status_line(state.runtime_phase)
     state.queue_summary = _queue_summary_from_runtime(runtime)
     state.approval_state = _approval_from_runtime(runtime)
+    state.plan_token_preview = state.approval_state.token_preview
+    if pending_plan_details:
+        _update_plan_preview(state, pending_plan_details)
     state.composer = _composer_state(state)
     state.ephemeral_logs = []
     return state
@@ -60,6 +68,7 @@ def reduce_event(state: TuiState, event: AgentEvent) -> TuiState:
         state.awaiting_assistant = False
         _remove_status_message(state, "assistant-waiting")
         state.plan_steps = []
+        _update_plan_preview(state, event.details)
         _append_status_message(state, "planner-start", "planning next actions")
     elif event.type == "planner_step" and event.plan_step is not None:
         _upsert_plan_step(state, event.plan_step.title, event.plan_step.tool_name, event.plan_step.status)
@@ -70,6 +79,7 @@ def reduce_event(state: TuiState, event: AgentEvent) -> TuiState:
         token = event.details.get("token")
         state.awaiting_assistant = False
         _remove_status_message(state, "assistant-waiting")
+        _update_plan_preview(state, event.details)
         state.approval_state = _approval_from_token(token, awaiting=True)
         append_log(state, state.approval_state.prompt, level="warning", important=True)
         _append_status_message(state, "approval-pending", "waiting for approval")
@@ -81,6 +91,11 @@ def reduce_event(state: TuiState, event: AgentEvent) -> TuiState:
         append_log(state, event.message or "Approval rejected.", level="warning", important=True)
         state.approval_state = ApprovalState(status_label="rejected")
         state.plan_steps = []
+        state.plan_summary = []
+        state.plan_files = []
+        state.plan_shell_commands = []
+        state.plan_high_risk_tools = []
+        state.plan_token_preview = ""
         _append_status_message(state, "approval-rejected", event.message or "approval rejected")
     elif event.type == "queue_update":
         state.queue_summary.latest_action = _queue_action_text(event)
@@ -110,6 +125,11 @@ def reduce_event(state: TuiState, event: AgentEvent) -> TuiState:
         _commit_active_assistant_message(state)
         if state.runtime_phase.phase == "idle" and not state.approval_state.awaiting_approval:
             state.plan_steps = []
+            state.plan_summary = []
+            state.plan_files = []
+            state.plan_shell_commands = []
+            state.plan_high_risk_tools = []
+            state.plan_token_preview = ""
     state.composer = _composer_state(state)
     return state
 
@@ -157,8 +177,8 @@ def _composer_state(state: TuiState) -> ComposerState:
         return ComposerState(
             prompt_prefix="approve>",
             mode_label="APPROVAL",
-            helper_text="Approval pending. Approve or reject before execution continues.",
-            command_hint="Type 'approve' or 'reject' | /new | /resume <session_id>",
+            helper_text="Approval pending. Ctrl+S submits input; Ctrl+V pastes text; Ctrl+C copies selection.",
+            command_hint="Type 'approve' or 'reject' | Ctrl+S submit | /new | /resume <session_id>",
             focus_label="ACTION",
             placeholder="Approve, reject, or wait for the gate to clear",
             accent_variant="approval",
@@ -168,8 +188,8 @@ def _composer_state(state: TuiState) -> ComposerState:
         return ComposerState(
             prompt_prefix="queue>",
             mode_label="BUSY",
-            helper_text="Agent is working. New text will be queued as follow-up.",
-            command_hint="Type follow-up guidance or use /new /resume <session_id>",
+            helper_text="Agent is working. Enter adds a new line; Ctrl+S submits; Ctrl+V pastes text.",
+            command_hint="Type follow-up guidance | Ctrl+S submit | /new | /resume <session_id>",
             focus_label="QUEUE",
             placeholder="Add a follow-up while the agent is working",
             accent_variant="busy",
@@ -179,8 +199,8 @@ def _composer_state(state: TuiState) -> ComposerState:
         return ComposerState(
             prompt_prefix=">",
             mode_label="WAITING",
-            helper_text="Question sent. Waiting for the first tokens to arrive.",
-            command_hint="Stay here or prepare your next turn.",
+            helper_text="Question sent. Enter adds a new line; Ctrl+S submits when you're ready.",
+            command_hint="Stay here or prepare your next turn | Ctrl+V paste",
             focus_label="WAIT",
             placeholder="The agent is preparing a response",
             accent_variant="waiting",
@@ -189,8 +209,8 @@ def _composer_state(state: TuiState) -> ComposerState:
     return ComposerState(
         prompt_prefix=">",
         mode_label="READY",
-        helper_text="Agent is ready.",
-        command_hint="Commands: /approve /reject /new /resume <session_id>",
+        helper_text="Enter adds a new line; Ctrl+S submits; Ctrl+V pastes; Ctrl+C copies selection.",
+        command_hint="Commands: /approve /reject /new /resume <session_id> | Ctrl+S submit",
         focus_label="INPUT",
         placeholder="Ask pp-Echo what to do next",
         accent_variant="ready",
@@ -290,6 +310,21 @@ def _upsert_plan_step(state: TuiState, title: str, tool_name: str | None, status
     state.plan_steps.append(TuiPlanStep(title=title, tool_name=tool_name, status=status))
 
 
+def _update_plan_preview(state: TuiState, details: dict) -> None:
+    if "summary" in details:
+        summary = details.get("summary") or []
+        state.plan_summary = [str(item) for item in summary if str(item).strip()]
+    if "files_touched_guess" in details:
+        state.plan_files = [str(item) for item in details.get("files_touched_guess", []) if str(item).strip()]
+    if "shell_commands_guess" in details:
+        state.plan_shell_commands = [str(item) for item in details.get("shell_commands_guess", []) if str(item).strip()]
+    if "high_risk_tools" in details:
+        state.plan_high_risk_tools = [str(item) for item in details.get("high_risk_tools", []) if str(item).strip()]
+    token = details.get("token")
+    if token:
+        state.plan_token_preview = str(token)[:8]
+
+
 def _approval_prompt(token: str | None) -> str:
     if not token:
         return ""
@@ -317,3 +352,4 @@ def _commit_active_assistant_message(state: TuiState) -> None:
         )
     )
     state.active_assistant_message = ActiveAssistantMessage()
+

@@ -3,6 +3,16 @@ from pathlib import Path
 from storage.settings import Settings
 
 
+def test_system_md_overrides_default_system_prompt(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True)
+    (project_dir / "SYSTEM.md").write_text("repo system prompt", encoding="utf-8")
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.system_prompt == "repo system prompt"
+
+
 def test_project_config_overrides_defaults(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)

@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
 from pp_agent.api import chat as create_chat_runtime
 from pp_agent.cli.commands.approvals import approve_or_execute_pending_action, load_pending_action
 from pp_agent.cli.dispatcher import handle_command, handle_queue_command
-from pp_agent.cli.render.runtime import console, render_event, render_runtime_status
+from pp_agent.cli.render.runtime import ChatEventRenderer, console, render_runtime_status
 
 
 def build_agent(workspace: Path, session_id: Optional[str] = None):
@@ -49,7 +49,8 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
     while True:
         # 创建智能体实例并注册事件渲染器
         agent = build_agent(workspace, session_id=session_id)
-        agent.subscribe(render_event)
+        renderer = ChatEventRenderer(agent)
+        agent.subscribe(renderer.render)
         worker: Optional[threading.Thread] = None
 
         # 判断智能体是否正在执行任务

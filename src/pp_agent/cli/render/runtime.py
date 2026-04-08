@@ -22,12 +22,14 @@ except ImportError:  # pragma: no cover
 
 
 from pp_agent.app.bootstrap import load_settings, timeline_store_for
+from pp_agent.domain import TextPart
 from pp_agent.runtime import AgentEvent, AgentRuntime, RuntimeMonitor
 from pp_agent.storage.timeline import TimelineStore
 
 
 console = Console()
 RUNTIME_MONITOR = RuntimeMonitor()
+EMPTY_TURN_FALLBACK = "No visible reply this turn; the model returned no usable answer."
 PLAN_MARKERS = {
     "pending": "[ ]",
     "awaiting_approval": "[?]",
@@ -59,29 +61,109 @@ def render_runtime_status(agent: AgentRuntime) -> None:
     console.print(format_runtime_status(snapshot))
 
 
+class ChatEventRenderer:
+    def __init__(self, agent: AgentRuntime) -> None:
+        self.agent = agent
+        self._current_turn_id = 0
+        self._streamed_assistant_text = False
+        self._visible_output = False
+        self._last_rendered_assistant_index = -1
+
+    def render(self, event: AgentEvent) -> None:
+        if event.type == "turn_start":
+            self._current_turn_id = int(event.details.get("turn_id") or event.turn_id or self._current_turn_id + 1)
+            self._streamed_assistant_text = False
+            self._visible_output = False
+            return
+        if event.type == "message_delta" and event.delta:
+            console.print(event.delta, end="")
+            self._streamed_assistant_text = True
+            self._visible_output = True
+            return
+        if event.type == "planner_start":
+            console.print("\n=== Planner ===")
+            console.print("Planned steps:")
+            self._visible_output = True
+            return
+        if event.type == "planner_step" and event.plan_step is not None:
+            if event.plan_step.status == "pending":
+                console.print(f"  {format_plan_step(event.plan_step)}", markup=False)
+            else:
+                console.print(f"Planner update: {format_plan_step(event.plan_step)}", markup=False)
+            self._visible_output = True
+            return
+        if event.type == "planner_end":
+            token = event.details.get("token")
+            if event.details.get("requires_approval"):
+                console.print(f"Planner paused. Approve with /approve {token} or reject with /reject {token}")
+            else:
+                console.print("=== Executor ===")
+            self._visible_output = True
+            return
+        if event.type == "tool_start":
+            console.print(f"Start {event.tool_name} {event.tool_args}")
+            self._visible_output = True
+            return
+        if event.type == "tool_end":
+            label = "error" if event.is_error else "done"
+            console.print(f"{label.upper()} {event.tool_name}: {event.message}")
+            self._visible_output = True
+            return
+        if event.type == "compaction":
+            console.print(f"[Runtime] context compacted: {event.details}")
+            return
+        if event.type == "queue_update":
+            action = event.details.get("action")
+            delivery = event.details.get("delivery")
+            text_value = compact_text(event.details.get("text", ""), limit=80)
+            console.print(f"[Queue] {action} {delivery}: {text_value}")
+            snapshot = RUNTIME_MONITOR.snapshot_from_event(event)
+            if snapshot is not None:
+                console.print(format_runtime_status(snapshot))
+            return
+        if event.type == "turn_state":
+            snapshot = RUNTIME_MONITOR.snapshot_from_event(event)
+            if snapshot is not None:
+                console.print(format_runtime_status(snapshot))
+            return
+        if event.type == "error":
+            console.print(f"[Error] {event.message}")
+            self._visible_output = True
+            return
+        if event.type == "turn_end":
+            self._render_turn_end_feedback()
+
+    def _render_turn_end_feedback(self) -> None:
+        latest = self._latest_assistant_message()
+        if latest is not None:
+            index, text = latest
+            if index > self._last_rendered_assistant_index and text:
+                if self._streamed_assistant_text:
+                    self._last_rendered_assistant_index = index
+                    return
+                console.print(text)
+                self._last_rendered_assistant_index = index
+                self._visible_output = True
+                return
+        if not self._visible_output:
+            console.print(EMPTY_TURN_FALLBACK)
+
+    def _latest_assistant_message(self) -> tuple[int, str] | None:
+        for index in range(len(self.agent.state.messages) - 1, -1, -1):
+            message = self.agent.state.messages[index]
+            if message.role != "assistant":
+                continue
+            text = "\n".join(
+                part.text.strip()
+                for part in message.content
+                if isinstance(part, TextPart) and part.text.strip()
+            ).strip()
+            return index, text
+        return None
+
+
 def render_event(event: AgentEvent) -> None:
-    if event.type == "message_delta" and event.delta:
-        console.print(event.delta, end="")
-    elif event.type == "planner_start":
-        console.print("\n=== Planner ===")
-        console.print("Planned steps:")
-    elif event.type == "planner_step" and event.plan_step is not None:
-        if event.plan_step.status == "pending":
-            console.print(f"  {format_plan_step(event.plan_step)}", markup=False)
-        else:
-            console.print(f"Planner update: {format_plan_step(event.plan_step)}", markup=False)
-    elif event.type == "planner_end":
-        token = event.details.get("token")
-        if event.details.get("requires_approval"):
-            console.print(f"Planner paused. Approve with /approve {token} or reject with /reject {token}")
-        else:
-            console.print("=== Executor ===")
-    elif event.type == "tool_start":
-        console.print(f"Start {event.tool_name} {event.tool_args}")
-    elif event.type == "tool_end":
-        label = "error" if event.is_error else "done"
-        console.print(f"{label.upper()} {event.tool_name}: {event.message}")
-    elif event.type == "compaction":
+    if event.type == "compaction":
         console.print(f"[Runtime] context compacted: {event.details}")
     elif event.type == "queue_update":
         action = event.details.get("action")
@@ -129,6 +211,8 @@ __all__ = [
     "PLAN_MARKERS",
     "RICH_AVAILABLE",
     "RUNTIME_MONITOR",
+    "ChatEventRenderer",
+    "EMPTY_TURN_FALLBACK",
     "compact_text",
     "console",
     "format_plan_step",

@@ -88,6 +88,11 @@ class TuiState:
     messages: list[TuiMessage] = field(default_factory=list)
     active_assistant_message: ActiveAssistantMessage = field(default_factory=ActiveAssistantMessage)
     plan_steps: list[TuiPlanStep] = field(default_factory=list)
+    plan_summary: list[str] = field(default_factory=list)
+    plan_files: list[str] = field(default_factory=list)
+    plan_shell_commands: list[str] = field(default_factory=list)
+    plan_high_risk_tools: list[str] = field(default_factory=list)
+    plan_token_preview: str = ""
     queue_summary: QueueSummary = field(default_factory=QueueSummary)
     approval_state: ApprovalState = field(default_factory=ApprovalState)
     runtime_phase: RuntimePhase = field(default_factory=RuntimePhase)

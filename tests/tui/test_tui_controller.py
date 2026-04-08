@@ -140,3 +140,26 @@ def test_controller_blocks_free_text_while_approval_pending(monkeypatch, tmp_pat
     assert controller.agent.prompted == []
     drained = controller.drain_events()
     assert any(event.type == "local_warning" for event in drained)
+
+
+def test_controller_loads_pending_plan_preview_details(monkeypatch, tmp_path: Path) -> None:
+    FakeRuntime.instances = []
+    monkeypatch.setattr("pp_agent.tui.controller.build_agent", lambda workspace, session_id=None: FakeRuntime())
+
+    class FakeStore:
+        def load(self, token: str) -> dict:
+            assert token == "tok-1"
+            return {
+                "action_type": "planner_approval",
+                "details": {"summary": ["Edit README.md [edit_file]"], "files_touched_guess": ["README.md"]},
+            }
+
+    monkeypatch.setattr("pp_agent.tui.controller.pending_action_store_for", lambda workspace: FakeStore())
+
+    controller = TuiController(tmp_path)
+    controller.agent.state.pending_plan_token = "tok-1"
+
+    assert controller.pending_plan_preview_details() == {
+        "summary": ["Edit README.md [edit_file]"],
+        "files_touched_guess": ["README.md"],
+    }

@@ -289,10 +289,11 @@ class AgentRuntime:
                     #controller决策
                     pause_decision = self.turn_controller.before_plan_approval()
                     yield from self._set_turn_phase(pause_decision.phase, pause_decision.reason)
+                    planner_preview = self._planner_preview_details(tool_calls, plan_steps, token=payload["token"])
                     yield from self._emit(
                         self._event(
                             PLANNER_START,
-                            details={"count": len(plan_steps), "requires_approval": True, "token": payload["token"], "turn_id": self.state.turn.turn_id},
+                            details={**planner_preview, "requires_approval": True, "turn_id": self.state.turn.turn_id},
                         )
                     )
                     for step in plan_steps:
@@ -304,12 +305,12 @@ class AgentRuntime:
                                 details={"status": step.status, "token": payload["token"]},
                             )
                         )
-                    yield from self._emit(self._event(PLANNER_GATE_PENDING, message=f"Planner paused for approval token {payload['token']}", details={"token": payload["token"], "turn_id": self.state.turn.turn_id}))
+                    yield from self._emit(self._event(PLANNER_GATE_PENDING, message=f"Planner paused for approval token {payload['token']}", details={**planner_preview, "turn_id": self.state.turn.turn_id, "requires_approval": True}))
                     yield from self._emit(
                         self._event(
                             PLANNER_END,
                             message=f"Planner paused for approval token {payload['token']}",
-                            details={"count": len(plan_steps), "requires_approval": True, "token": payload["token"]},
+                            details={**planner_preview, "requires_approval": True},
                         )
                     )
                     end_decision = self.turn_controller.on_turn_end()
@@ -336,10 +337,11 @@ class AgentRuntime:
             plan_steps = self._build_plan_steps(tool_calls)
             exec_decision = self.turn_controller.before_tool_execution()
             yield from self._set_turn_phase(exec_decision.phase, exec_decision.reason)
-            yield from self._emit(self._event(PLANNER_START, details={"count": len(plan_steps), "requires_approval": False, "turn_id": self.state.turn.turn_id}))
+            planner_preview = self._planner_preview_details(tool_calls, plan_steps)
+            yield from self._emit(self._event(PLANNER_START, details={**planner_preview, "requires_approval": False, "turn_id": self.state.turn.turn_id}))
             for step in plan_steps:
                 yield from self._emit(self._event(PLANNER_STEP, plan_step=step.model_copy(deep=True), details={"status": step.status}))
-            yield from self._emit(self._event(PLANNER_END, details={"count": len(plan_steps), "requires_approval": False}))
+            yield from self._emit(self._event(PLANNER_END, details={**planner_preview, "requires_approval": False}))
 
             tool_failed = False
             continue_after_error = False
@@ -561,34 +563,83 @@ class AgentRuntime:
         return "\n\n".join(reversed(tool_texts))
 
     def _build_plan_steps(self, tool_calls: list[ToolCall]) -> list[PlanStep]:
-        """把模型返回的「工具调用指令（ToolCall）」 → 转换成 Agent 可执行、可展示的「规划步骤（PlanStep）」"""
+        """??????????????ToolCall?? ? ??? Agent ??????????????PlanStep??"""
         steps: list[PlanStep] = []
         for call in tool_calls:
-            title = f"Use {call.name}"
-            if call.name in {"write_file", "edit_file", "run_shell"}:
-                title = f"Stage or execute {call.name}"
-            elif call.name.startswith("approve_"):
-                title = f"Apply approved action via {call.name}"
+            title = self._plan_step_title(call)
             steps.append(PlanStep(title=title, tool_name=call.name, tool_args=call.arguments, status="pending"))
         return steps
 
+    def _plan_step_title(self, call: ToolCall) -> str:
+        path = str(call.arguments.get("path", "")).strip()
+        command = str(call.arguments.get("command", "")).strip()
+        query = str(call.arguments.get("query", "")).strip()
+        if call.name == "read_file" and path:
+            return f"Read {path}"
+        if call.name == "write_file" and path:
+            return f"Write {path}"
+        if call.name == "edit_file" and path:
+            return f"Edit {path}"
+        if call.name == "run_shell":
+            return f"Run shell command: {self._compact_plan_value(command, 80)}" if command else "Run shell command"
+        if call.name == "search_text":
+            return f"Search text: {self._compact_plan_value(query, 60)}" if query else "Search text"
+        if call.name.startswith("approve_"):
+            return f"Apply approved action via {call.name}"
+        return f"Use {call.name}"
+
+    @staticmethod
+    def _compact_plan_value(value: str, limit: int = 80) -> str:
+        text = value.replace("\r", " ").replace("\n", " ").strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
+
+    def _planner_preview_details(self, tool_calls: list[ToolCall], plan_steps: list[PlanStep], token: str | None = None) -> dict[str, object]:
+        summary = [f"{step.title} [{step.tool_name}]" for step in plan_steps]
+        files_touched: list[str] = []
+        shell_commands: list[str] = []
+        high_risk_tools: list[str] = []
+        for call in tool_calls:
+            path = str(call.arguments.get("path", "")).strip()
+            command = str(call.arguments.get("command", "")).strip()
+            if path:
+                files_touched.append(path)
+            if command:
+                shell_commands.append(self._compact_plan_value(command, 120))
+            spec = self.tool_registry.get_spec(call.name)
+            if spec.requires_confirmation and call.name not in high_risk_tools:
+                high_risk_tools.append(call.name)
+        preview = {
+            "count": len(plan_steps),
+            "summary": summary,
+            "plan_steps": [step.model_dump(mode="json") for step in plan_steps],
+            "step_count": len(plan_steps),
+            "tools": [call.name for call in tool_calls],
+            "files_touched_guess": files_touched,
+            "shell_commands_guess": shell_commands,
+            "high_risk_tools": high_risk_tools,
+        }
+        if token is not None:
+            preview["token"] = token
+        return preview
+
     def _should_pause_for_plan(self, tool_calls: list[ToolCall]) -> bool:
-        """判断生成的工具调用计划是否需要【暂停流程，等待人工审批】"""
+        """????????????????????????????"""
         if not self.require_plan_approval or self.state.pending_tool_calls:
-            ## 条件1：如果【全局关闭审批】 或 【有未执行完的挂起工具】→ 不暂停，直接返回False
+            ## ??1??????????? ? ????????????? ????????False
             return False
         return any(self.tool_registry.get_spec(call.name).requires_confirmation for call in tool_calls)
 
     def _stage_plan_approval(self, tool_calls: list[ToolCall], plan_steps: list[PlanStep]) -> dict[str, object]:
-        """把待执行的工具调用、规划步骤打包存储，生成一个待审批的任务项"""
-        summary = [f"{step.title} [{step.tool_name}]" for step in plan_steps]
+        """??????????????????????????????"""
+        preview = self._planner_preview_details(tool_calls, plan_steps)
         return self._pending_action_store().stage(
             action_type="planner_approval",
             details={
                 "session_id": self.session_id,
                 "tool_calls": [call.model_dump(mode="json") for call in tool_calls],
-                "plan_steps": [step.model_dump(mode="json") for step in plan_steps],
-                "summary": summary,
+                **preview,
             },
         )
 

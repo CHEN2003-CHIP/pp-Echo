@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from pp_agent.app.bootstrap import build_agent
+from pp_agent.app.bootstrap import build_agent, pending_action_store_for
 from pp_agent.runtime import AgentEvent
 
 
@@ -68,6 +68,19 @@ class TuiController:
             return None
         self._start_worker("prompt", lambda value=raw: self.agent.prompt(value))
         return None
+
+    def pending_plan_preview_details(self) -> dict:
+        token = self.agent.state.pending_plan_token
+        if not token:
+            return {}
+        try:
+            payload = pending_action_store_for(self.workspace).load(token)
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            return {}
+        if payload.get("action_type") != "planner_approval":
+            return {}
+        details = payload.get("details")
+        return details if isinstance(details, dict) else {}
 
     def new_session(self) -> None:
         if self.is_busy():
@@ -160,3 +173,5 @@ class TuiController:
 
             self._worker = threading.Thread(target=runner, name=f"pp-agent-tui-{action}", daemon=True)
             self._worker.start()
+
+

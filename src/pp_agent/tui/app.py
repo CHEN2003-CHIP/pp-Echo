@@ -1,11 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
 from prompt_toolkit.application import Application
-from prompt_toolkit.document import Document
+from prompt_toolkit.clipboard import Clipboard, ClipboardData, InMemoryClipboard
+from prompt_toolkit.document import Document, PasteMode
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -22,7 +25,12 @@ from pp_agent.tui.state import TuiMessage, TuiState, append_log
 class PromptToolkitTuiApp:
     def __init__(self, workspace: Path, session_id: Optional[str] = None) -> None:
         self.controller = TuiController(workspace, session_id=session_id)
-        self.state = hydrate_state_from_runtime(TuiState(), self.controller.agent, session_epoch=self.controller.session_epoch)
+        self.state = hydrate_state_from_runtime(
+            TuiState(),
+            self.controller.agent,
+            session_epoch=self.controller.session_epoch,
+            pending_plan_details=self.controller.pending_plan_preview_details(),
+        )
 
         self.transcript_area = TextArea(
             text="",
@@ -37,10 +45,12 @@ class PromptToolkitTuiApp:
         self.activity_area = TextArea(text="", focusable=False, wrap_lines=True, read_only=True, style="class:side.text")
         self.input_area = TextArea(
             text="",
-            multiline=False,
-            wrap_lines=False,
+            multiline=True,
+            wrap_lines=True,
             focus_on_click=True,
-            scrollbar=False,
+            scrollbar=True,
+            height=Dimension(min=3, preferred=3, max=4),
+            dont_extend_height=True,
             style="class:composer.input",
         )
 
@@ -52,6 +62,7 @@ class PromptToolkitTuiApp:
             layout=Layout(self._build_root(), focused_element=self.input_area),
             key_bindings=self._build_keybindings(),
             style=_build_style(),
+            clipboard=_build_clipboard(),
             full_screen=True,
             mouse_support=True,
             refresh_interval=0.1,
@@ -86,6 +97,7 @@ class PromptToolkitTuiApp:
             ),
             title="composer",
             style="class:composer.frame",
+            height=Dimension(min=5, preferred=5, max=6),
         )
 
         return HSplit(
@@ -101,10 +113,13 @@ class PromptToolkitTuiApp:
     def _build_keybindings(self) -> KeyBindings:
         kb = KeyBindings()
 
-        @kb.add("c-c")
         @kb.add("c-q")
         def _(event) -> None:
             event.app.exit()
+
+        @kb.add("c-c")
+        def _(event) -> None:
+            self._copy_selection(event)
 
         @kb.add("c-l")
         def _(event) -> None:
@@ -118,10 +133,24 @@ class PromptToolkitTuiApp:
         def _(event) -> None:
             event.app.layout.focus_previous()
 
-        @kb.add("enter")
+        @kb.add("c-s")
         def _(event) -> None:
             if event.app.layout.has_focus(self.input_area):
                 self._submit_input()
+
+        @kb.add("escape", "enter")
+        def _(event) -> None:
+            if event.app.layout.has_focus(self.input_area):
+                self._submit_input()
+
+        @kb.add("c-v")
+        @kb.add("s-insert")
+        def _(event) -> None:
+            self._paste_clipboard(event)
+
+        @kb.add("c-insert")
+        def _(event) -> None:
+            self._copy_selection(event)
 
         return kb
 
@@ -131,6 +160,19 @@ class PromptToolkitTuiApp:
             self.state = reduce_event(self.state, agent_event)
             changed = True
         self._sync_views(update_only=not changed)
+
+    def _copy_selection(self, event) -> None:
+        current_buffer = getattr(event.app, "current_buffer", None) or self.input_area.buffer
+        if current_buffer is None or current_buffer.selection_state is None:
+            return
+        event.app.clipboard.set_data(current_buffer.copy_selection())
+
+    def _paste_clipboard(self, event) -> None:
+        data = event.app.clipboard.get_data()
+        if not getattr(data, "text", ""):
+            return
+        event.app.layout.focus(self.input_area)
+        self.input_area.buffer.paste_clipboard_data(data, paste_mode=PasteMode.EMACS)
 
     def _submit_input(self) -> None:
         value = self.input_area.text.strip()
@@ -169,6 +211,7 @@ class PromptToolkitTuiApp:
                     TuiState(),
                     self.controller.agent,
                     session_epoch=self.controller.session_epoch,
+                    pending_plan_details=self.controller.pending_plan_preview_details(),
                 )
         except Exception as exc:  # noqa: BLE001
             append_log(self.state, f"Error: {exc}", level="error", important=True)
@@ -230,6 +273,57 @@ class PromptToolkitTuiApp:
         self.application.run()
 
 
+class _ShellClipboard(Clipboard):
+    def __init__(self) -> None:
+        self._fallback = InMemoryClipboard()
+
+    def set_data(self, data: ClipboardData) -> None:
+        self._fallback.set_data(data)
+        try:
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", "Set-Clipboard -Value ([Console]::In.ReadToEnd())"],
+                input=data.text,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=1,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def get_data(self) -> ClipboardData:
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=1,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return self._fallback.get_data()
+        if result.returncode == 0:
+            data = ClipboardData(result.stdout.replace("\r\n", "\n"))
+            self._fallback.set_data(data)
+            return data
+        return self._fallback.get_data()
+
+
+def _build_clipboard() -> Clipboard:
+    try:
+        from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
+    except ImportError:
+        PyperclipClipboard = None
+    if PyperclipClipboard is not None:
+        try:
+            return PyperclipClipboard()
+        except Exception:
+            pass
+    if os.name == "nt":
+        return _ShellClipboard()
+    return InMemoryClipboard()
+
+
 def _mood(state: TuiState) -> tuple[str, str]:
     if state.approval_state.awaiting_approval:
         return "class:header.warning", "approval"
@@ -280,13 +374,37 @@ def _render_approval(state: TuiState) -> str:
 
 
 def _render_plan(state: TuiState) -> str:
-    lines = []
-    if state.plan_steps:
+    lines: list[str] = []
+    if state.plan_summary:
+        lines.append("summary")
+        for item in state.plan_summary[:4]:
+            lines.append(f"- {item}")
+    elif state.plan_steps:
+        lines.append("steps")
         for step in state.plan_steps:
             tool = f" [{step.tool_name}]" if step.tool_name else ""
             lines.append(f"{step.status.lower():<10} {step.title}{tool}")
+    elif state.approval_state.awaiting_approval:
+        lines.append("awaiting approval")
     else:
         lines.append("idle")
+
+    if state.plan_files:
+        lines.extend(["", "files"])
+        for item in state.plan_files[:4]:
+            lines.append(f"- {item}")
+
+    if state.plan_shell_commands:
+        lines.extend(["", "shell"])
+        for item in state.plan_shell_commands[:3]:
+            lines.append(f"- {item}")
+
+    if state.plan_high_risk_tools:
+        lines.extend(["", f"high-risk  {', '.join(state.plan_high_risk_tools[:4])}"])
+
+    if state.plan_token_preview:
+        lines.extend(["", f"token      {state.plan_token_preview}"])
+
     lines.extend(
         [
             "",
