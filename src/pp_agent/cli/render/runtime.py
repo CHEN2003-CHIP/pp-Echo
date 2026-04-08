@@ -30,6 +30,7 @@ from pp_agent.storage.timeline import TimelineStore
 console = Console()
 RUNTIME_MONITOR = RuntimeMonitor()
 EMPTY_TURN_FALLBACK = "No visible reply this turn; the model returned no usable answer."
+TURN_COMPLETE_MARKER = "[Done] turn complete"
 PLAN_MARKERS = {
     "pending": "[ ]",
     "awaiting_approval": "[?]",
@@ -67,13 +68,18 @@ class ChatEventRenderer:
         self._current_turn_id = 0
         self._streamed_assistant_text = False
         self._visible_output = False
+        self._turn_start_message_count = 0
+        self._turn_final_text_signature: str | None = None
         self._last_rendered_assistant_index = -1
+        self._last_completed_turn_id = -1
 
     def render(self, event: AgentEvent) -> None:
         if event.type == "turn_start":
             self._current_turn_id = int(event.details.get("turn_id") or event.turn_id or self._current_turn_id + 1)
             self._streamed_assistant_text = False
             self._visible_output = False
+            self._turn_start_message_count = len(self.agent.state.messages)
+            self._turn_final_text_signature = None
             return
         if event.type == "message_delta" and event.delta:
             console.print(event.delta, end="")
@@ -131,25 +137,27 @@ class ChatEventRenderer:
             self._visible_output = True
             return
         if event.type == "turn_end":
+            if self._last_completed_turn_id == self._current_turn_id:
+                return
             self._render_turn_end_feedback()
+            self._last_completed_turn_id = self._current_turn_id
 
     def _render_turn_end_feedback(self) -> None:
         latest = self._latest_assistant_message()
         if latest is not None:
             index, text = latest
-            if index > self._last_rendered_assistant_index and text:
-                if self._streamed_assistant_text:
-                    self._last_rendered_assistant_index = index
-                    return
-                console.print(text)
+            if index > self._last_rendered_assistant_index and text and text != self._turn_final_text_signature:
+                if not self._streamed_assistant_text:
+                    console.print(text)
+                    self._visible_output = True
                 self._last_rendered_assistant_index = index
-                self._visible_output = True
-                return
+                self._turn_final_text_signature = text
         if not self._visible_output:
             console.print(EMPTY_TURN_FALLBACK)
+        console.print(TURN_COMPLETE_MARKER)
 
     def _latest_assistant_message(self) -> tuple[int, str] | None:
-        for index in range(len(self.agent.state.messages) - 1, -1, -1):
+        for index in range(len(self.agent.state.messages) - 1, self._turn_start_message_count - 1, -1):
             message = self.agent.state.messages[index]
             if message.role != "assistant":
                 continue
@@ -213,6 +221,7 @@ __all__ = [
     "RUNTIME_MONITOR",
     "ChatEventRenderer",
     "EMPTY_TURN_FALLBACK",
+    "TURN_COMPLETE_MARKER",
     "compact_text",
     "console",
     "format_plan_step",

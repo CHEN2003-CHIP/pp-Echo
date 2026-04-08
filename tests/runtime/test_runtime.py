@@ -9,6 +9,7 @@ from storage.sessions import SessionStore
 from storage.timeline import TimelineStore
 from tools.pending_actions import PendingActionStore
 from tools.registry import ToolRegistry
+from pp_agent.runtime.runtime import AgentRuntime
 
 
 class FakeLLMClient:
@@ -233,6 +234,27 @@ def test_agent_session_falls_back_to_tool_result_when_follow_up_provider_is_empt
     assert not any(event.type == "error" for event in events)
     assert agent.state.messages[-1].role == "assistant"
     assert "demo.txt" in agent.state.messages[-1].content[0].text
+
+
+def test_tool_result_fallback_ignores_non_trailing_tool_messages() -> None:
+    messages = [
+        ChatMessage(role="user", content=[TextPart(text="show me files")], timestamp=1.0),
+        ChatMessage(role="tool", content=[TextPart(text="old tool output")], timestamp=2.0),
+        ChatMessage(role="assistant", content=[TextPart(text="old summary")], timestamp=3.0),
+        ChatMessage(role="user", content=[TextPart(text="who are you")], timestamp=4.0),
+    ]
+
+    assert AgentRuntime._tool_result_fallback(messages) == ""
+
+
+def test_tool_result_fallback_uses_only_trailing_tool_messages() -> None:
+    messages = [
+        ChatMessage(role="user", content=[TextPart(text="show me src")], timestamp=1.0),
+        ChatMessage(role="tool", content=[TextPart(text="demo.txt")], timestamp=2.0),
+        ChatMessage(role="tool", content=[TextPart(text="nested/file.txt")], timestamp=3.0),
+    ]
+
+    assert AgentRuntime._tool_result_fallback(messages) == "demo.txt\n\nnested/file.txt"
 
 
 def test_agent_session_marks_plan_step_failed_when_tool_fails(tmp_path: Path) -> None:

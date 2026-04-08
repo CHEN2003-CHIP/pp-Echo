@@ -1,4 +1,5 @@
 from pathlib import Path
+import difflib
 
 import pytest
 
@@ -52,6 +53,39 @@ def test_pending_edit_conflict_is_detected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         registry.execute("approve_pending_action", {"token": token})
+
+
+def test_edit_file_accepts_unified_diff(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    original = "alpha\nbeta\ngamma\n"
+    updated = "alpha\nbeta updated\ngamma\ndelta\n"
+    registry.execute("write_file", {"path": "notes.txt", "content": original, "apply": True})
+    diff = "\n".join(
+        difflib.unified_diff(
+            original.splitlines(),
+            updated.splitlines(),
+            fromfile="a/notes.txt",
+            tofile="b/notes.txt",
+            lineterm="",
+        )
+    )
+
+    staged = registry.execute("edit_file", {"path": "notes.txt", "diff": diff})
+    token = staged.details["token"]
+
+    assert "beta updated" not in (tmp_path / "notes.txt").read_text(encoding="utf-8")
+
+    registry.execute("approve_pending_action", {"token": token})
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == updated
+
+
+def test_edit_file_rejects_invalid_diff_format(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.execute("write_file", {"path": "notes.txt", "content": "alpha\nbeta\n", "apply": True})
+
+    with pytest.raises(ValueError, match="SEARCH/REPLACE block or unified diff hunk"):
+        registry.execute("edit_file", {"path": "notes.txt", "diff": "@@ invalid @@"})
 
 
 def test_staged_shell_and_reject_flow(tmp_path: Path) -> None:
@@ -307,3 +341,12 @@ def test_execute_safe_rewind_uses_sdk_execute_and_returns_structured_details(mon
     assert result.details["restored_workspace"] is True
     assert result.details["target_head_id"] == "head-2"
     assert "Executed safe rewind" in result.content
+
+
+def test_registry_builtin_descriptions_include_mandatory_use_guidance(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    assert "must use this tool" in registry.get_spec("read_file").description.lower()
+    assert "must use this tool" in registry.get_spec("list_files").description.lower()
+    assert "must use this tool" in registry.get_spec("git_status").description.lower()
+    assert "do not invent command results" in registry.get_spec("run_shell").description.lower()

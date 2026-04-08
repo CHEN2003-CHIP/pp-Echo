@@ -14,6 +14,7 @@ SEARCH_BLOCK_RE = re.compile(
     r"<<<<<<< SEARCH\n(?P<old>.*?)\n=======\n(?P<new>.*?)\n>>>>>>> REPLACE",
     re.DOTALL,
 )
+UNIFIED_HUNK_RE = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@")
 
 
 class ReadFileTool(BaseTool):
@@ -57,7 +58,7 @@ class WriteFileTool(BaseTool):
 class EditFileTool(BaseTool):
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec(name="edit_file", description="Stage a safe diff-style edit using SEARCH/REPLACE blocks. Set apply=true to apply immediately.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "diff": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "apply": {"type": "boolean"}}, "required": ["path"]}, requires_confirmation=True)
+        return ToolSpec(name="edit_file", description="Stage a safe diff-style edit using SEARCH/REPLACE blocks or a unified diff. Set apply=true to apply immediately.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "diff": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "apply": {"type": "boolean"}}, "required": ["path"]}, requires_confirmation=True)
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         path = self.resolve_path(arguments["path"])
@@ -88,7 +89,7 @@ class EditFileTool(BaseTool):
         replacements = 0
         matches = list(SEARCH_BLOCK_RE.finditer(diff))
         if not matches:
-            raise ValueError("diff must contain at least one SEARCH/REPLACE block")
+            return EditFileTool._apply_unified_diff(content, diff)
         for match in matches:
             old = match.group("old")
             new = match.group("new")
@@ -96,6 +97,75 @@ class EditFileTool(BaseTool):
                 raise ValueError(f"SEARCH block was not found exactly in file: {old[:80]}")
             updated = updated.replace(old, new, 1)
             replacements += 1
+        return updated, replacements
+
+    @staticmethod
+    def _apply_unified_diff(content: str, diff: str) -> tuple[str, int]:
+        diff_lines = diff.splitlines()
+        original_lines = content.splitlines()
+        updated_lines: list[str] = []
+        cursor = 0
+        replacements = 0
+        line_index = 0
+        saw_hunk = False
+
+        while line_index < len(diff_lines):
+            line = diff_lines[line_index]
+            if line.startswith(("--- ", "+++ ", "diff --git ", "index ")):
+                line_index += 1
+                continue
+            hunk_match = UNIFIED_HUNK_RE.match(line)
+            if not hunk_match:
+                line_index += 1
+                continue
+
+            saw_hunk = True
+            old_start = int(hunk_match.group("old_start"))
+            updated_lines.extend(original_lines[cursor : old_start - 1])
+            cursor = old_start - 1
+            line_index += 1
+            changed = False
+
+            while line_index < len(diff_lines):
+                hunk_line = diff_lines[line_index]
+                if UNIFIED_HUNK_RE.match(hunk_line):
+                    break
+                if hunk_line == r"\ No newline at end of file":
+                    line_index += 1
+                    continue
+                if not hunk_line:
+                    prefix = " "
+                    text = ""
+                else:
+                    prefix = hunk_line[0]
+                    text = hunk_line[1:]
+                if prefix == " ":
+                    if cursor >= len(original_lines) or original_lines[cursor] != text:
+                        raise ValueError(f"Unified diff context did not match file near line {cursor + 1}")
+                    updated_lines.append(text)
+                    cursor += 1
+                elif prefix == "-":
+                    if cursor >= len(original_lines) or original_lines[cursor] != text:
+                        raise ValueError(f"Unified diff deletion did not match file near line {cursor + 1}")
+                    cursor += 1
+                    changed = True
+                elif prefix == "+":
+                    updated_lines.append(text)
+                    changed = True
+                else:
+                    raise ValueError(f"Unsupported unified diff line: {hunk_line}")
+                line_index += 1
+
+            if changed:
+                replacements += 1
+
+        if not saw_hunk:
+            raise ValueError("diff must contain at least one SEARCH/REPLACE block or unified diff hunk")
+
+        updated_lines.extend(original_lines[cursor:])
+        updated = "\n".join(updated_lines)
+        if content.endswith("\n"):
+            updated += "\n"
         return updated, replacements
 
 

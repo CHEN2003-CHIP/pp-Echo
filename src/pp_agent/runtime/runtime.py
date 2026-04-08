@@ -547,20 +547,25 @@ class AgentRuntime:
 
     @staticmethod
     def _tool_result_fallback(messages: list[ChatMessage]) -> str:
-        """从对话历史中提取最近的工具执行结果文本"""
-        tool_texts: list[str] = []
+        """仅从当前响应周期末尾连续的工具结果中提取回退文本。"""
+        trailing_tool_messages: list[ChatMessage] = []
         for message in reversed(messages):
             if message.role != "tool":
-                if tool_texts:
-                    break
-                continue
+                break
+            trailing_tool_messages.append(message)
+
+        if not trailing_tool_messages:
+            return ""
+
+        tool_texts: list[str] = []
+        for message in reversed(trailing_tool_messages):
             parts = [part.text.strip() for part in message.content if getattr(part, "text", "").strip()]
             text = "\n".join(parts).strip()
             if text:
                 tool_texts.append(text)
         if not tool_texts:
             return ""
-        return "\n\n".join(reversed(tool_texts))
+        return "\n\n".join(tool_texts)
 
     def _build_plan_steps(self, tool_calls: list[ToolCall]) -> list[PlanStep]:
         """??????????????ToolCall?? ? ??? Agent ??????????????PlanStep??"""

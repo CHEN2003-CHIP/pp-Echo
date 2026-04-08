@@ -263,7 +263,7 @@ class ToolRegistry:
     def _spec_read_file() -> ToolSpec:
         return ToolSpec(
             name="read_file",
-            description="Read the contents of a UTF-8 text file.",
+            description="Read the contents of a UTF-8 text file. You must use this tool when the user asks to read, open, show, or inspect a specific local file. Do not answer file contents from memory, prior context, or guesswork when you can read the file directly.",
             parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
         )
 
@@ -271,7 +271,7 @@ class ToolRegistry:
     def _spec_write_file() -> ToolSpec:
         return ToolSpec(
             name="write_file",
-            description="Stage a new file write by default. Set apply=true to write immediately after confirmation.",
+            description="Stage a new file write by default. Set apply=true to write immediately after confirmation. When the user explicitly asks to create a file, prefer this tool instead of only describing the intended file contents.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -289,7 +289,7 @@ class ToolRegistry:
     def _spec_edit_file() -> ToolSpec:
         return ToolSpec(
             name="edit_file",
-            description="Stage a safe diff-style edit using SEARCH/REPLACE blocks. Set apply=true to apply immediately.",
+            description="Stage a safe diff-style edit using SEARCH/REPLACE blocks or a unified diff. Set apply=true to apply immediately. When the user explicitly asks to change an existing file, prefer this tool instead of only describing the edit.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -342,7 +342,7 @@ class ToolRegistry:
     def _spec_list_files() -> ToolSpec:
         return ToolSpec(
             name="list_files",
-            description="List files and directories inside a path.",
+            description="List files and directories inside a path. You must use this tool when the user asks what files or folders exist in a local directory or what is inside a path. Do not summarize directory contents from memory or earlier turns when you can inspect the workspace directly.",
             parameters={"type": "object", "properties": {"path": {"type": "string"}}},
         )
 
@@ -350,7 +350,7 @@ class ToolRegistry:
     def _spec_search_text() -> ToolSpec:
         return ToolSpec(
             name="search_text",
-            description="Search for text inside files under the workspace.",
+            description="Search for text inside files under the workspace. Use this tool when the user asks to search for plain text, phrases, filenames in content, or broad workspace matches. Prefer a real search over guessing where text might appear.",
             parameters={
                 "type": "object",
                 "properties": {"query": {"type": "string"}, "path": {"type": "string"}},
@@ -362,7 +362,7 @@ class ToolRegistry:
     def _spec_grep_code() -> ToolSpec:
         return ToolSpec(
             name="grep_code",
-            description="Search code text under the workspace, optimized for coding tasks.",
+            description="Search code text under the workspace, optimized for coding tasks. Use this tool when the user asks to find code symbols, implementations, call sites, or where a code fragment lives. Prefer this over guessing code locations from memory.",
             parameters={
                 "type": "object",
                 "properties": {"query": {"type": "string"}, "path": {"type": "string"}},
@@ -374,7 +374,7 @@ class ToolRegistry:
     def _spec_git_status() -> ToolSpec:
         return ToolSpec(
             name="git_status",
-            description="Show git worktree status for the current workspace.",
+            description="Show git worktree status for the current workspace. You must use this tool when the user asks for current repository state, changed files, staged changes, or whether the worktree is clean.",
             parameters={"type": "object", "properties": {}},
         )
 
@@ -382,7 +382,7 @@ class ToolRegistry:
     def _spec_git_diff_worktree() -> ToolSpec:
         return ToolSpec(
             name="git_diff_worktree",
-            description="Show git diff for the current worktree or a single path.",
+            description="Show git diff for the current worktree or a single path. You must use this tool when the user asks what changed, asks to inspect a diff, or wants the modifications for a specific file.",
             parameters={"type": "object", "properties": {"path": {"type": "string"}}},
         )
 
@@ -390,7 +390,7 @@ class ToolRegistry:
     def _spec_run_shell() -> ToolSpec:
         return ToolSpec(
             name="run_shell",
-            description="Stage a PowerShell command for approval by default. Set apply=true to run immediately after confirmation.",
+            description="Stage a PowerShell command for approval by default. Set apply=true to run immediately after confirmation. You must use this tool when the user asks to run a local command, verify command output, or check the actual result of a script or interpreter. Do not invent command results.",
             parameters={
                 "type": "object",
                 "properties": {
