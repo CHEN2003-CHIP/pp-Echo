@@ -381,6 +381,7 @@ def test_agent_session_transform_context_mentions_queue_and_planner_state(tmp_pa
     agent.prompt("start here")
 
     assert "Queued steering count: 1" in llm.seen_system_messages[0]
+    assert f"Active session id: {agent.session_id}" in llm.seen_system_messages[0]
 
 
 def test_agent_session_planner_then_steering_then_follow_up_order(tmp_path: Path) -> None:

@@ -47,7 +47,7 @@ class ToolRegistry:
     【架构角色】工具层入口，隔离工具实现与调用方
     【安全策略】支持执行前确认、超时控制、动态开关
     """
-    def __init__(self, workspace: Path, policy: Optional[ToolPolicyConfig] = None) -> None:
+    def __init__(self, workspace: Path, policy: Optional[ToolPolicyConfig] = None, current_session_id: Optional[str] = None) -> None:
         """
         初始化工具注册中心
         :param workspace: 工作空间根目录（工具操作的安全边界）
@@ -55,6 +55,7 @@ class ToolRegistry:
         """
         self.workspace = workspace.resolve()
         self.policy = policy or ToolPolicyConfig()
+        self.current_session_id = current_session_id
         self._instances: dict[str, BaseTool] = {}
         self._confirmation_overrides = {
             "write_file": self.policy.confirm_write_file,
@@ -231,8 +232,8 @@ class ToolRegistry:
             self._registration("grep_code", self._spec_grep_code, lambda: GrepCodeTool(self.workspace)),
             self._registration("git_status", self._spec_git_status, lambda: GitStatusTool(self.workspace)),
             self._registration("git_diff_worktree", self._spec_git_diff_worktree, lambda: GitDiffWorktreeTool(self.workspace)),
-            self._registration("preview_safe_rewind", self._spec_preview_safe_rewind, lambda: PreviewSafeRewindTool(self.workspace)),
-            self._registration("execute_safe_rewind", self._spec_execute_safe_rewind, lambda: ExecuteSafeRewindTool(self.workspace)),
+            self._registration("preview_safe_rewind", self._spec_preview_safe_rewind, lambda: PreviewSafeRewindTool(self.workspace, current_session_id=self.current_session_id)),
+            self._registration("execute_safe_rewind", self._spec_execute_safe_rewind, lambda: ExecuteSafeRewindTool(self.workspace, current_session_id=self.current_session_id)),
             self._registration(
                 "run_shell",
                 self._spec_run_shell,
@@ -407,7 +408,7 @@ class ToolRegistry:
     def _spec_preview_safe_rewind() -> ToolSpec:
         return ToolSpec(
             name="preview_safe_rewind",
-            description="Preview a safe rewind for the conversation, workspace, or both without changing state.",
+            description="Preview a safe rewind for the conversation, workspace, or both without changing state. Use this tool when the user asks to undo recent workspace or session changes safely, and prefer preview before execute when the user wants to see what would be reverted. The session_id should be the real target session id, or 'current' for the active session; workspace_only fits file rollback, conversation_only fits branch rollback, and conversation_and_workspace fits both.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -429,7 +430,7 @@ class ToolRegistry:
     def _spec_execute_safe_rewind() -> ToolSpec:
         return ToolSpec(
             name="execute_safe_rewind",
-            description="Execute a safe rewind for the conversation, workspace, or both.",
+            description="Execute a safe rewind for the conversation, workspace, or both. Use this after preview_safe_rewind when the user confirms they want to revert recent changes safely. The session_id should be the real target session id, or 'current' for the active session; workspace_only fits file rollback, conversation_only fits branch rollback, and conversation_and_workspace fits both.",
             parameters={
                 "type": "object",
                 "properties": {

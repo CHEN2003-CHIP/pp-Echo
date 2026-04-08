@@ -1,5 +1,6 @@
 from pathlib import Path
 import difflib
+from types import SimpleNamespace
 
 import pytest
 
@@ -251,6 +252,11 @@ def test_unregistered_tool_behavior_matches_current_errors(tmp_path: Path) -> No
 def test_preview_safe_rewind_uses_sdk_preview_and_returns_structured_details(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        session_tools,
+        "_session_store_for",
+        lambda _workspace: SimpleNamespace(tree=lambda: [SimpleNamespace(id="session-1")]),
+    )
 
     def fake_preview_rewind(workspace, session_id, **kwargs):
         seen["workspace"] = workspace
@@ -296,6 +302,11 @@ def test_preview_safe_rewind_uses_sdk_preview_and_returns_structured_details(mon
 def test_execute_safe_rewind_uses_sdk_execute_and_returns_structured_details(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        session_tools,
+        "_session_store_for",
+        lambda _workspace: SimpleNamespace(tree=lambda: [SimpleNamespace(id="session-1")]),
+    )
 
     def fake_rewind_safe(workspace, session_id, **kwargs):
         seen["workspace"] = workspace
@@ -343,6 +354,120 @@ def test_execute_safe_rewind_uses_sdk_execute_and_returns_structured_details(mon
     assert "Executed safe rewind" in result.content
 
 
+def test_preview_safe_rewind_accepts_current_session_alias(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, current_session_id="session-active")
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(session_tools, "_session_store_for", lambda _workspace: SimpleNamespace(tree=lambda: []))
+
+    def fake_preview_rewind(workspace, session_id, **kwargs):
+        seen["workspace"] = workspace
+        seen["session_id"] = session_id
+        seen["kwargs"] = kwargs
+        return {
+            "mode": "workspace_only",
+            "checkpoint": {"checkpoint_id": "cp-1", "snapshot_type": "head_snapshot"},
+            "restore_preview": {"affected_files": []},
+            "source_session_id": session_id,
+            "target_head_id": "head-1",
+            "message_count": 1,
+            "turn_count": 1,
+            "warning_messages": [],
+        }
+
+    monkeypatch.setattr(session_tools, "_preview_rewind", fake_preview_rewind)
+
+    result = registry.execute("preview_safe_rewind", {"session_id": "current", "mode": "workspace_only"})
+
+    assert seen["workspace"] == tmp_path.resolve()
+    assert seen["session_id"] == "session-active"
+    assert result.details["session_id"] == "session-active"
+
+
+def test_preview_safe_rewind_accepts_unique_session_prefix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    monkeypatch.setattr(
+        session_tools,
+        "_session_store_for",
+        lambda _workspace: SimpleNamespace(
+            tree=lambda: [SimpleNamespace(id="session-1234"), SimpleNamespace(id="other-9999")]
+        ),
+    )
+    seen: dict[str, object] = {}
+
+    def fake_preview_rewind(workspace, session_id, **kwargs):
+        seen["session_id"] = session_id
+        return {
+            "mode": "workspace_only",
+            "checkpoint": {"checkpoint_id": "cp-1", "snapshot_type": "head_snapshot"},
+            "restore_preview": {"affected_files": []},
+            "source_session_id": session_id,
+            "target_head_id": "head-1",
+            "message_count": 1,
+            "turn_count": 1,
+            "warning_messages": [],
+        }
+
+    monkeypatch.setattr(session_tools, "_preview_rewind", fake_preview_rewind)
+
+    registry.execute("preview_safe_rewind", {"session_id": "session-12", "mode": "workspace_only"})
+
+    assert seen["session_id"] == "session-1234"
+
+
+def test_execute_safe_rewind_accepts_current_session_alias(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, current_session_id="session-active")
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(session_tools, "_session_store_for", lambda _workspace: SimpleNamespace(tree=lambda: []))
+
+    def fake_execute_rewind(workspace, session_id, **kwargs):
+        seen["workspace"] = workspace
+        seen["session_id"] = session_id
+        return {
+            "mode": "workspace_only",
+            "checkpoint_id": "cp-2",
+            "snapshot_type": "head_snapshot",
+            "source_session_id": session_id,
+            "session_id": session_id,
+            "active_head_id": "head-2",
+            "restored_workspace": True,
+            "restored_conversation": False,
+            "warning_messages": [],
+        }
+
+    monkeypatch.setattr(session_tools, "_execute_rewind", fake_execute_rewind)
+
+    result = registry.execute("execute_safe_rewind", {"session_id": "current", "mode": "workspace_only"})
+
+    assert seen["workspace"] == tmp_path.resolve()
+    assert seen["session_id"] == "session-active"
+    assert result.details["session_id"] == "session-active"
+
+
+def test_preview_safe_rewind_reports_friendly_session_reference_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, current_session_id="session-active")
+    monkeypatch.setattr(
+        session_tools,
+        "_session_store_for",
+        lambda _workspace: SimpleNamespace(
+            tree=lambda: [SimpleNamespace(id="session-1234"), SimpleNamespace(id="session-5678")]
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Unknown session reference 'missing'"):
+        registry.execute("preview_safe_rewind", {"session_id": "missing", "mode": "workspace_only"})
+
+    with pytest.raises(ValueError, match="active session id session-active"):
+        registry.execute("preview_safe_rewind", {"session_id": "missing", "mode": "workspace_only"})
+
+    with pytest.raises(ValueError, match="Session prefix is ambiguous: session-"):
+        registry.execute("preview_safe_rewind", {"session_id": "session-", "mode": "workspace_only"})
+
+    with pytest.raises(ValueError, match="does not accept session@turn references"):
+        registry.execute("preview_safe_rewind", {"session_id": "session-1234@turn-1", "mode": "workspace_only"})
+
+
 def test_registry_builtin_descriptions_include_mandatory_use_guidance(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
 
@@ -350,3 +475,6 @@ def test_registry_builtin_descriptions_include_mandatory_use_guidance(tmp_path: 
     assert "must use this tool" in registry.get_spec("list_files").description.lower()
     assert "must use this tool" in registry.get_spec("git_status").description.lower()
     assert "do not invent command results" in registry.get_spec("run_shell").description.lower()
+    assert "'current'" in registry.get_spec("preview_safe_rewind").description
+    assert "prefer preview before execute" in registry.get_spec("preview_safe_rewind").description.lower()
+    assert "'current'" in registry.get_spec("execute_safe_rewind").description

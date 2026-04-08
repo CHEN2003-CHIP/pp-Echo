@@ -882,6 +882,7 @@ class AgentRuntime:
         # 3. 有跟进消息 → 提醒AI：这是后续请求，先做完当前工作
         if follow_up_count:
             notes.append(f"Queued follow-up count: {follow_up_count}. Treat them as later requests after the current work is complete.")
+        notes.append(f"Active session id: {self.session_id}. Use this exact id for session-scoped tools; safe rewind also accepts 'current'.")
         if not notes:
             return messages
         directive = ChatMessage(

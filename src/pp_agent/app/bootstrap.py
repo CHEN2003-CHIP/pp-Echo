@@ -607,7 +607,7 @@ def create_runtime_from_record(
     """
     settings = load_settings(workspace)
     session_store = session_store_for(workspace)
-    tool_registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    tool_registry = ToolRegistry(workspace, policy=settings.tool_policy, current_session_id=record.id)
     runtime_hooks = RuntimeHooks()
     agent = AgentRuntime(
         llm_client=create_llm_client(
