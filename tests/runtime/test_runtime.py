@@ -22,7 +22,7 @@ class FakeLLMClient:
         if self.calls == 1:
             yield {
                 "text": "",
-                "tool_calls": [{"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi","apply":true}'}],
+                "tool_calls": [{"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi"}'}],
                 "finish_reason": "tool_calls",
                 "raw": {},
             }
@@ -83,7 +83,7 @@ class ToolThenRecordLLMClient:
         if self.calls == 1:
             yield {
                 "text": "",
-                "tool_calls": [{"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi","apply":true}'}],
+                "tool_calls": [{"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi"}'}],
                 "finish_reason": "tool_calls",
                 "raw": {},
             }
@@ -117,7 +117,23 @@ class FailingToolLLMClient:
     def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
         yield {
             "text": "",
-            "tool_calls": [{"id": "call-1", "name": "edit_file", "arguments_chunk": '{"path":"missing.txt","diff":"<<<<<<< SEARCH\\nold\\n=======\\nnew\\n>>>>>>> REPLACE","apply":true}'}],
+            "tool_calls": [{"id": "call-1", "name": "edit_file", "arguments_chunk": '{"path":"missing.txt","diff":"<<<<<<< SEARCH\\nold\\n=======\\nnew\\n>>>>>>> REPLACE"}'}],
+            "finish_reason": "tool_calls",
+            "raw": {},
+        }
+
+
+class SelfApproveLLMClient:
+    def __init__(self) -> None:
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        yield {
+            "text": "",
+            "tool_calls": [
+                {"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi"}'},
+                {"id": "call-2", "name": "approve_pending_action", "arguments_chunk": '{"token":"fake-token"}'},
+            ],
             "finish_reason": "tool_calls",
             "raw": {},
         }
@@ -165,13 +181,48 @@ def test_agent_session_executes_pending_plan_after_approval(tmp_path: Path) -> N
     events = agent.approve_pending_plan(token)
 
     assert any(event.type == "tool_start" for event in events)
-    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hi"
+    assert (tmp_path / "a.txt").exists() is False
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert any(item["action_type"] == "write_file" and item["target_path"].endswith("a.txt") for item in pending)
+    assert any(item["action_type"] == "write_file" and item.get("approval_grant") is None for item in pending)
     assert agent.state.pending_plan_token is None
     assert agent.state.pending_tool_calls == []
 
 
-def test_agent_session_emits_planner_events_before_tool_execution(tmp_path: Path) -> None:
+def test_agent_runtime_rejects_sensitive_tool_without_host_approval(tmp_path: Path) -> None:
     agent = build_agent(tmp_path, FakeLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("create a file")
+
+    assert any(event.type == "tool_error" and "host-side approval" in (event.message or "") for event in events)
+    assert (tmp_path / "a.txt").exists() is False
+
+
+def test_runtime_policy_details_include_shared_analysis_fields(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, FakeLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("create a file")
+    tool_error = next(event for event in events if event.type == "tool_error" and event.tool_name == "write_file")
+
+    assert tool_error.details["family"] == "file"
+    assert tool_error.details["risk_class"] == "workspace_mutation"
+    assert tool_error.details["confidence_band"] == "high"
+
+
+def test_agent_cannot_self_approve_sensitive_mutation(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, SelfApproveLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("create and approve a file")
+
+    assert any(event.type == "tool_error" and event.tool_name == "write_file" for event in events)
+    assert any(event.type == "tool_error" and event.tool_name == "approve_pending_action" for event in events)
+    assert (tmp_path / "a.txt").exists() is False
+
+
+def test_agent_session_emits_planner_events_before_tool_execution(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "demo.txt").write_text("hello", encoding="utf-8")
+    agent = build_agent(tmp_path, ToolThenEmptyLLMClient(), require_plan_approval=False)
 
     events = agent.prompt("create a file")
     event_types = [event.type for event in events]
@@ -308,36 +359,37 @@ def test_agent_session_applies_transform_context_hook(tmp_path: Path) -> None:
 
 def test_agent_session_before_tool_hook_can_reject_tool(tmp_path: Path) -> None:
     def reject_write(_state, call, _registry):
-        if call.name == "write_file":
+        if call.name == "list_files":
             return BeforeToolCallDecision(action="reject", message="blocked by test hook")
         return BeforeToolCallDecision(action="allow")
 
     agent = build_agent(
         tmp_path,
-        FakeLLMClient(),
+        ToolThenEmptyLLMClient(),
         require_plan_approval=False,
     )
     agent.runtime_hooks = RuntimeHooks(before_tool_call=[reject_write])
 
-    events = agent.prompt("create a file")
+    events = agent.prompt("show me src")
 
     assert any(event.type == "tool_end" and event.is_error and event.message == "blocked by test hook" for event in events)
-    assert (tmp_path / "a.txt").exists() is False
 
 
 def test_agent_session_after_tool_hook_can_stop_follow_up_loop(tmp_path: Path) -> None:
     def stop_after_write(_state, call, _result):
-        if call.name == "write_file":
+        if call.name == "list_files":
             return AfterToolCallDecision(continue_loop=False, details={"stopped_by": "test_hook"})
         return AfterToolCallDecision(continue_loop=True)
 
-    agent = build_agent(tmp_path, FakeLLMClient(), require_plan_approval=False)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "demo.txt").write_text("hello", encoding="utf-8")
+    agent = build_agent(tmp_path, ToolThenEmptyLLMClient(), require_plan_approval=False)
     agent.runtime_hooks = RuntimeHooks(after_tool_call=[stop_after_write])
 
-    events = agent.prompt("create a file")
+    events = agent.prompt("show me src")
 
     assert any(event.type == "tool_end" and event.details.get("stopped_by") == "test_hook" for event in events)
-    assert not any(event.type == "message_delta" and event.delta == "done" for event in events)
+    assert not any(event.type == "error" for event in events)
 
 
 def test_agent_session_processes_queued_messages_with_steering_priority(tmp_path: Path) -> None:

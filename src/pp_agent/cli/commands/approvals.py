@@ -32,7 +32,7 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
             "result": "approved_and_executed",
         }
     registry = create_tool_registry(workspace)
-    result = registry.execute("approve_pending_action", {"token": token})
+    result = registry.host_execute("approve_pending_action", {"token": token})
     if render:
         console.print(result.content)
         if result.details:
@@ -53,7 +53,7 @@ def reject_pending_action(workspace: Path, token: str, render: bool = True) -> d
             console.print(message)
         return {"token": token, "action_type": payload["action_type"], "result": message}
     registry = create_tool_registry(workspace)
-    result = registry.execute("reject_pending_action", {"token": token})
+    result = registry.host_execute("reject_pending_action", {"token": token})
     if render:
         console.print(result.content)
     return {"token": token, "action_type": payload["action_type"], "result": result.content}
@@ -70,7 +70,7 @@ def approvals_summary_main(workspace: Path) -> None:
 
 def approvals_show_main(workspace: Path, token: str) -> None:
     registry = create_tool_registry(workspace)
-    result = registry.execute("preview_pending_action", {"token": token})
+    result = registry.host_execute("preview_pending_action", {"token": token})
     console.print(f"Token: {token}")
     console.print(result.content)
     console.print(json.dumps(result.details, ensure_ascii=False, indent=2))

@@ -98,7 +98,8 @@ def register(api):
     )
 
     assert spec.description == "Echo from extension"
-    assert result.content == f"{tmp_path.name}:hi"
+    assert result.is_error is True
+    assert result.details["approval_unavailable"] is True
     assert loaded.registry.get("demo").status == "loaded"
     assert loaded.registry.get("demo").loaded_commands == ["hello"]
     assert loaded.commands.list_names() == ["hello"]
@@ -166,7 +167,8 @@ def test_mcp_adapter_registers_runtime_tools_when_enabled(tmp_path: Path, monkey
         }
     ]
     assert spec.description == "Echo tool"
-    assert result.content == "echo:hello"
+    assert result.is_error is True
+    assert result.details["approval_unavailable"] is True
     assert loaded.registry.get("mcp_adapter").status == "loaded"
     assert loaded.registry.get("mcp_adapter").loaded_tools == ["demo.echo"]
     assert "demo.notes" in loaded.registry.get("mcp_adapter").loaded_resources
@@ -208,7 +210,9 @@ def register(api):
 
     assert handle_command(agent, "/hello first", tmp_path) == "handled"
     assert agent.handled_value == "v1:first"
-    assert tool_registry.execute("demo_echo", {"message": "hi"}).content == "v1:hi"
+    first = tool_registry.execute("demo_echo", {"message": "hi"})
+    assert first.is_error is True
+    assert first.details["approval_unavailable"] is True
 
     _write_extension(
         extension_dir,
@@ -231,7 +235,9 @@ def register(api):
     assert marker.read_text(encoding="utf-8") == "v1\n"
     assert handle_command(agent, "/hello second", tmp_path) == "handled"
     assert agent.handled_value == "v2:second"
-    assert tool_registry.execute("demo_echo", {"message": "hi"}).content == "v2:hi"
+    second = tool_registry.execute("demo_echo", {"message": "hi"})
+    assert second.is_error is True
+    assert second.details["approval_unavailable"] is True
 
     payload = reload_runtime_extensions(agent, tmp_path)
     assert payload["extension_count"] == 1
@@ -343,3 +349,7 @@ def register(api):
     assert "ext_a" not in agent.skill_runtime.available_skills()
     assert binding is not None
     assert binding.resource_roots["skill_paths"] == [str(skill_root_b.resolve())]
+
+
+
+

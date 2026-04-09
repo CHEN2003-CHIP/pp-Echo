@@ -5,6 +5,18 @@ from types import SimpleNamespace
 import pytest
 
 from pp_agent.domain import ToolCall
+from pp_agent.extensions.api import ExtensionAPI
+from pp_agent.extensions.descriptor import ExtensionDescriptor
+from pp_agent.cli.commands.capabilities import capabilities_legacy_hints_main
+from pp_agent.tools.effects import analyze_file_call, analyze_mcp_call, build_shell_effect
+from pp_agent.tools.legacy_hints_readiness import (
+    REMOVAL_READINESS_CRITERIA,
+    build_legacy_hint_readiness_report,
+    render_legacy_hint_readiness_text,
+)
+from pp_agent.tools.metadata import (
+    ToolMetadata,
+)
 from pp_agent.tools import session_tools
 from storage.settings import ToolPolicyConfig
 from tools.pending_actions import PendingActionStore
@@ -17,10 +29,10 @@ def test_staged_edit_flow(tmp_path: Path) -> None:
     token = staged_write.details["token"]
     assert (tmp_path / "notes.txt").exists() is False
 
-    preview = registry.execute("preview_pending_action", {"token": token})
+    preview = registry.host_execute("preview_pending_action", {"token": token})
     assert "alpha" in preview.content
 
-    registry.execute("approve_pending_action", {"token": token})
+    registry.host_execute("approve_pending_action", {"token": token})
     read = registry.execute("read_file", {"path": "notes.txt"})
     assert "alpha" in read.content
 
@@ -29,38 +41,41 @@ def test_staged_edit_flow(tmp_path: Path) -> None:
     edit_token = staged_edit.details["token"]
     assert "gamma" not in (tmp_path / "notes.txt").read_text(encoding="utf-8")
 
-    registry.execute("approve_pending_action", {"token": edit_token})
+    registry.host_execute("approve_pending_action", {"token": edit_token})
     search = registry.execute("search_text", {"query": "gamma"})
     assert "notes.txt" in search.content
 
 
 def test_write_file_requires_explicit_overwrite(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
-    registry.execute("write_file", {"path": "notes.txt", "content": "alpha", "apply": True})
+    first = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    registry.host_execute("approve_pending_action", {"token": first.details["token"]})
 
     with pytest.raises(ValueError):
-        registry.execute("write_file", {"path": "notes.txt", "content": "beta", "apply": True})
+        registry.execute("write_file", {"path": "notes.txt", "content": "beta"})
 
-    overwrite = registry.execute("write_file", {"path": "notes.txt", "content": "beta", "overwrite": True, "apply": True})
+    overwrite = registry.execute("write_file", {"path": "notes.txt", "content": "beta", "overwrite": True})
     assert overwrite.details["diff"]
 
 
 def test_pending_edit_conflict_is_detected(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
-    registry.execute("write_file", {"path": "notes.txt", "content": "alpha", "apply": True})
+    staged_write = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    registry.host_execute("approve_pending_action", {"token": staged_write.details["token"]})
     staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
     token = staged.details["token"]
     (tmp_path / "notes.txt").write_text("changed elsewhere", encoding="utf-8")
 
     with pytest.raises(ValueError):
-        registry.execute("approve_pending_action", {"token": token})
+        registry.host_execute("approve_pending_action", {"token": token})
 
 
 def test_edit_file_accepts_unified_diff(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     original = "alpha\nbeta\ngamma\n"
     updated = "alpha\nbeta updated\ngamma\ndelta\n"
-    registry.execute("write_file", {"path": "notes.txt", "content": original, "apply": True})
+    staged_write = registry.execute("write_file", {"path": "notes.txt", "content": original})
+    registry.host_execute("approve_pending_action", {"token": staged_write.details["token"]})
     diff = "\n".join(
         difflib.unified_diff(
             original.splitlines(),
@@ -76,14 +91,15 @@ def test_edit_file_accepts_unified_diff(tmp_path: Path) -> None:
 
     assert "beta updated" not in (tmp_path / "notes.txt").read_text(encoding="utf-8")
 
-    registry.execute("approve_pending_action", {"token": token})
+    registry.host_execute("approve_pending_action", {"token": token})
 
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == updated
 
 
 def test_edit_file_rejects_invalid_diff_format(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
-    registry.execute("write_file", {"path": "notes.txt", "content": "alpha\nbeta\n", "apply": True})
+    staged_write = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\nbeta\n"})
+    registry.host_execute("approve_pending_action", {"token": staged_write.details["token"]})
 
     with pytest.raises(ValueError, match="SEARCH/REPLACE block or unified diff hunk"):
         registry.execute("edit_file", {"path": "notes.txt", "diff": "@@ invalid @@"})
@@ -93,14 +109,20 @@ def test_staged_shell_and_reject_flow(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     staged = registry.execute("run_shell", {"command": "Write-Output hello"})
     token = staged.details["token"]
+    assert staged.details["effect"]["payload_digest"]
 
-    pending = registry.execute("list_pending_actions", {})
+    pending = registry.host_execute("list_pending_actions", {})
     assert token in pending.content
+    assert "staged_not_granted" in pending.content
 
-    preview = registry.execute("preview_pending_action", {"token": token})
+    preview = registry.host_execute("preview_pending_action", {"token": token})
     assert "Write-Output hello" in preview.content
+    assert "Risk class:" in preview.content
+    assert "Confidence:" in preview.content
+    assert "Lifecycle state:" in preview.content
+    assert "Grant status:" in preview.content
 
-    rejected = registry.execute("reject_pending_action", {"token": token})
+    rejected = registry.host_execute("reject_pending_action", {"token": token})
     assert token in rejected.content
 
 
@@ -115,7 +137,7 @@ def test_preview_pending_planner_approval(tmp_path: Path) -> None:
     )
     registry = ToolRegistry(tmp_path)
 
-    preview = registry.execute("preview_pending_action", {"token": staged["token"]})
+    preview = registry.host_execute("preview_pending_action", {"token": staged["token"]})
 
     assert "write_file" in preview.content
     assert "approve_pending_action" in preview.content
@@ -152,6 +174,8 @@ def test_confirmation_policy_is_applied(tmp_path: Path) -> None:
     assert registry.get_spec("approve_pending_action").requires_confirmation is True
     assert registry.get_spec("preview_safe_rewind").requires_confirmation is False
     assert registry.get_spec("execute_safe_rewind").requires_confirmation is True
+    assert registry.get_spec("write_file").permission_domain == "edit"
+    assert registry.get_spec("run_shell").permission_domain == "bash"
 
 
 def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> None:
@@ -183,11 +207,24 @@ def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> Non
         "execute_safe_rewind",
         "run_shell",
     ]
+    expected_model_order = [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files",
+        "search_text",
+        "grep_code",
+        "git_status",
+        "git_diff_worktree",
+        "preview_safe_rewind",
+        "execute_safe_rewind",
+        "run_shell",
+    ]
 
     assert registry._instances == {}
     assert registry.get_spec("read_file").name == "read_file"
     assert list(registry.metadata()) == expected_order
-    assert [item["function"]["name"] for item in registry.openapi_specs()] == expected_order
+    assert [item["function"]["name"] for item in registry.openapi_specs()] == expected_model_order
     assert calls == 0
     assert registry._instances == {}
 
@@ -478,3 +515,1119 @@ def test_registry_builtin_descriptions_include_mandatory_use_guidance(tmp_path: 
     assert "'current'" in registry.get_spec("preview_safe_rewind").description
     assert "prefer preview before execute" in registry.get_spec("preview_safe_rewind").description.lower()
     assert "'current'" in registry.get_spec("execute_safe_rewind").description
+
+
+@pytest.mark.parametrize("path", [".env", ".env.local", ".pp-agent/config.json", ".git/config", "secret.pem", "secret.key"])
+def test_protected_paths_are_denied_for_read_and_write(tmp_path: Path, path: str) -> None:
+    registry = ToolRegistry(tmp_path)
+    protected = tmp_path / path
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    protected.write_text("secret", encoding="utf-8")
+
+    with pytest.raises(PermissionError):
+        registry.execute("read_file", {"path": path})
+
+    with pytest.raises(PermissionError):
+        registry.execute("write_file", {"path": path, "content": "nope"})
+
+
+def test_normal_workspace_edit_stages_instead_of_direct_apply(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha", "apply": True})
+
+    assert staged.details["staged"] is True
+    assert (tmp_path / "notes.txt").exists() is False
+
+
+def test_host_only_approval_tools_are_hidden_from_model_calls(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    model_tools = [item["function"]["name"] for item in registry.openapi_specs()]
+
+    assert "approve_pending_action" not in model_tools
+    assert "reject_pending_action" not in model_tools
+    assert "preview_pending_action" not in model_tools
+    assert "list_pending_actions" not in model_tools
+
+    with pytest.raises(PermissionError, match="host-only"):
+        registry.execute("approve_pending_action", {"token": "tok-1"})
+
+
+def test_approved_effect_executes_with_digest_bound_grant(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    token = staged.details["token"]
+
+    result = registry.host_execute("approve_pending_action", {"token": token})
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha"
+    assert result.details["effect"]["payload_digest"] == staged.details["effect"]["payload_digest"]
+    assert result.details["approval_grant"]["status"] == "consumed"
+    assert result.details["lifecycle"]["state"] == "grant_consumed"
+    assert result.details["latest_audit"]["lifecycle_state"] == "grant_consumed"
+
+
+def test_staged_effect_starts_with_explicit_lifecycle_state(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    payload = store.load(staged.details["token"])
+
+    assert payload["lifecycle"]["state"] == "staged_not_granted"
+    assert payload["approval_grant"] is None
+
+
+def test_attach_approval_grant_moves_pending_action_to_grant_attached(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    payload = store.attach_approval_grant(staged.details["token"])
+
+    assert payload["approval_grant"]["status"] == "active"
+    assert payload["lifecycle"]["state"] == "grant_attached"
+
+
+def test_modified_file_effect_is_rejected_after_prior_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    token = staged.details["token"]
+    payload = store.attach_approval_grant(token)
+    payload["after"] = "beta"
+    payload["details"]["diff"] = "tampered"
+    store.save(token, payload)
+
+    with pytest.raises(ValueError, match="payload digest changed"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    updated = store.load(token)
+    assert updated["lifecycle"]["state"] == "grant_invalidated"
+    assert updated["approval_grant"]["status"] == "invalidated"
+    assert updated["latest_audit"]["lifecycle_state"] == "grant_invalidated"
+
+
+def test_file_baseline_distinguishes_absent_to_present(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    token = staged.details["token"]
+    store.attach_approval_grant(token)
+    (tmp_path / "notes.txt").write_text("appeared later", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="absent to present"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    updated = store.load(token)
+    assert updated["lifecycle"]["state"] == "grant_invalidated"
+
+
+def test_file_baseline_distinguishes_present_to_absent(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    token = staged.details["token"]
+    store.attach_approval_grant(token)
+    (tmp_path / "notes.txt").unlink()
+
+    with pytest.raises(ValueError, match="present to absent"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    updated = store.load(token)
+    assert updated["lifecycle"]["state"] == "grant_invalidated"
+
+
+def test_modified_shell_effect_is_rejected_after_prior_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("run_shell", {"command": "Write-Output hello", "timeout_seconds": 5})
+    token = staged.details["token"]
+    payload = store.attach_approval_grant(token)
+    payload["command"] = "Write-Output goodbye"
+    store.save(token, payload)
+
+    with pytest.raises(ValueError, match="payload digest changed"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    updated = store.load(token)
+    assert updated["lifecycle"]["state"] == "grant_invalidated"
+    assert updated["approval_grant"]["status"] == "invalidated"
+
+    with pytest.raises(ValueError, match="grant_invalidated"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+
+def test_shell_executor_failure_is_recorded_separately_from_invalidation(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("run_shell", {"command": "Write-Error boom; exit 1", "timeout_seconds": 5})
+    token = staged.details["token"]
+
+    result = registry.host_execute("approve_pending_action", {"token": token})
+
+    assert result.is_error is True
+    assert result.details["failure_kind"] == "execution_failed"
+    assert result.details["lifecycle"]["state"] == "execution_failed"
+    assert result.details["approval_grant"]["status"] == "active"
+    payload = store.load(token)
+    assert payload["lifecycle"]["state"] == "execution_failed"
+    assert payload["latest_audit"]["failure_reason_code"] == "executor_error"
+    preview = registry.host_execute("preview_pending_action", {"token": token})
+    assert "Lifecycle state: execution_failed" in preview.content
+    assert "Failure reason code: executor_error" in preview.content
+
+
+def test_execution_failed_dynamic_effect_can_retry_same_token_after_revalidation(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    attempts = {"count": 0}
+
+    def executor(workspace, arguments):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("boom once")
+        return f"ok:{arguments.get('query', '')}"
+
+    registry.register_function_tool(
+        name="demo_retry_extension",
+        description="Inspect extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=executor,
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    staged = registry.execute("demo_retry_extension", {"query": "status"})
+    token = staged.details["token"]
+
+    failed = registry.host_execute("approve_pending_action", {"token": token})
+    assert failed.is_error is True
+    assert failed.details["lifecycle"]["state"] == "execution_failed"
+    assert failed.details["approval_grant"]["status"] == "active"
+    assert store.load(token)["lifecycle"]["state"] == "execution_failed"
+
+    retried = registry.host_execute("approve_pending_action", {"token": token})
+    assert retried.is_error is False
+    assert retried.content == "ok:status"
+    assert retried.details["lifecycle"]["state"] == "grant_consumed"
+    with pytest.raises(FileNotFoundError):
+        store.load(token)
+
+
+def test_shell_normalization_equivalent_commands_keep_same_digest() -> None:
+    first = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="pytest   -q",
+        timeout_seconds=30,
+    )
+    second = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="  pytest -q  ",
+        timeout_seconds=30,
+    )
+
+    assert first["payload_digest"] == second["payload_digest"]
+    assert first["summary"] == second["summary"]
+    assert first["analysis"]["risk_class"] == second["analysis"]["risk_class"]
+    assert first["analysis"]["confidence_band"] == second["analysis"]["confidence_band"]
+
+
+def test_shell_material_change_changes_digest() -> None:
+    first = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="pytest -q",
+        timeout_seconds=30,
+    )
+    second = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="pytest -q ; echo done",
+        timeout_seconds=30,
+    )
+
+    assert first["payload_digest"] != second["payload_digest"]
+    assert first["summary"] != second["summary"]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_summary"),
+    [
+        ("git status", "Inspect repository status with git status"),
+        ("git diff", "Inspect repository changes with git diff"),
+        ("rg TODO src", "Inspect files with rg TODO src"),
+        ("grep TODO src/app.py", "Inspect files with grep TODO src/app.py"),
+        ("ls src", "Inspect workspace with ls src"),
+        ("dir src", "Inspect workspace with dir src"),
+    ],
+)
+def test_shell_inspect_commands_classify_as_inspect(command: str, expected_summary: str) -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command=command,
+        timeout_seconds=30,
+    )
+
+    assert effect["analysis"]["risk_class"] == "inspect"
+    assert effect["summary"] == expected_summary
+
+
+def test_pytest_classifies_as_workspace_mutation() -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="pytest -q",
+        timeout_seconds=30,
+    )
+
+    assert effect["analysis"]["risk_class"] == "workspace_mutation"
+    assert "test_runner" in effect["analysis"]["flags"]
+    assert effect["summary"] == "Run tests with pytest -q"
+
+
+@pytest.mark.parametrize("command", ["curl https://example.com", "Invoke-WebRequest https://example.com"])
+def test_network_fetching_commands_classify_as_networked(command: str) -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command=command,
+        timeout_seconds=30,
+    )
+
+    assert effect["analysis"]["risk_class"] == "networked"
+    assert effect["analysis"]["requests_network"] is True
+
+
+@pytest.mark.parametrize("command", ["rm -rf build", "Remove-Item -Recurse dist"])
+def test_delete_commands_classify_as_destructive(command: str) -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command=command,
+        timeout_seconds=30,
+    )
+
+    assert effect["analysis"]["risk_class"] == "destructive"
+    assert effect["analysis"]["destructive_hint"] is True
+    assert effect["summary"].startswith("Delete files with ")
+
+
+def test_commands_touching_outside_workspace_classify_as_external_mutation(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-target"
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command=f"Remove-Item -Recurse {outside}",
+        timeout_seconds=30,
+        workspace=tmp_path,
+    )
+
+    assert effect["analysis"]["risk_class"] == "external_mutation"
+    assert effect["analysis"]["touches_external"] is True
+
+
+def test_shell_preview_shows_stable_summary_and_risk_flags(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("run_shell", {"command": "curl https://example.com", "timeout_seconds": 10})
+
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+
+    assert "Summary: Fetch remote content with curl" in preview.content
+    assert "Risk class: networked" in preview.content
+    assert "Requests network: True" in preview.content
+    assert "Confidence:" in preview.content
+    assert staged.details["effect"]["payload_digest"] in preview.content
+
+
+def test_known_safe_shell_inspect_subset_is_allowed_by_policy(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    decision = registry.evaluate_call("run_shell", {"command": "git status"})
+
+    assert decision.action == "allow"
+    assert decision.details["risk_class"] == "inspect"
+    assert decision.details["confidence_band"] == "high"
+    assert decision.details["known_safe_inspect"] is True
+
+
+def test_shell_inspect_outside_known_safe_subset_stays_ask(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    decision = registry.evaluate_call("run_shell", {"command": "git log"})
+
+    assert decision.action == "ask"
+    assert decision.details["risk_class"] == "inspect"
+    assert "Inspect shell command" in decision.reason
+    assert decision.details["known_safe_inspect"] is False
+
+
+def test_file_shared_analysis_records_are_stable(tmp_path: Path) -> None:
+    target = tmp_path / "src" / "app.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("print('hi')\n", encoding="utf-8")
+
+    read_analysis = analyze_file_call(workspace=tmp_path, tool_name="read_file", permission_domain="read", target_path=target)
+    edit_analysis = analyze_file_call(workspace=tmp_path, tool_name="edit_file", permission_domain="edit", target_path=target)
+
+    assert read_analysis["family"] == "file"
+    assert read_analysis["risk_class"] == "inspect"
+    assert read_analysis["summary"] == "Read file src/app.py"
+    assert read_analysis["confidence_band"] == "high"
+    assert edit_analysis["summary"] == "Edit file src/app.py"
+    assert edit_analysis["risk_class"] == "workspace_mutation"
+
+
+@pytest.mark.parametrize("path", [".env", ".env.local", ".pp-agent/config.json", ".git/config", "secret.pem", "secret.key"])
+def test_file_analysis_surfaces_protected_path_hint(tmp_path: Path, path: str) -> None:
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    analysis = analyze_file_call(workspace=tmp_path, tool_name="read_file", permission_domain="read", target_path=target)
+
+    assert analysis["protected_path_hint"] is True
+
+
+def test_mcp_analysis_defaults_fail_closed() -> None:
+    analysis = analyze_mcp_call(tool_name="demo.echo", permission_domain="read", description="Echo tool")
+
+    assert analysis["family"] == "mcp"
+    assert analysis["risk_class"] == "unknown"
+    assert analysis["confidence_band"] in {"unknown", "low"}
+
+
+def test_low_confidence_analysis_never_escalates_to_allow(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="demo_echo",
+        description="Echo from extension",
+        parameters={"type": "object", "properties": {"message": {"type": "string"}}},
+        executor=lambda workspace, arguments: f"{workspace.name}:{arguments.get('message', '')}",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+    )
+
+    decision = registry.evaluate_call("demo_echo", {"message": "hi"})
+
+    assert decision.action == "ask"
+    assert decision.details["family"] == "extension"
+    assert decision.details["confidence_band"] in {"unknown", "low"}
+
+
+def test_mcp_fetch_like_tool_fails_closed_to_ask(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="fetch.readable",
+        description="Fetch webpage content from a URL",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        executor=lambda workspace, arguments: arguments.get("url", ""),
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        requests_network_hint=True,
+    )
+
+    decision = registry.evaluate_call("fetch.readable", {"url": "https://example.com"})
+
+    assert decision.action == "ask"
+    assert decision.details["family"] == "mcp"
+    assert decision.details["requests_network"] is True
+
+
+def test_invalid_exact_effect_mode_is_rejected(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(ValueError, match="exact_effect_mode"):
+        registry.register_function_tool(
+            name="demo_invalid_mode",
+            description="Invalid mode",
+            parameters={"type": "object", "properties": {}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            exact_effect_mode="supported",
+        )
+
+
+def test_known_safe_inspect_requires_non_side_effectful_declaration(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(ValueError, match="non_side_effectful"):
+        registry.register_function_tool(
+            name="demo_invalid_safe",
+            description="Invalid safe inspect",
+            parameters={"type": "object", "properties": {}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            known_safe_inspect=True,
+        )
+
+
+def test_known_safe_inspect_cannot_be_declared_with_network_or_external_hints(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(ValueError, match="requests_network_hint"):
+        registry.register_function_tool(
+            name="demo_invalid_network_safe",
+            description="Invalid safe inspect",
+            parameters={"type": "object", "properties": {}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            non_side_effectful=True,
+            known_safe_inspect=True,
+            requests_network_hint=True,
+        )
+
+    with pytest.raises(ValueError, match="touches_external_hint"):
+        registry.register_function_tool(
+            name="demo_invalid_external_safe",
+            description="Invalid safe inspect",
+            parameters={"type": "object", "properties": {}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            non_side_effectful=True,
+            known_safe_inspect=True,
+            touches_external_hint=True,
+        )
+
+
+def test_supports_exact_effect_staging_is_not_a_free_registration_boolean(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(TypeError):
+        registry.register_function_tool(
+            name="demo_bad_flag",
+            description="Bad flag",
+            parameters={"type": "object", "properties": {}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            supports_exact_effect_staging=True,
+        )
+
+
+def test_extension_api_register_tool_carries_explicit_declarations() -> None:
+    api = ExtensionAPI(
+        ExtensionDescriptor(
+            name="demo",
+            description="demo",
+            path=Path("."),
+            entrypoint="extension.py",
+            provides=["tools"],
+        )
+    )
+
+    api.register_tool(
+        name="declared_tool",
+        description="Inspect declared extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        handler=lambda workspace, arguments: "ok",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+        requests_network_hint=False,
+        touches_external_hint=False,
+    )
+
+    loaded = api.build()
+    tool = loaded.tools[0]
+
+    assert tool.exact_effect_mode == "required"
+    assert tool.non_side_effectful is True
+    assert tool.known_safe_inspect is True
+    assert tool.requests_network_hint is False
+    assert tool.touches_external_hint is False
+
+
+def test_dynamic_extension_sensitive_call_stages_when_approvable(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: list[dict[str, str]] = []
+    registry.register_function_tool(
+        name="demo_stage_extension",
+        description="Inspect extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: seen.append({"workspace": workspace.name, "query": arguments.get("query", "")}) or "executed",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    result = registry.execute("demo_stage_extension", {"query": "status"})
+
+    assert seen == []
+    assert result.details["staged"] is True
+    assert result.details["approvable"] is True
+    assert result.details["approval_unavailable"] is False
+    assert result.details["effect"]["analysis"]["family"] == "extension"
+    assert result.details["effect"]["analysis"]["summary"] == "Inspect with extension tool demo_stage_extension"
+
+
+def test_dynamic_mcp_sensitive_call_stages_when_approvable(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: list[dict[str, str]] = []
+    registry.register_function_tool(
+        name="demo.stage",
+        description="Inspect MCP state",
+        parameters={"type": "object", "properties": {"topic": {"type": "string"}}},
+        executor=lambda workspace, arguments: seen.append({"workspace": workspace.name, "topic": arguments.get("topic", "")}) or "executed",
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    result = registry.execute("demo.stage", {"topic": "health"})
+
+    assert seen == []
+    assert result.details["staged"] is True
+    assert result.details["approvable"] is True
+    assert result.details["effect"]["analysis"]["family"] == "mcp"
+    assert result.details["effect"]["analysis"]["summary"] == "Inspect with MCP tool demo.stage"
+
+
+def test_dynamic_approval_unavailable_fails_closed_for_unstable_extension_call(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: list[str] = []
+    registry.register_function_tool(
+        name="demo_unstable",
+        description="Unknown extension tool",
+        parameters={"type": "object", "properties": {"message": {"type": "string"}}},
+        executor=lambda workspace, arguments: seen.append(arguments.get("message", "")) or "executed",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+    )
+
+    result = registry.execute("demo_unstable", {"message": "hi"})
+
+    assert seen == []
+    assert result.is_error is True
+    assert result.details["staged"] is False
+    assert result.details["approvable"] is False
+    assert result.details["approval_unavailable"] is True
+    assert "exact-effect approval" in result.details["approval_unavailable_reason"] or "weakly understood" in result.details["approval_unavailable_reason"]
+
+
+def test_approved_dynamic_staged_extension_effect_executes(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: list[str] = []
+    registry.register_function_tool(
+        name="demo_apply_extension",
+        description="Inspect extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: seen.append(arguments.get("query", "")) or f"ok:{arguments.get('query', '')}",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    staged = registry.execute("demo_apply_extension", {"query": "status"})
+    token = staged.details["token"]
+
+    result = registry.host_execute("approve_pending_action", {"token": token})
+
+    assert seen == ["status"]
+    assert result.content == "ok:status"
+    assert result.details["approval_grant"]["status"] == "consumed"
+
+
+def test_approved_dynamic_staged_mcp_effect_executes(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: list[str] = []
+    registry.register_function_tool(
+        name="demo.apply",
+        description="Inspect MCP state",
+        parameters={"type": "object", "properties": {"topic": {"type": "string"}}},
+        executor=lambda workspace, arguments: seen.append(arguments.get("topic", "")) or f"ok:{arguments.get('topic', '')}",
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    staged = registry.execute("demo.apply", {"topic": "health"})
+    token = staged.details["token"]
+
+    result = registry.host_execute("approve_pending_action", {"token": token})
+
+    assert seen == ["health"]
+    assert result.content == "ok:health"
+    assert result.details["approval_grant"]["status"] == "consumed"
+
+
+@pytest.mark.parametrize(
+    ("name", "category", "tool_family", "arguments", "mutated_key", "mutated_value"),
+    [
+        ("demo_mutable_extension", "extension", "extension", {"query": "status"}, "query", "other"),
+        ("demo.mutable", "mcp", "mcp", {"topic": "health"}, "topic", "other"),
+    ],
+)
+def test_modified_dynamic_effect_is_rejected_after_prior_approval(
+    tmp_path: Path,
+    name: str,
+    category: str,
+    tool_family: str,
+    arguments: dict[str, str],
+    mutated_key: str,
+    mutated_value: str,
+) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    registry.register_function_tool(
+        name=name,
+        description="Inspect dynamic state",
+        parameters={"type": "object", "properties": {mutated_key: {"type": "string"}}},
+        executor=lambda workspace, call_arguments: f"ok:{call_arguments.get(mutated_key, '')}",
+        category=category,
+        permission_domain="read",
+        tool_family=tool_family,
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    staged = registry.execute(name, arguments)
+    token = staged.details["token"]
+    payload = store.attach_approval_grant(token)
+    payload["details"]["arguments"][mutated_key] = mutated_value
+    store.save(token, payload)
+
+    with pytest.raises(ValueError, match="payload digest changed"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+
+def test_dynamic_known_safe_allow_stays_narrow(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="demo_safe_query",
+        description="Query extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: f"query:{arguments.get('query', '')}",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="auto",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+    registry.register_function_tool(
+        name="fetch.blocked",
+        description="Fetch webpage content from URL",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        executor=lambda workspace, arguments: arguments.get("url", ""),
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        exact_effect_mode="auto",
+        requests_network_hint=True,
+    )
+
+    allowed = registry.evaluate_call("demo_safe_query", {"query": "status"})
+    blocked = registry.evaluate_call("fetch.blocked", {"url": "https://example.com"})
+
+    assert allowed.action == "allow"
+    assert blocked.action == "ask"
+    assert blocked.details["requests_network"] is True
+
+
+def test_shared_preview_renders_consistent_fields_for_dynamic_effects(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="demo_preview_extension",
+        description="Inspect extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: "ok",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+    registry.register_function_tool(
+        name="demo.preview",
+        description="Inspect MCP state",
+        parameters={"type": "object", "properties": {"topic": {"type": "string"}}},
+        executor=lambda workspace, arguments: "ok",
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    ext = registry.execute("demo_preview_extension", {"query": "status"})
+    mcp = registry.execute("demo.preview", {"topic": "health"})
+
+    ext_preview = registry.host_execute("preview_pending_action", {"token": ext.details["token"]})
+    mcp_preview = registry.host_execute("preview_pending_action", {"token": mcp.details["token"]})
+
+    for preview in (ext_preview.content, mcp_preview.content):
+        assert "Summary:" in preview
+        assert "Family:" in preview
+        assert "Risk class:" in preview
+        assert "Confidence:" in preview
+        assert "Digest:" in preview
+        assert "Touches workspace:" in preview
+        assert "Touches external:" in preview
+        assert "Requests network:" in preview
+        assert "Destructive hint:" in preview
+        assert "Protected path hint:" in preview
+        assert "Tool name:" in preview
+        assert "Arguments:" in preview
+
+
+def test_exact_effect_mode_none_never_stages_even_when_arguments_are_canonicalizable(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="demo_none_mode",
+        description="Inspect extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: "ok",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="none",
+    )
+
+    result = registry.execute("demo_none_mode", {"query": "status"})
+
+    assert result.is_error is True
+    assert result.details["approval_unavailable"] is True
+    assert result.details["staged"] is False
+
+
+def test_exact_effect_mode_auto_with_weak_semantics_fails_closed_even_when_arguments_are_canonicalizable(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="demo_auto_mode",
+        description="Inspect extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: "ok",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="auto",
+        non_side_effectful=True,
+    )
+
+    good = registry.execute("demo_auto_mode", {"query": "status"})
+    bad = registry.execute("demo_auto_mode", {"query": {"nested"}})
+
+    assert good.is_error is True
+    assert good.details["approval_unavailable"] is True
+    assert bad.is_error is True
+    assert bad.details["approval_unavailable"] is True
+
+
+def test_required_mode_never_direct_executes_safe_inspect_calls(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    seen: list[str] = []
+    registry.register_function_tool(
+        name="demo_required_no_direct",
+        description="Inspect extension state",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: seen.append(arguments.get("query", "")) or "ok",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="required",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    result = registry.execute("demo_required_no_direct", {"query": "status"})
+
+    assert seen == []
+    assert result.details["staged"] is True
+    assert result.details["approvable"] is True
+
+
+def test_runtime_risk_signals_override_safe_registration_for_policy_allow(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="demo_runtime_override",
+        description="Fetch remote content from url",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        executor=lambda workspace, arguments: "ok",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        exact_effect_mode="auto",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    decision = registry.evaluate_call("demo_runtime_override", {"query": "status"})
+    result = registry.execute("demo_runtime_override", {"query": "status"})
+
+    assert decision.action == "ask"
+    assert decision.details["requests_network"] is True
+    assert result.is_error is True or result.details["staged"] is True
+
+
+def test_public_register_function_tool_rejects_author_facing_analysis_hints(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(TypeError, match="formal declarations only"):
+        registry.register_function_tool(
+            name="demo_public_cutover",
+            description="Unknown extension tool",
+            parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            exact_effect_mode="auto",
+            analysis_hints={"requests_network": True},
+        )
+
+
+def test_public_register_function_tool_rejects_legacy_hint_origin(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(TypeError, match="formal declarations only"):
+        registry.register_function_tool(
+            name="demo_public_origin_cutover",
+            description="Bad origin",
+            parameters={"type": "object", "properties": {}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            legacy_hint_origin="author",
+        )
+
+
+def test_extension_api_register_tool_rejects_author_facing_analysis_hints() -> None:
+    api = ExtensionAPI(
+        ExtensionDescriptor(
+            name="demo",
+            description="demo",
+            path=Path("."),
+            entrypoint="extension.py",
+            provides=["tools"],
+        )
+    )
+
+    with pytest.raises(TypeError):
+        api.register_tool(
+            name="bad_tool",
+            description="Bad tool",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda workspace, arguments: "ok",
+            analysis_hints={"requests_network": True},
+        )
+
+
+@pytest.mark.parametrize("hint_key", ["requests_network", "touches_external", "destructive_hint", "protected_path_hint", "touches_workspace"])
+def test_runtime_internal_override_path_remains_tightening_only(tmp_path: Path, hint_key: str) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry._register_dynamic_tool_internal(
+        name=f"demo_runtime_override_{hint_key}",
+        description="Runtime override tool",
+        parameters={"type": "object", "properties": {}},
+        executor=lambda workspace, arguments: "ok",
+        category="extension",
+        permission_domain="read",
+        tool_family="extension",
+        runtime_risk_overrides={hint_key: True},
+    )
+
+    metadata = registry.metadata()[f"demo_runtime_override_{hint_key}"]
+    assert metadata.uses_legacy_analysis_hints is True
+    assert metadata.legacy_hint_origin == "runtime_internal"
+    assert metadata.counts_toward_removal_blocker is False
+
+    with pytest.raises(ValueError, match="tightening value True"):
+        registry._register_dynamic_tool_internal(
+            name=f"demo_runtime_override_bad_{hint_key}",
+            description="Bad runtime override tool",
+            parameters={"type": "object", "properties": {}},
+            executor=lambda workspace, arguments: "ok",
+            category="extension",
+            permission_domain="read",
+            tool_family="extension",
+            runtime_risk_overrides={hint_key: False},
+        )
+
+
+def test_legacy_hint_readiness_uses_runtime_metadata_as_authoritative_source(tmp_path: Path) -> None:
+    with pytest.warns(UserWarning):
+        report = build_legacy_hint_readiness_report(
+            {
+                "demo_author_legacy": ToolMetadata(
+                    name="demo_author_legacy",
+                    category="extension",
+                    permission_domain="read",
+                    tool_family="extension",
+                    analysis_hints={"requests_network": True},
+                    legacy_hint_origin="author",
+                ),
+                "demo_runtime_internal": ToolMetadata(
+                    name="demo_runtime_internal",
+                    category="mcp",
+                    permission_domain="read",
+                    tool_family="mcp",
+                    analysis_hints={"destructive_hint": True},
+                    legacy_hint_origin="runtime_internal",
+                ),
+            },
+            advisory_source_hits=[{"path": "demo.py", "line": 10, "content": "analysis_hints={...}", "message": "advisory"}],
+        )
+
+    assert report["ready_for_v0_4_removal"] is False
+    assert report["release_gate_passed"] is False
+    assert report["author_legacy_usage_count"] == 1
+    assert report["runtime_internal_override_count"] == 1
+    assert report["author_blockers"]
+    assert report["runtime_internal_findings"]
+    assert report["release_gate_failures"]
+    assert report["advisory_source_hits"][0]["path"] == "demo.py"
+    assert any(item["usage_origin"] == "author" and item["counts_toward_removal_blocker"] for item in report["items"])
+    assert any(item["usage_origin"] == "runtime_internal" and not item["counts_toward_removal_blocker"] for item in report["items"])
+
+
+def test_runtime_internal_override_does_not_block_release_gate(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    registry._register_dynamic_tool_internal(
+        name="demo_runtime_internal",
+        description="Internal runtime tool",
+        parameters={"type": "object", "properties": {}},
+        executor=lambda workspace, arguments: "ok",
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        runtime_risk_overrides={"destructive_hint": True},
+    )
+
+    report = build_legacy_hint_readiness_report(registry.metadata())
+
+    assert report["ready_for_v0_4_removal"] is True
+    assert report["release_gate_passed"] is True
+    assert report["author_legacy_usage_count"] == 0
+    assert report["runtime_internal_override_count"] == 1
+    assert report["author_blockers"] == []
+    assert report["runtime_internal_findings"]
+
+
+def test_legacy_hint_readiness_can_be_ready_even_with_advisory_source_hits(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    report = build_legacy_hint_readiness_report(
+        registry.metadata(),
+        advisory_source_hits=[{"path": "maybe.py", "line": 3, "content": "analysis_hints={...}", "message": "advisory only"}],
+    )
+
+    assert report["ready_for_v0_4_removal"] is True
+    assert report["release_gate_passed"] is True
+    assert report["author_legacy_usage_count"] == 0
+    assert report["advisory_source_hits"]
+
+
+def test_legacy_hint_readiness_text_and_criteria_share_single_structure(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    report = build_legacy_hint_readiness_report(registry.metadata())
+    rendered = render_legacy_hint_readiness_text(report)
+
+    for criterion in REMOVAL_READINESS_CRITERIA:
+        assert criterion["label"] in rendered
+
+
+def test_capabilities_legacy_hints_command_reports_shared_readiness(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    payload = capabilities_legacy_hints_main(tmp_path, json_mode=True)
+
+    assert payload["ready_for_v0_4_removal"] is True
+    assert payload["release_gate_passed"] is True
+    assert payload["author_legacy_usage_count"] == 0
+    assert payload["criteria"]
+
+
+def test_capabilities_legacy_hints_strict_mode_fails_when_release_gate_is_blocked(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    monkeypatch.setattr(
+        "pp_agent.cli.commands.capabilities.sdk.legacy_hint_readiness",
+        lambda workspace, **kwargs: {
+            "ready_for_v0_4_removal": False,
+            "release_gate_passed": False,
+            "criteria": [],
+            "author_legacy_usage_count": 1,
+            "runtime_internal_override_count": 0,
+        },
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        capabilities_legacy_hints_main(tmp_path, json_mode=True, strict=True)
+
+
+def test_readiness_criteria_are_reflected_in_docs_and_agents_file() -> None:
+    root = Path(__file__).resolve().parents[2]
+    docs_text = (root / "docs" / "dynamic-tool-declarations.md").read_text(encoding="utf-8")
+    agents_text = (root / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert REMOVAL_READINESS_CRITERIA[0]["label"] in docs_text
+    assert "readiness 以 doctor/report 为准" in agents_text
+
+
+def test_public_docs_and_examples_use_formal_declarations_only() -> None:
+    root = Path(__file__).resolve().parents[2]
+    readme_text = (root / "README.md").read_text(encoding="utf-8")
+    docs_text = (root / "docs" / "dynamic-tool-declarations.md").read_text(encoding="utf-8")
+    agents_text = (root / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "analysis_hints=" not in readme_text
+    assert "analysis_hints=" not in docs_text
+    assert "analysis_hints=" not in agents_text
+
+
+def test_preview_pending_action_shows_shared_analysis_for_file_effects(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+
+    assert "Summary: Write file notes.txt" in preview.content
+    assert "Family: file" in preview.content
+    assert "Confidence: high" in preview.content
+    assert "Lifecycle state: staged_not_granted" in preview.content
+    assert "Protected path hint: False" in preview.content
+
+
+def test_approval_grant_is_single_use_by_default(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    token = staged.details["token"]
+
+    registry.host_execute("approve_pending_action", {"token": token})
+
+    with pytest.raises(FileNotFoundError):
+        registry.host_execute("approve_pending_action", {"token": token})

@@ -174,7 +174,9 @@ def test_api_capability_helpers_forward_to_sdk(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr(sdk, "list_capabilities", lambda workspace, **kwargs: [{"name": "demo"}])
     monkeypatch.setattr(sdk, "get_capability", lambda workspace, **kwargs: {"name": kwargs["name"]})
     monkeypatch.setattr(sdk, "reload_capabilities", lambda workspace, **kwargs: [{"name": "demo"}, {"name": "reload"}])
+    monkeypatch.setattr(sdk, "legacy_hint_readiness", lambda workspace, **kwargs: {"ready_for_v0_4_removal": True})
 
     assert api.list_capabilities(workspace=tmp_path) == [{"name": "demo"}]
     assert api.get_capability(workspace=tmp_path, kind="skill", name="demo") == {"name": "demo"}
     assert api.reload_capabilities(workspace=tmp_path)[-1]["name"] == "reload"
+    assert api.legacy_hint_readiness(workspace=tmp_path) == {"ready_for_v0_4_removal": True}

@@ -11,6 +11,9 @@ class ToolSpec(BaseModel):
     description: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     requires_confirmation: bool = False
+    permission_domain: str = "read"
+    sensitive: bool = False
+    model_callable: bool = True
 
 
 class ToolCall(BaseModel):

@@ -20,6 +20,10 @@ def action_target(item: dict) -> str:
     return item.get("target_path") or item.get("command") or ""
 
 
+def lifecycle_label(item: dict) -> str:
+    return (item.get("lifecycle") or {}).get("state", "unknown")
+
+
 def approval_preview(item: dict, limit: int = 8) -> str:
     if item["action_type"] == "run_shell":
         return compact_text(item.get("command") or "")
@@ -41,8 +45,9 @@ def render_approval_panel(workspace: Path) -> None:
         return
     for item in items[:5]:
         lines.append("")
-        lines.append(f"[{short_token(item['token'])}] {item['action_type']}")
+        lines.append(f"[{short_token(item['token'])}] {item['action_type']} [{lifecycle_label(item)}]")
         lines.append(f"Target: {compact_text(action_target(item), 110)}")
+        lines.append(f"Lifecycle: {lifecycle_label(item)}")
         lines.append("Preview:")
         lines.append(approval_preview(item, limit=6))
     if len(items) > 5:

@@ -92,6 +92,158 @@ Most coding agents are good at producing output. Fewer are good at making their 
 - Safe rewind is git-backed, so you can restore the conversation, the workspace, or both together.
 - Skills, extensions, and MCP-backed capabilities fit into the same repo-aware runtime rather than feeling bolted on.
 
+## Safety Boundary
+
+Phase 1 now uses a mandatory policy gate for sensitive execution. This gate is checked at execution time, not only at planner time.
+
+- The policy gate returns `allow`, `ask`, or `deny`.
+- `ask` means the model can stage a proposed effect, but only the host/user side may approve it.
+- Protected paths are enforced through path protection and policy gating.
+- This phase is not a true shell sandbox. The existing shell runner remains in place behind the policy gate and host approval flow.
+
+Protected paths in Phase 1:
+
+- `.pp-agent/**`
+- `.git/**`
+- `.env`
+- `.env.*`
+- `*.pem`
+- `*.key`
+
+Important Phase 1 limit:
+
+- `.pp-agent/**` is logically isolated from model-facing tools, but it is not physically separated from the repository yet.
+
+## Exact-Effect Approvals
+
+Phase 2A upgrades sensitive approval binding so host approval applies to an exact staged effect, not just a token.
+
+- Sensitive file and shell proposals now produce an effect record before execution.
+- `payload_digest` is the primary approval binding.
+- Human-readable summaries are review output and a secondary consistency check, not the primary security anchor.
+- File effects distinguish whether the target was absent or present at staging time.
+- Shell effects use narrow normalization: whitespace-only differences normalize, but command content, separators, redirection, quotes, parameter order, and timeout changes remain material.
+- Planner approval is still not execution approval.
+
+## Shell Effect Classification
+
+Phase 2B keeps exact-effect approval binding, but makes staged shell effects easier to review and reason about.
+
+- Shell effects now include structured fields such as `normalized_command`, `command_head`, `risk_class`, `writes_workspace_files`, `touches_external_paths`, `requests_network`, and `destructive_hint`.
+- Current shell classes are `inspect`, `workspace_mutation`, `external_mutation`, `networked`, and `destructive`.
+- Human-readable shell summaries are stable review output such as `Inspect repository status with git status` or `Fetch remote content with curl`.
+- Classification enriches policy decisions and previews, but it does not bypass host-side approval and it is not a shell sandbox.
+- Normalization remains intentionally narrow: whitespace-only differences normalize to the same effect, while command, parameter, separator, redirection, quote, and timeout changes remain material.
+
+Current Phase 2B limits:
+
+- Shell classification is still conservative heuristic matching, not a full shell parser or AST.
+- The existing shell runner is still used; this phase does not add sandbox infrastructure.
+- Policy still keeps shell execution behind host-side approval even for `inspect` commands.
+
+Planned Phase 2C direction:
+
+- Finer-grained shell semantics and better effect summaries.
+- Broader effect classification across more tool families.
+- Stronger policy differentiation once classification confidence is high enough.
+
+## Shared Effect Analysis
+
+Phase 2C generalizes effect semantics across built-in file tools, shell tools, and dynamic extension or MCP tools.
+
+- Shared analysis records now expose `family`, `risk_class`, `summary`, `confidence_band`, `touches_workspace`, `touches_external`, `requests_network`, `destructive_hint`, and `protected_path_hint`.
+- Policy uses stable confidence bands such as `high`, `medium`, `low`, and `unknown` instead of relying on raw float thresholds in behavior rules.
+- Built-in file reads can still be allowed when the target is a normal workspace path and analysis is high confidence.
+- Shell policy differentiation stays narrow: only a known-safe inspect subset such as `git status`, `git diff`, `rg`, `grep`, `ls`, `dir`, and `Get-ChildItem` may be allowed automatically.
+- Extension and MCP tools now receive shared analysis too, but this does not mean they have shared exact-effect approvals. Without staged exact-effect support, they remain policy-level `ask` or `deny`.
+
+Current Phase 2C limits:
+
+- Shared analysis is still heuristic and conservative.
+- Unknown or weakly understood extension or MCP semantics fail closed.
+- Only security-relevant, stably recomputable analysis fields are included in effect identity.
+
+## Dynamic Tool Declarations
+
+Phase 4A completes the public cutover: explicit declarations are now the only author-facing semantics contract for dynamic extension and MCP tools.
+
+- Dynamic tools declare `exact_effect_mode` as `none`, `auto`, or `required`.
+- `exact_effect_mode` is the primary exact-effect capability declaration. Authors do not set a free `supports_exact_effect_staging` boolean directly.
+- Registration acceptance is intentionally looser than execution eligibility: weakly declared tools may still register, but they fail closed at policy or execution time.
+- `required` never falls back to direct execution. If a call cannot be represented stably enough for exact approval, it fails closed with `approval_unavailable`.
+- `known_safe_inspect` only makes a tool eligible for safe-inspect policy consideration. It never implies `allow` by itself.
+- Runtime/shared analysis now tightens fields conservatively instead of replacing declared semantics wholesale.
+- Author-facing `analysis_hints` are no longer accepted by public registration APIs.
+- A private runtime-internal override path remains available only for conservative risk tightening inside framework code.
+
+Primary declarations:
+
+- `exact_effect_mode`
+- `non_side_effectful`
+- `known_safe_inspect`
+- `requests_network_hint`
+- `touches_external_hint`
+
+Private runtime-only risk overrides may only tighten risk with these keys:
+
+- `requests_network`
+- `touches_external`
+- `destructive_hint`
+- `protected_path_hint`
+- `touches_workspace`
+
+Only the tightening-direction value `True` is accepted for these internal overrides. Safe or widening values such as `False`, `safe`, `allow`, `read_only`, or `inspect_only` are rejected.
+
+Disallowed legacy keys:
+
+- `risk_class`
+- `summary`
+- `confidence_score`
+- `confidence_band`
+- `known_safe_inspect`
+- `exact_effect_mode`
+- `supports_exact_effect_staging`
+
+Representative alias examples that are also rejected as primary-semantics hints:
+
+- `safe`
+- `allow`
+- `read_only`
+- `inspect_only`
+- `stageable`
+- `approval_supported`
+- `exact_effect_supported`
+- `confidence`
+- `safety_score`
+- `display_summary`
+
+Author guidance:
+
+- Prefer `exact_effect_mode="auto"` when unsure.
+- Use `required` only for tools that should enter exact-effect approval whenever the call is policy-sensitive and stably representable.
+- Leave `known_safe_inspect=False` unless the tool is clearly read-only and non-side-effectful.
+- Runtime risk signals win conservatively on a field-by-field basis. A declared safe inspect tool can still be tightened back to `ask`, `approval_unavailable`, or `deny`.
+- See `docs/dynamic-tool-declarations.md` for the versioned deprecation timeline, an old-to-new migration table, and examples of a safe inspect tool, a staged side-effectful tool, an unstable fail-closed tool, and an MCP registration.
+
+## Legacy Hint Doctor
+
+The legacy-hints doctor now doubles as a release gate for the public cutover.
+
+- Use `pp-agent capabilities legacy-hints --workspace <path>` for a human-readable report.
+- Use `pp-agent capabilities legacy-hints --json --workspace <path>` for machine-readable output.
+- Use `pp-agent capabilities legacy-hints --strict --workspace <path>` to fail the command when author-facing legacy usage remains.
+- Runtime metadata is the authoritative readiness source.
+- Static source scanning is advisory only and does not decide readiness by itself.
+- Author-facing legacy `analysis_hints` count as removal blockers. Runtime-internal risk overrides are reported separately.
+- Removal readiness for `v0.4.0` requires zero author-facing legacy `analysis_hints` in runtime metadata.
+
+Current limits:
+
+- Dynamic tool defaults remain tighter than built-in file and shell flows.
+- Direct execution on policy `allow` stays limited to a narrow high-confidence, non-side-effectful inspect subset.
+- Unknown, weakly understood, networked, destructive, or externally touching dynamic calls still fail closed to `ask` or `deny`.
+- This phase still does not add sandboxing, a grant history ledger, or physical control-plane separation.
+
 ## Core Workflows
 
 ### 1. Chat and run
@@ -203,6 +355,8 @@ Create `.pp-agent/config.json` for per-project overrides:
   }
 }
 ```
+
+`tool_confirmation` still exists for planner-era compatibility, but it is no longer the complete safety model on its own. Sensitive execution now also passes through a mandatory execution-time policy gate.
 
 ### Resources and manifests
 

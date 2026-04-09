@@ -34,7 +34,7 @@ class ToolLLMClient:
     def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
         yield {
             "text": "",
-            "tool_calls": [{"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi","apply":true}'}],
+            "tool_calls": [{"id": "call-1", "name": "list_files", "arguments_chunk": '{"path":"."}'}],
             "finish_reason": "tool_calls",
             "raw": {},
         }
@@ -48,7 +48,7 @@ class FailingToolLLMClient:
     def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
         yield {
             "text": "",
-            "tool_calls": [{"id": "call-1", "name": "edit_file", "arguments_chunk": '{"path":"missing.txt","diff":"<<<<<<< SEARCH\\nold\\n=======\\nnew\\n>>>>>>> REPLACE","apply":true}'}],
+            "tool_calls": [{"id": "call-1", "name": "edit_file", "arguments_chunk": '{"path":"missing.txt","diff":"<<<<<<< SEARCH\\nold\\n=======\\nnew\\n>>>>>>> REPLACE"}'}],
             "finish_reason": "tool_calls",
             "raw": {},
         }
@@ -95,9 +95,10 @@ def test_prompt_emits_minimum_lifecycle_sequence(tmp_path: Path) -> None:
 
 
 def test_tool_lifecycle_success_order(tmp_path: Path) -> None:
+    (tmp_path / "demo.txt").write_text("hello", encoding="utf-8")
     agent = _agent(tmp_path, ToolLLMClient())
 
-    events = agent.prompt("create file")
+    events = agent.prompt("list files")
     types = [event.type for event in events]
 
     assert types.index(TOOL_CALL) < types.index(TOOL_START) < types.index(TOOL_RESULT) < types.index(TOOL_END)

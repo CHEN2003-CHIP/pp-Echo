@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from pp_agent.domain import ChatMessage, TextPart, ToolCall, ToolResult, ToolSpec
+from pp_agent.tools.effects import analyze_file_call, build_shell_effect
+from pp_agent.tools.policy import ALLOW, ToolPolicyEvaluator
 
 
 class ToolExecutionResult(ToolResult):
@@ -22,8 +24,9 @@ class ToolExecutionResult(ToolResult):
 
 class BaseTool(ABC):
     """工具接口定义"""
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, policy_evaluator: ToolPolicyEvaluator | None = None) -> None:
         self.workspace = workspace.resolve()
+        self.policy_evaluator = policy_evaluator or ToolPolicyEvaluator(self.workspace)
 
     @property
     @abstractmethod
@@ -39,9 +42,34 @@ class BaseTool(ABC):
         if not path.is_absolute():
             path = self.workspace / path
         resolved = path.resolve()
-        if self.workspace not in [resolved, *resolved.parents]:
-            raise PermissionError(f"Path is outside workspace: {resolved}")
         return resolved
+
+    def enforce_policy_for_path(self, permission_domain: str, raw_path: str) -> Path:
+        resolved = self.resolve_path(raw_path)
+        analysis = analyze_file_call(
+            workspace=self.workspace,
+            tool_name=self.spec.name,
+            permission_domain=permission_domain,
+            target_path=resolved,
+        )
+        decision = self.policy_evaluator.evaluate(permission_domain=permission_domain, target_path=resolved, analysis=analysis)
+        if decision.action != ALLOW and permission_domain == "read":
+            raise PermissionError(decision.reason)
+        if decision.action == "deny":
+            raise PermissionError(decision.reason)
+        return resolved
+
+    def enforce_policy_for_command(self, permission_domain: str, command: str) -> None:
+        shell_effect = build_shell_effect(
+            tool_name="run_shell",
+            permission_domain=permission_domain,
+            command=command,
+            timeout_seconds=30,
+            workspace=self.workspace,
+        )
+        decision = self.policy_evaluator.evaluate(permission_domain=permission_domain, command=command, analysis=shell_effect["analysis"])
+        if decision.action == "deny":
+            raise PermissionError(decision.reason)
 
     def pending_root(self) -> Path:
         """获取待处理文件的根目录"""

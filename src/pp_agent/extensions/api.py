@@ -25,6 +25,11 @@ class ExtensionToolDefinition:
     handler: ExtensionToolHandler
     # 工具分类（默认值：extension）
     category: str = "extension"
+    exact_effect_mode: str = "auto"
+    non_side_effectful: bool = False
+    known_safe_inspect: bool = False
+    requests_network_hint: bool = False
+    touches_external_hint: bool = False
 
 
 @dataclass
@@ -111,6 +116,11 @@ class ExtensionAPI:
         parameters: Optional[dict[str, Any]] = None,
         requires_confirmation: bool = False,
         category: str = "extension",
+        exact_effect_mode: str = "auto",
+        non_side_effectful: bool = False,
+        known_safe_inspect: bool = False,
+        requests_network_hint: bool = False,
+        touches_external_hint: bool = False,
     ) -> None:
         """注册工具，提供名称、描述、处理器等元信息，供Agent调用"""
         self._loaded.tools.append(
@@ -124,6 +134,11 @@ class ExtensionAPI:
                 ),
                 handler=handler,
                 category=category,
+                exact_effect_mode=exact_effect_mode,
+                non_side_effectful=non_side_effectful,
+                known_safe_inspect=known_safe_inspect,
+                requests_network_hint=requests_network_hint,
+                touches_external_hint=touches_external_hint,
             )
         )
 

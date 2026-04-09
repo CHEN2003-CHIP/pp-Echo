@@ -4,6 +4,7 @@ from typing import Any
 
 from pp_agent.domain import ToolSpec
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
+from pp_agent.tools.policy import PermissionDomain
 
 
 class SearchTextTool(BaseTool):
@@ -18,14 +19,18 @@ class SearchTextTool(BaseTool):
                 "properties": {"query": {"type": "string"}, "path": {"type": "string"}},
                 "required": ["query"],
             },
+            permission_domain=PermissionDomain.READ,
         )
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         query = arguments["query"]
-        root = self.resolve_path(arguments.get("path", "."))
+        root = self.enforce_policy_for_path(PermissionDomain.READ, arguments.get("path", "."))
         matches: list[str] = []
         for file_path in root.rglob("*"):
             if not file_path.is_file():
+                continue
+            resolved = file_path.resolve()
+            if not self.policy_evaluator.is_within_workspace(resolved) or self.policy_evaluator.is_protected(resolved):
                 continue
             try:
                 for line_number, line in enumerate(file_path.read_text(encoding="utf-8").splitlines(), start=1):

@@ -30,7 +30,7 @@ class GatedToolLLMClient:
         if self.calls == 1:
             yield {
                 "text": "",
-                "tool_calls": [{"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi","apply":true}'}],
+                "tool_calls": [{"id": "call-1", "name": "write_file", "arguments_chunk": '{"path":"a.txt","content":"hi"}'}],
                 "finish_reason": "tool_calls",
                 "raw": {},
             }

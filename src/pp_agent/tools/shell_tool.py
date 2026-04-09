@@ -4,41 +4,54 @@ import subprocess
 from typing import Any
 
 from pp_agent.domain import ToolSpec
-from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.tools.base import BaseTool, ToolExecutionResult
+from pp_agent.tools.effects import build_shell_effect
+from pp_agent.tools.policy import PermissionDomain
 
 
 class PowerShellTool(BaseTool):
-    def __init__(self, workspace, default_timeout_seconds: int = 30) -> None:
-        super().__init__(workspace)
+    def __init__(self, workspace, policy_evaluator=None, default_timeout_seconds: int = 30) -> None:
+        super().__init__(workspace, policy_evaluator=policy_evaluator)
         self.default_timeout_seconds = default_timeout_seconds
 
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="run_shell",
-            description="Stage a PowerShell command for approval by default. Set apply=true to run immediately after confirmation.",
+            description="Stage a PowerShell command for host-side approval.",
             parameters={
                 "type": "object",
                 "properties": {
                     "command": {"type": "string"},
                     "timeout_seconds": {"type": "integer"},
-                    "apply": {"type": "boolean"},
                 },
                 "required": ["command"],
             },
             requires_confirmation=True,
+            permission_domain=PermissionDomain.BASH,
+            sensitive=True,
         )
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         timeout = int(arguments.get("timeout_seconds", self.default_timeout_seconds))
-        apply_now = bool(arguments.get("apply", False))
         command = arguments["command"]
-        if not apply_now:
-            store = PendingActionStore(self.pending_root())
-            payload = store.stage(action_type="run_shell", command=command, details={"timeout_seconds": timeout})
-            return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=f"Staged shell command. Approve with token {payload['token']}", details={"token": payload["token"], "command": command, "timeout_seconds": timeout, "staged": True})
-        return self._run(command, timeout)
+        self.enforce_policy_for_command(PermissionDomain.BASH, command)
+        store = PendingActionStore(self.pending_root())
+        effect = build_shell_effect(
+            tool_name=self.spec.name,
+            permission_domain=PermissionDomain.BASH,
+            command=command,
+            timeout_seconds=timeout,
+            workspace=self.workspace,
+        )
+        payload = store.stage(action_type="run_shell", command=command, details={"timeout_seconds": timeout}, effect=effect)
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name=self.spec.name,
+            content=f"Staged shell command. Approve with token {payload['token']}",
+            details={"token": payload["token"], "command": command, "timeout_seconds": timeout, "staged": True, "effect": effect},
+        )
 
     def _run(self, command: str, timeout: int) -> ToolExecutionResult:
         completed = subprocess.run([

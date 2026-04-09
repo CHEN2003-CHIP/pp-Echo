@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -125,6 +125,8 @@ def test_capability_catalog_list_and_get_are_stable(tmp_path: Path, monkeypatch:
         "grep_code",
         "git_status",
         "git_diff_worktree",
+        "preview_safe_rewind",
+        "execute_safe_rewind",
         "run_shell",
     ]
     assert catalog.get("builtin_tool", "run_shell").source == "builtin:run_shell"
@@ -340,3 +342,4 @@ def test_skill_and_extension_metadata_include_origin_fields(tmp_path: Path, monk
     assert extension.metadata["declared_by_manifest"] is True
     assert extension.metadata["event_counts"] == {}
     assert extension.metadata["resource_roots"] == {}
+

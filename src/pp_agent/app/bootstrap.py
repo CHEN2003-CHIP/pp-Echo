@@ -37,6 +37,7 @@ from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.settings import Settings
 from pp_agent.storage.timeline import TimelineStore
+from pp_agent.tools.legacy_hints_readiness import build_legacy_hint_readiness_report, scan_workspace_for_legacy_analysis_hints
 from pp_agent.tools.registry import ToolRegistry
 
 
@@ -480,6 +481,32 @@ def create_capability_catalog_with_mcp(
     :return: 能力目录实例
     """
     return create_capability_catalog(workspace, include_mcp=True, transport_factory=transport_factory, time_fn=time_fn)
+
+
+def inspect_legacy_hint_readiness(
+    workspace: Path,
+    *,
+    include_mcp: Optional[bool] = None,
+    transport_factory=None,
+    time_fn=None,
+) -> dict[str, object]:
+    settings = load_settings(workspace)
+    registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    runtime_hooks = RuntimeHooks()
+    load_executable_extensions(
+        workspace,
+        settings=settings,
+        tool_registry=registry,
+        runtime_hooks=runtime_hooks,
+        search_roots=_extension_roots_for(workspace.resolve(), settings),
+        include_mcp=include_mcp,
+        transport_factory=transport_factory,
+        time_fn=time_fn,
+    )
+    return build_legacy_hint_readiness_report(
+        registry.metadata(),
+        advisory_source_hits=scan_workspace_for_legacy_analysis_hints(workspace.resolve()),
+    )
 
 
 def create_capability_providers(
@@ -1012,10 +1039,6 @@ def _should_auto_checkpoint(workspace: Path, tool_name: str, arguments: dict) ->
     :param arguments: 工具参数
     :return: 需要检查点返回True
     """
-    if tool_name in {"write_file", "edit_file"}:
-        return bool(arguments.get("apply"))
-    if tool_name == "run_shell":
-        return bool(arguments.get("apply"))
     if tool_name != "approve_pending_action":
         return False
     token = arguments.get("token")

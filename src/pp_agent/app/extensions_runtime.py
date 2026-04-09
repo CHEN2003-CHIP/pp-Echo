@@ -165,7 +165,7 @@ class MCPRuntime:
             if qualified_name in self._registered_tool_names:
                 continue
             self._registered_tool_names.append(qualified_name)
-            self.tool_registry.register_function_tool(
+            self.tool_registry._register_dynamic_tool_internal(
                 name=qualified_name,
                 description=tool.description,
                 parameters=tool.input_schema or {"type": "object", "properties": {}},
@@ -175,6 +175,17 @@ class MCPRuntime:
                 ),
                 category="mcp",
                 requires_confirmation=tool.is_destructive,
+                tool_family="mcp",
+                exact_effect_mode="auto",
+                non_side_effectful=False,
+                known_safe_inspect=False,
+                requests_network_hint=self._looks_fetch_like(manager.server_config(server_name)) or any(
+                    keyword in f"{qualified_name} {tool.description}".lower()
+                    for keyword in ("fetch", "web", "url", "http", "https", "remote")
+                ),
+                touches_external_hint=False,
+                legacy_hint_origin="runtime_internal",
+                runtime_risk_overrides={"destructive_hint": True} if tool.is_destructive else {},
                 replace=True,
             )
         for item in resources:
@@ -484,13 +495,24 @@ def _apply_loaded_extension(
     runtime_hooks: RuntimeHooks,
 ) -> None:
     for tool in loaded.tools:
-        tool_registry.register_function_tool(
+        tool_registry._register_dynamic_tool_internal(
             name=tool.name,
             description=tool.spec.description,
             parameters=tool.spec.parameters,
             executor=tool.handler,
             category=tool.category,
             requires_confirmation=tool.spec.requires_confirmation,
+            permission_domain=tool.spec.permission_domain,
+            sensitive=tool.spec.sensitive,
+            model_callable=tool.spec.model_callable,
+            tool_family="extension",
+            exact_effect_mode=tool.exact_effect_mode,
+            non_side_effectful=tool.non_side_effectful,
+            known_safe_inspect=tool.known_safe_inspect,
+            requests_network_hint=tool.requests_network_hint,
+            touches_external_hint=tool.touches_external_hint,
+            legacy_hint_origin="runtime_internal",
+            runtime_risk_overrides={"destructive_hint": True} if (tool.spec.sensitive and tool.spec.permission_domain != "read") else {},
         )
     for command in loaded.commands:
         runtime.commands.register(command)

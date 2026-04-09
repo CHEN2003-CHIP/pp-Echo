@@ -130,12 +130,7 @@ class AgentRuntime:
         self._base_branch_messages: list[ChatMessage] = []
         self._pending_lifecycle_events: list[AgentEvent] = []
         self._captured_events: Optional[list[AgentEvent]] = None
-        self._runtime_hooks = runtime_hooks or RuntimeHooks(
-            transform_context=[self._default_transform_context],
-            before_tool_call=[self._default_before_tool_call],
-            after_tool_call=[self._default_after_tool_call],
-            on_tool_error=[self._default_tool_error_hook],
-        )
+        self._runtime_hooks = self._compose_runtime_hooks(runtime_hooks)
         self.lifecycle = LifecycleEmitter()
         self._wire_lifecycle()
 
@@ -149,8 +144,18 @@ class AgentRuntime:
 
     @runtime_hooks.setter
     def runtime_hooks(self, value: RuntimeHooks) -> None:
-        self._runtime_hooks = value
+        self._runtime_hooks = self._compose_runtime_hooks(value)
         self._wire_lifecycle()
+
+    def _compose_runtime_hooks(self, hooks: Optional[RuntimeHooks]) -> RuntimeHooks:
+        hooks = hooks or RuntimeHooks()
+        return RuntimeHooks(
+            transform_context=[self._default_transform_context, *hooks.transform_context_hooks],
+            before_tool_call=[self._default_before_tool_call, *hooks.before_tool_call_hooks],
+            after_tool_call=[self._default_after_tool_call, *hooks.after_tool_call_hooks],
+            on_tool_error=[self._default_tool_error_hook, *hooks.on_tool_error_hooks],
+            lifecycle_event=list(hooks.lifecycle_event_hooks),
+        )
 
     def restore_session_record(self, record: SessionRecord, *, emit_event: bool = True) -> None:
         """SessionRecord 里保存的是整棵会话树
@@ -363,6 +368,7 @@ class AgentRuntime:
                 #决策是否允许运行
                 decision = self.lifecycle.emit_tool_call(tool_call_event, self.state, call, self.tool_registry)
                 tool_call_event.details.update(decision.details)
+                tool_details.update(decision.details)
                 yield from self._emit(tool_call_event)
                 yield from self._emit(self._event(TOOL_START, tool_name=call.name, tool_args=call.arguments, details=tool_details))
                 try:
@@ -895,9 +901,25 @@ class AgentRuntime:
     def _default_before_tool_call(self, _state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
         """Agent 工具执行前的「最终安全校验钩子」"""
         spec = registry.get_spec(call.name)
+        decision = registry.evaluate_call(call.name, call.arguments)
+        if decision.action == "deny":
+            return BeforeToolCallDecision(
+                action="reject",
+                message=decision.reason,
+                details={"policy_action": decision.action, "permission_domain": decision.permission_domain, "policy_reason": decision.reason, **(decision.details or {})},
+            )
+        if decision.action == "ask" and not self._approved_pending_plan:
+            return BeforeToolCallDecision(
+                action="reject",
+                message=decision.reason,
+                details={"policy_action": decision.action, "permission_domain": decision.permission_domain, "policy_reason": decision.reason, **(decision.details or {})},
+            )
         if spec.requires_confirmation and not self._approved_pending_plan and not self.confirm_callback(call.name, call.arguments):
             return BeforeToolCallDecision(action="reject", message=f"Tool '{call.name}' was rejected by user confirmation")
-        return BeforeToolCallDecision(action="allow")
+        return BeforeToolCallDecision(
+            action="allow",
+            details={"policy_action": decision.action, "permission_domain": decision.permission_domain, "policy_reason": decision.reason, **(decision.details or {})},
+        )
 
     def _default_after_tool_call(self, _state: AgentState, _call: ToolCall, _result) -> AfterToolCallDecision:
         """Agent 工具执行后的「默认后续决策钩子」，默认继续执行后续工具调用（如果有）"""

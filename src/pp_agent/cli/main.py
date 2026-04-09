@@ -311,6 +311,24 @@ if app:
         capabilities_reload_main(workspace, include_mcp=include_mcp)
 
 
+    def _capabilities_legacy_hints_command(
+        include_mcp: Optional[bool] = typer.Option(None, "--include-mcp"),
+        json_mode: bool = typer.Option(False, "--json"),
+        strict: bool = typer.Option(False, "--strict"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.capabilities import capabilities_legacy_hints_main
+
+        capabilities_legacy_hints_main(workspace, include_mcp=include_mcp, json_mode=json_mode, strict=strict)
+
+    capabilities_app.registered_commands.append(
+        typer.models.CommandInfo(
+            name="legacy-hints",
+            callback=_capabilities_legacy_hints_command,
+        )
+    )
+
+
     @skills_app.command("list")
     def skills_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
         from pp_agent.cli.commands.skills import skills_list_main
@@ -454,6 +472,11 @@ def main() -> None:
     capabilities_reload_parser.add_argument("--kind", default=None)
     capabilities_reload_parser.add_argument("--include-mcp", dest="include_mcp", action="store_true")
     capabilities_reload_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    capabilities_legacy_hints_parser = capabilities_subparsers.add_parser("legacy-hints")
+    capabilities_legacy_hints_parser.add_argument("--include-mcp", dest="include_mcp", action="store_true")
+    capabilities_legacy_hints_parser.add_argument("--json", action="store_true")
+    capabilities_legacy_hints_parser.add_argument("--strict", action="store_true")
+    capabilities_legacy_hints_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     skills_parser = subparsers.add_parser("skills")
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
     skills_list_parser = skills_subparsers.add_parser("list")
@@ -575,6 +598,15 @@ def main() -> None:
         from pp_agent.cli.commands.capabilities import capabilities_reload_main
 
         capabilities_reload_main(Path(args.workspace), include_mcp=args.include_mcp or None)
+    elif command == "capabilities" and args.capabilities_command == "legacy-hints":
+        from pp_agent.cli.commands.capabilities import capabilities_legacy_hints_main
+
+        capabilities_legacy_hints_main(
+            Path(args.workspace),
+            include_mcp=args.include_mcp or None,
+            json_mode=args.json,
+            strict=args.strict,
+        )
     elif command == "skills" and args.skills_command == "list":
         from pp_agent.cli.commands.skills import skills_list_main
 

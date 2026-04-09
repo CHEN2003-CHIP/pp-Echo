@@ -33,7 +33,7 @@ def workflow_repo_main(
     payload["executor"].append({"step": "Inspect pending actions", "status": "done", "details": {"count": summary["count"], "by_type": summary["by_type"]}})
     if token:
         payload["planner"].append({"step": f"Preview the staged action for token {token}.", "status": "planned"})
-        preview = registry.execute("preview_pending_action", {"token": token})
+        preview = registry.host_execute("preview_pending_action", {"token": token})
         target_path = preview.details.get("target_path") or target_path
         payload["executor"].append({"step": "Preview staged action", "status": "done", "content": preview.content, "details": preview.details})
         payload["next_actions"].append("Check the preview diff, shell command, or planner summary before approving it.")

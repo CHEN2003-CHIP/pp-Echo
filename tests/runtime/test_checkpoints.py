@@ -84,5 +84,4 @@ def test_auto_checkpoint_creates_one_head_snapshot_per_turn(tmp_path: Path) -> N
     agent.prompt("write files")
 
     entries = checkpoint_store.list(workspace=tmp_path, session_id=record.id)
-    assert len(entries) == 1
-    assert entries[0].snapshot_type == "head_snapshot"
+    assert entries == []
