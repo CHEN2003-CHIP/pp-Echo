@@ -67,8 +67,13 @@ class WriteFileTool(BaseTool):
         return ToolExecutionResult(
             tool_call_id="",
             tool_name=self.spec.name,
-            content=f"Staged write for {path}. Approve with token {payload['token']}",
-            details={"path": str(path), "token": payload["token"], "diff": diff, "staged": True, "effect": effect},
+            content=f"Write staged-only,Not write to disk yet.\n,Staged write for {path}.\n Approve with token {payload['token']}",
+            details={"path": str(path), 
+                     "token": payload["token"], 
+                     "diff": diff, "staged": True, 
+                     "workspace": self.workspace,
+                     "path": str(path),
+                     "effect": effect},
         )
 
     @staticmethod
@@ -116,8 +121,15 @@ class EditFileTool(BaseTool):
         return ToolExecutionResult(
             tool_call_id="",
             tool_name=self.spec.name,
-            content=f"Staged edit for {path}. Approve with token {payload['token']}",
-            details={"path": str(path), "replacements": replacements, "diff": diff, "token": payload["token"], "staged": True, "effect": effect},
+            content=f"Write staged-only,Not write to disk yet.\n,Staged edit for {path}. Approve with token {payload['token']}",
+            details={"path": str(path), 
+                     "replacements": replacements, 
+                     "diff": diff, 
+                     "workspace": self.workspace,
+                     "path": str(path),
+                     "token": payload["token"], 
+                     "staged": True, 
+                     "effect": effect},
         )
 
     @staticmethod
@@ -323,12 +335,20 @@ class ApprovePendingActionTool(BaseTool):
             return self._consume_success(
                 store,
                 token=arguments["token"],
-                content=f"Applied staged {action_type} {arguments['token']} to {path}",
+                content=(
+                    f"Write applied successfully.\n"
+                    f"Saved to: {path}\n"
+                    f"Token: {arguments['token']}"
+                ),
                 effect=effect,
                 details={
                     "path": str(path),
+                    "absolute_path": str(path),
+                    "workspace_root": str(self.workspace),
                     "token": arguments["token"],
                     "diff": payload["details"].get("diff", ""),
+                    "persisted": True,
+                    "lifecycle": {"state": "grant_consumed"},
                     "effect": effect,
                 },
             )

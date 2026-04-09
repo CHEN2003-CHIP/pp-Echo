@@ -277,7 +277,23 @@ class AgentRuntime:
                     assistant_text, tool_calls = self._collect_assistant_message()
                 except (LLMClientError, ValueError) as exc:
                     self.state.error_message = str(exc)
-                    yield from self._emit(self._event(ERROR, message=str(exc), is_error=True))
+                    yield from self._emit(
+                        self._event(ERROR, message=str(exc), is_error=True)
+                    )
+
+                    yield from self._emit(
+                        self._event(
+                            TURN_END,
+                            details={
+                                "turn_id": self.state.turn.turn_id,
+                                "failed": True,
+                                "failure_kind": "provider_empty_or_invalid_response",
+                            },
+                        )
+                    )
+
+                    yield from self._set_turn_phase("idle", "provider_error")
+                    keep_running = False
                     break
                 #模型这次输出的东西，无论是文字还是 tool call，都会被记进会话历史
                 assistant_parts = [TextPart(text=assistant_text)] if assistant_text else []
