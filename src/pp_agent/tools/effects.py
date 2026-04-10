@@ -70,6 +70,7 @@ def payload_digest(permission_domain: str, tool_name: str, normalized_arguments:
 
 
 def canonicalize_json_value(value: Any) -> Any:
+    """"""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, list):
