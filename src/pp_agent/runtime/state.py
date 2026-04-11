@@ -32,6 +32,7 @@ class AgentState(BaseModel):
     queued_messages: list[QueuedMessage] = Field(default_factory=list)
     compaction: CompactionState = Field(default_factory=CompactionState)
     turn: TurnSnapshot = Field(default_factory=TurnSnapshot)
+    memory_context: dict[str, Any] = Field(default_factory=dict)
     is_streaming: bool = False
     error_message: Optional[str] = None
 

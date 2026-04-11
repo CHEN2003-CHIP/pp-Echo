@@ -139,6 +139,30 @@ class SelfApproveLLMClient:
         }
 
 
+class NetworkMCPToolLLMClient:
+    def __init__(self) -> None:
+        self.model = ModelConfig()
+        self.calls = 0
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "name": "fetch.fetch_readable",
+                        "arguments_chunk": '{"url":"https://example.com/article"}',
+                    }
+                ],
+                "finish_reason": "tool_calls",
+                "raw": {},
+            }
+        else:
+            yield {"text": "queued for approval", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
 def build_agent(tmp_path: Path, llm_client, compact_after_messages: int = 8, require_plan_approval: bool = True) -> AgentSession:
     store = SessionStore(tmp_path / "sessions")
     record = store.create("system", ModelConfig())
@@ -196,6 +220,52 @@ def test_agent_runtime_rejects_sensitive_tool_without_host_approval(tmp_path: Pa
 
     assert any(event.type == "tool_error" and "host-side approval" in (event.message or "") for event in events)
     assert (tmp_path / "a.txt").exists() is False
+
+
+def test_agent_runtime_stages_network_mcp_tool_for_host_approval(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    registry = ToolRegistry(tmp_path)
+    seen: list[str] = []
+    registry.register_function_tool(
+        name="fetch.fetch_readable",
+        description="Fetch readable webpage content from a URL",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        executor=lambda _workspace, arguments: seen.append(arguments.get("url", "")) or "fetched",
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        exact_effect_mode="required",
+        requests_network_hint=True,
+    )
+    agent = AgentSession(
+        llm_client=NetworkMCPToolLLMClient(),
+        tool_registry=registry,
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=False,
+    )
+    agent.restore_session_record(record)
+
+    events = agent.prompt("fetch this page")
+
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert seen == []
+    assert not any(event.type == "tool_error" for event in events)
+    assert any(
+        event.type == "tool_result"
+        and "Staged mcp call fetch.fetch_readable for host-side approval with token" in (event.message or "")
+        for event in events
+    )
+    assert pending and pending[0]["action_type"] == "run_mcp_tool"
+    assert pending[0]["details"]["tool_name"] == "fetch.fetch_readable"
+
+    result = registry.host_execute("approve_pending_action", {"token": pending[0]["token"]})
+
+    assert seen == ["https://example.com/article"]
+    assert result.content == "fetched"
 
 
 def test_runtime_policy_details_include_shared_analysis_fields(tmp_path: Path) -> None:

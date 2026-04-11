@@ -75,7 +75,7 @@ class ComposerState:
     prompt_prefix: str = ">"
     mode_label: str = "READY"
     helper_text: str = "Agent is ready."
-    command_hint: str = "Commands: /approve /reject /new /resume <session_id>"
+    command_hint: str = "Commands: /approve /reject /tree /new /resume <session_id>"
     focus_label: str = "INPUT"
     placeholder: str = "Ask pp-Echo what to do next"
     accent_variant: Literal["ready", "waiting", "busy", "approval"] = "ready"
@@ -114,3 +114,4 @@ def append_log(
     state.ephemeral_logs.append(EphemeralLogEntry(message=message, level=level, important=important))
     if len(state.ephemeral_logs) > limit:
         del state.ephemeral_logs[:-limit]
+

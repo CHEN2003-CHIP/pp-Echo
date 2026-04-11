@@ -65,6 +65,7 @@ def test_reduce_event_tracks_approval_transitions() -> None:
     assert state.approval_state.status_label == "awaiting"
     assert state.runtime_phase.phase == "awaiting_approval"
     assert state.composer.mode_label == "APPROVAL"
+    assert "/approvals" in state.composer.command_hint
 
     state = reduce_event(
         state,
@@ -167,3 +168,11 @@ def test_reduce_event_preserves_existing_preview_when_new_details_are_empty() ->
     assert state.plan_shell_commands == ["pytest -q"]
     assert state.plan_high_risk_tools == ["edit_file"]
     assert state.plan_token_preview == "tok-1234"
+
+
+def test_ready_composer_hint_mentions_tree_command() -> None:
+    state = TuiState()
+
+    assert "/tree" in state.composer.command_hint
+
+

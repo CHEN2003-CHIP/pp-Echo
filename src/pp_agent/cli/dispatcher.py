@@ -275,16 +275,21 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
     if raw.startswith("/tree"):
         parts = raw.split()
         sort_mode = "branch"
+        view_mode = "default"
         focus_session_id = None
-        if len(parts) >= 2:
-            if parts[1] in {"branch", "updated"}:
-                sort_mode = parts[1]
-                if len(parts) >= 3:
-                    focus_session_id = parts[2]
-            elif parts[1] == "focus" and len(parts) >= 3:
-                focus_session_id = parts[2]
+        index = 1
+        while len(parts) > index:
+            current = parts[index]
+            if current in {"branch", "updated"}:
+                sort_mode = current
+            elif current in {"default", "full", "all"}:
+                view_mode = "full" if current in {"full", "all"} else "default"
+            elif current == "focus" and len(parts) >= index + 2:
+                focus_session_id = parts[index + 1]
+                index += 1
             else:
-                focus_session_id = parts[1]
+                focus_session_id = current
+            index += 1
         if focus_session_id:
             try:
                 focus_session_id, focus_turn_id = resolve_session_turn_ref(workspace, focus_session_id, current_session_id=agent.session_id)
@@ -299,6 +304,7 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
             current_agent=agent,
             focus_session_id=focus_session_id,
             sort_mode=sort_mode,
+            view_mode=view_mode,
         )
         return "handled"
     # 基于指定会话创建分支副本

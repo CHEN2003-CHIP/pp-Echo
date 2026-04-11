@@ -62,6 +62,20 @@ class TrackingMCPClient:
         return None
 
 
+class FetchLikeTrackingMCPClient(TrackingMCPClient):
+    def list_tools(self) -> list[dict]:
+        return [
+            {
+                "name": "fetch_readable",
+                "description": "Fetch readable webpage content from a URL",
+                "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}},
+            }
+        ]
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        return {"content": f"{name}:{arguments.get('url', '')}", "payload": {"echoed": arguments}, "is_error": False}
+
+
 def test_executable_extensions_register_tools_commands_and_hooks(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
     project_dir = tmp_path / ".pp-agent" / "extensions" / "demo"
@@ -172,6 +186,37 @@ def test_mcp_adapter_registers_runtime_tools_when_enabled(tmp_path: Path, monkey
     assert loaded.registry.get("mcp_adapter").status == "loaded"
     assert loaded.registry.get("mcp_adapter").loaded_tools == ["demo.echo"]
     assert "demo.notes" in loaded.registry.get("mcp_adapter").loaded_resources
+
+
+def test_fetch_like_mcp_tool_is_registered_as_stageable_network_call(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "config.json").write_text(json.dumps({"capabilities": {"mcp": {"enable": True}}}), encoding="utf-8")
+    (project_dir / "mcp.json").write_text(
+        json.dumps({"servers": [{"name": "fetch", "description": "Web fetch server", "transport": "memory"}]}),
+        encoding="utf-8",
+    )
+    settings = Settings.load(tmp_path)
+    tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    runtime_hooks = RuntimeHooks()
+
+    loaded = load_executable_extensions(
+        tmp_path,
+        settings=settings,
+        tool_registry=tool_registry,
+        runtime_hooks=runtime_hooks,
+        transport_factory=lambda _config: FetchLikeTrackingMCPClient(),
+    )
+    loaded.mcp_runtime.list_servers()
+
+    metadata = tool_registry.metadata()["fetch.fetch_readable"]
+    result = tool_registry.execute("fetch.fetch_readable", {"url": "https://example.com"})
+
+    assert metadata.exact_effect_mode == "required"
+    assert result.is_error is False
+    assert result.details["staged"] is True
+    assert result.details["approvable"] is True
 
 
 def test_reload_command_refreshes_extensions_and_runs_unload_callbacks(tmp_path: Path, monkeypatch) -> None:

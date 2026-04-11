@@ -165,6 +165,10 @@ class MCPRuntime:
             if qualified_name in self._registered_tool_names:
                 continue
             self._registered_tool_names.append(qualified_name)
+            requests_network_hint = self._looks_fetch_like(manager.server_config(server_name)) or any(
+                keyword in f"{qualified_name} {tool.description}".lower()
+                for keyword in ("fetch", "web", "url", "http", "https", "remote")
+            )
             self.tool_registry._register_dynamic_tool_internal(
                 name=qualified_name,
                 description=tool.description,
@@ -176,13 +180,10 @@ class MCPRuntime:
                 category="mcp",
                 requires_confirmation=tool.is_destructive,
                 tool_family="mcp",
-                exact_effect_mode="auto",
+                exact_effect_mode="required" if requests_network_hint or tool.is_destructive else "auto",
                 non_side_effectful=False,
                 known_safe_inspect=False,
-                requests_network_hint=self._looks_fetch_like(manager.server_config(server_name)) or any(
-                    keyword in f"{qualified_name} {tool.description}".lower()
-                    for keyword in ("fetch", "web", "url", "http", "https", "remote")
-                ),
+                requests_network_hint=requests_network_hint,
                 touches_external_hint=False,
                 legacy_hint_origin="runtime_internal",
                 runtime_risk_overrides={"destructive_hint": True} if tool.is_destructive else {},

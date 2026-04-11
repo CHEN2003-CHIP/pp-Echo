@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from pp_agent.memory.config import MemorySettings
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 
 
@@ -141,6 +142,12 @@ class CapabilitySettings(BaseModel):
     extensions: ExtensionCapabilityConfig = Field(default_factory=ExtensionCapabilityConfig)
 
 
+class StorageSettings(BaseModel):
+    sessions_dir: str = ""
+    timelines_dir: str = ""
+    checkpoints_dir: str = ""
+
+
 class Settings(BaseModel):
     """
     【AI Agent 系统顶层总配置】
@@ -154,6 +161,8 @@ class Settings(BaseModel):
     model: StoredModelConfig = Field(default_factory=StoredModelConfig)
     tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
     capabilities: CapabilitySettings = Field(default_factory=CapabilitySettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
     @classmethod
@@ -257,6 +266,20 @@ class Settings(BaseModel):
         capability_config = data.get("capabilities", {})
         if capability_config:
             self._apply_capability_config(capability_config)
+        storage_config = data.get("storage", {})
+        if storage_config:
+            self._apply_storage_config(storage_config)
+        memory_config = data.get("memory", {})
+        if memory_config:
+            self._apply_memory_config(memory_config)
+
+    def _apply_storage_config(self, storage_config: dict) -> None:
+        if "sessions_dir" in storage_config:
+            self.storage.sessions_dir = str(storage_config["sessions_dir"])
+        if "timelines_dir" in storage_config:
+            self.storage.timelines_dir = str(storage_config["timelines_dir"])
+        if "checkpoints_dir" in storage_config:
+            self.storage.checkpoints_dir = str(storage_config["checkpoints_dir"])
 
     def _apply_capability_config(self, capability_config: dict) -> None:
         """
@@ -307,3 +330,122 @@ class Settings(BaseModel):
             self.capabilities.extensions.ignored = [str(value) for value in extension_config["ignored"]]
         if "include" in extension_config:
             self.capabilities.extensions.include = [str(value) for value in extension_config["include"]]
+
+    def _apply_memory_config(self, memory_config: dict) -> None:
+        if "enable" in memory_config:
+            self.memory.enable = bool(memory_config["enable"])
+        if "backend" in memory_config:
+            self.memory.backend = str(memory_config["backend"])
+        if "sqlite_path" in memory_config:
+            self.memory.sqlite_path = str(memory_config["sqlite_path"])
+        if "chunk_target_tokens" in memory_config:
+            self.memory.chunk_target_tokens = int(memory_config["chunk_target_tokens"])
+        if "chunk_max_tokens" in memory_config:
+            self.memory.chunk_max_tokens = int(memory_config["chunk_max_tokens"])
+        if "sqlite_busy_timeout_ms" in memory_config:
+            self.memory.sqlite_busy_timeout_ms = int(memory_config["sqlite_busy_timeout_ms"])
+        if "embedding_enable" in memory_config:
+            self.memory.embedding_enable = bool(memory_config["embedding_enable"])
+        if "embedding_provider" in memory_config:
+            self.memory.embedding_provider = str(memory_config["embedding_provider"])
+        if "embedding_model" in memory_config:
+            self.memory.embedding_model = str(memory_config["embedding_model"])
+        if "dashscope_api_key_env" in memory_config:
+            self.memory.dashscope_api_key_env = str(memory_config["dashscope_api_key_env"])
+        if "embedding_batch_size" in memory_config:
+            self.memory.embedding_batch_size = int(memory_config["embedding_batch_size"])
+        if "vector_enable" in memory_config:
+            self.memory.vector_enable = bool(memory_config["vector_enable"])
+        if "vector_backend" in memory_config:
+            self.memory.vector_backend = str(memory_config["vector_backend"])
+        if "chroma_path" in memory_config:
+            self.memory.chroma_path = str(memory_config["chroma_path"])
+        if "chroma_collection" in memory_config:
+            self.memory.chroma_collection = str(memory_config["chroma_collection"])
+        if "indexing_enable" in memory_config:
+            self.memory.indexing_enable = bool(memory_config["indexing_enable"])
+        if "indexing_batch_size" in memory_config:
+            self.memory.indexing_batch_size = int(memory_config["indexing_batch_size"])
+        if "retrieval_enable" in memory_config:
+            self.memory.retrieval_enable = bool(memory_config["retrieval_enable"])
+        if "retrieval_limit" in memory_config:
+            self.memory.retrieval_limit = int(memory_config["retrieval_limit"])
+        if "retrieval_same_session_bias" in memory_config:
+            self.memory.retrieval_same_session_bias = float(memory_config["retrieval_same_session_bias"])
+        if "retrieval_max_snippets" in memory_config:
+            self.memory.retrieval_max_snippets = int(memory_config["retrieval_max_snippets"])
+        if "retrieval_max_chars" in memory_config:
+            self.memory.retrieval_max_chars = int(memory_config["retrieval_max_chars"])
+        if "hybrid_enable" in memory_config:
+            self.memory.hybrid_enable = bool(memory_config["hybrid_enable"])
+        if "hybrid_keyword_limit" in memory_config:
+            self.memory.hybrid_keyword_limit = int(memory_config["hybrid_keyword_limit"])
+        if "hybrid_vector_limit" in memory_config:
+            self.memory.hybrid_vector_limit = int(memory_config["hybrid_vector_limit"])
+        if "recent_dedup_enable" in memory_config:
+            self.memory.recent_dedup_enable = bool(memory_config["recent_dedup_enable"])
+        if "recent_dedup_use_chunk_metadata" in memory_config:
+            self.memory.recent_dedup_use_chunk_metadata = bool(memory_config["recent_dedup_use_chunk_metadata"])
+        if "snippet_categorize_enable" in memory_config:
+            self.memory.snippet_categorize_enable = bool(memory_config["snippet_categorize_enable"])
+        if "reranker_enable" in memory_config:
+            self.memory.reranker_enable = bool(memory_config["reranker_enable"])
+        if "reranker_backend" in memory_config:
+            self.memory.reranker_backend = str(memory_config["reranker_backend"])
+        if "reranker_limit" in memory_config:
+            self.memory.reranker_limit = int(memory_config["reranker_limit"])
+        if "snippet_prioritize_long_term_preferences" in memory_config:
+            self.memory.snippet_prioritize_long_term_preferences = bool(memory_config["snippet_prioritize_long_term_preferences"])
+        if "snippet_compress_error_stacks" in memory_config:
+            self.memory.snippet_compress_error_stacks = bool(memory_config["snippet_compress_error_stacks"])
+        if "snippet_path_weight_boost" in memory_config:
+            self.memory.snippet_path_weight_boost = float(memory_config["snippet_path_weight_boost"])
+
+    def session_store_dir(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_SESSIONS_DIR",
+            configured=self.storage.sessions_dir,
+            default=self.project_dir / "sessions",
+        )
+
+    def timeline_store_dir(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_TIMELINES_DIR",
+            configured=self.storage.timelines_dir,
+            default=self.project_dir / "timelines",
+        )
+
+    def checkpoint_store_dir(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_CHECKPOINTS_DIR",
+            configured=self.storage.checkpoints_dir,
+            default=self.project_dir / "checkpoints",
+        )
+
+    def history_db_path(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_MEMORY_SQLITE_PATH",
+            configured=self.memory.sqlite_path,
+            default=self.project_dir / "history.db",
+        )
+
+    def chroma_dir_path(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_CHROMA_PATH",
+            configured=self.memory.chroma_path,
+            default=self.project_dir / "chroma",
+        )
+
+    def _resolve_runtime_path(self, *, env_var: str, configured: str, default: Path) -> Path:
+        raw_value = os.getenv(env_var)
+        if raw_value and raw_value.strip():
+            return self._resolve_configured_path(raw_value)
+        if configured and configured.strip():
+            return self._resolve_configured_path(configured)
+        return default
+
+    def _resolve_configured_path(self, raw_value: str) -> Path:
+        path = Path(raw_value).expanduser()
+        if not path.is_absolute():
+            path = self.workspace / path
+        return path.resolve(strict=False)

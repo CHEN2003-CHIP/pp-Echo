@@ -103,13 +103,14 @@ if app:
     @sessions_app.command("tree")
     def sessions_tree(
         sort_mode: str = typer.Option("branch", "--sort"),
+        view_mode: str = typer.Option("default", "--view"),
         session_id: Optional[str] = typer.Option(None, "--session"),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
     ) -> None:
         """以树形结构展示会话"""
         from pp_agent.cli.commands.sessions import sessions_tree_main
 
-        sessions_tree_main(workspace, session_id=session_id, sort_mode=sort_mode)
+        sessions_tree_main(workspace, session_id=session_id, sort_mode=sort_mode, view_mode=view_mode)
 
 
     @sessions_app.command("fork")
@@ -396,6 +397,7 @@ def main() -> None:
     sessions_list_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     sessions_tree_parser = sessions_subparsers.add_parser("tree")
     sessions_tree_parser.add_argument("--sort", default="branch")
+    sessions_tree_parser.add_argument("--view", default="default")
     sessions_tree_parser.add_argument("--session", default=None)
     sessions_tree_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     for name in ["fork", "branch"]:
@@ -514,7 +516,7 @@ def main() -> None:
     elif command == "sessions" and args.sessions_command == "tree":
         from pp_agent.cli.commands.sessions import sessions_tree_main
 
-        sessions_tree_main(Path(args.workspace), session_id=args.session, sort_mode=args.sort)
+        sessions_tree_main(Path(args.workspace), session_id=args.session, sort_mode=args.sort, view_mode=args.view)
     elif command == "sessions" and args.sessions_command in {"fork", "branch"}:
         from pp_agent.cli.commands.sessions import sessions_fork_main
 

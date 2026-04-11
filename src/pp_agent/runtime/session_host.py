@@ -87,6 +87,7 @@ class SessionTreeView(BaseModel):
     turn_focus: Optional[dict[str, object]] = None
     entries: list[SessionTreeEntry] = Field(default_factory=list)
     sort_mode: str = "branch"
+    view_mode: str = "default"
     session_id: Optional[str] = None
 
 
@@ -274,6 +275,7 @@ class SessionHost:
         session_id: Optional[str] = None,
         *,
         sort_mode: str = "branch",
+        view_mode: str = "default",
         lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
     ) -> SessionTreeView:
         """获取当前会话树的视图数据，支持指定排序方式，并通过生命周期事件通知订阅者"""
@@ -283,9 +285,19 @@ class SessionHost:
         if sort_mode == "updated":
             entries = sorted(entries, key=lambda item: item.updated_at, reverse=True)
         target_session_id = session_id or (entries[0].id if entries else None)
-        self._emit(SESSION_BEFORE_TREE, session_id=target_session_id or "", subscribers=lifecycle_subscribers, details={"view": "tree", "sort_mode": sort_mode})
+        self._emit(
+            SESSION_BEFORE_TREE,
+            session_id=target_session_id or "",
+            subscribers=lifecycle_subscribers,
+            details={"view": "tree", "sort_mode": sort_mode, "view_mode": view_mode},
+        )
         description = store.describe(target_session_id) if target_session_id else {"current": None, "parent": None, "children": [], "turns": [], "turn_focus": None}
-        self._emit(SESSION_TREE_VIEWED, session_id=target_session_id or "", subscribers=lifecycle_subscribers, details={"view": "tree", "sort_mode": sort_mode})
+        self._emit(
+            SESSION_TREE_VIEWED,
+            session_id=target_session_id or "",
+            subscribers=lifecycle_subscribers,
+            details={"view": "tree", "sort_mode": sort_mode, "view_mode": view_mode},
+        )
         
         
         return SessionTreeView(
@@ -296,6 +308,7 @@ class SessionHost:
             turn_focus=description.get("turn_focus"),
             entries=entries,
             sort_mode=sort_mode,
+            view_mode=view_mode,
             session_id=target_session_id,
         )
 

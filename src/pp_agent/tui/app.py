@@ -364,12 +364,18 @@ def _render_transcript(state: TuiState) -> str:
 def _render_approval(state: TuiState) -> str:
     if state.approval_state.awaiting_approval:
         token = state.approval_state.token_preview or "pending"
-        return (
-            "pending\n"
-            f"token   {token}\n\n"
-            "approve\n"
-            "reject"
-        )
+        lines = ["approval required", f"token      {token}"]
+        if state.plan_summary:
+            lines.extend(["", "summary"])
+            lines.extend(f"- {item}" for item in state.plan_summary[:4])
+        if state.plan_files:
+            lines.append(f"files      {', '.join(state.plan_files[:4])}")
+        if state.plan_shell_commands:
+            lines.append(f"shell      {', '.join(state.plan_shell_commands[:3])}")
+        if state.plan_high_risk_tools:
+            lines.append(f"high-risk  {', '.join(state.plan_high_risk_tools[:4])}")
+        lines.extend(["", "actions", "approve", "reject"])
+        return "\n".join(lines)
     return "clear"
 
 
@@ -404,6 +410,9 @@ def _render_plan(state: TuiState) -> str:
 
     if state.plan_token_preview:
         lines.extend(["", f"token      {state.plan_token_preview}"])
+
+    if state.approval_state.awaiting_approval:
+        lines.extend(["", "actions", "/approve <token>", "/reject <token>"])
 
     lines.extend(
         [
@@ -463,3 +472,6 @@ def _build_style() -> Style:
 
 def run_tui_app(workspace: Path, session_id: Optional[str] = None) -> None:
     PromptToolkitTuiApp(workspace, session_id=session_id).run()
+
+
+

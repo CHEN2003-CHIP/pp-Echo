@@ -36,6 +36,16 @@ def print_tree_lines(lines: list[tuple[str, Optional[str]]]) -> None:
             console.print(line)
 
 
+def _lineage_ids(entry_index: dict[str, SessionTreeEntry], session_id: Optional[str]) -> list[str]:
+    lineage: list[str] = []
+    current_id = session_id
+    while current_id:
+        lineage.append(current_id)
+        parent = entry_index.get(current_id)
+        current_id = parent.parent_id if parent is not None else None
+    return list(reversed(lineage))
+
+
 def render_tree_entry_preview(label: str, entry: Optional[dict]) -> list[str]:
     if not entry:
         return [f"{label}: none"]
@@ -149,6 +159,7 @@ def render_session_tree(
     current_agent: Optional[AgentRuntime] = None,
     focus_session_id: Optional[str] = None,
     sort_mode: str = "branch",
+    view_mode: str = "default",
 ) -> None:
     store = session_store_for(workspace)
     entries = store.tree()
@@ -161,8 +172,24 @@ def render_session_tree(
 
     entry_index = {entry.id: entry for entry in entries}
     active_ids = _active_branch_ids(entry_index, current_session_id)
-    lines: list[tuple[str, Optional[str]]] = [("Session Tree", None), (f"View: {sort_mode}", None), ("", None), ("Recent Nodes", None)]
-    for entry in sorted(entries, key=lambda item: item.updated_at, reverse=True)[:8]:
+    focus_id = focus_session_id or current_session_id or (entries[0].id if entries else None)
+    focus_turn_id: Optional[str] = None
+    if focus_id and "@" in focus_id:
+        focus_id, focus_turn_id = focus_id.split("@", 1)
+
+    lines: list[tuple[str, Optional[str]]] = [("Session Tree", None), (f"View: {view_mode} / {sort_mode}", None), ("", None), ("Active Lineage", None)]
+    lineage = _lineage_ids(entry_index, focus_id)
+    if not lineage:
+        lines.append(("No active lineage.", None))
+    else:
+        for lineage_id in lineage:
+            entry = entry_index.get(lineage_id)
+            if entry is None:
+                continue
+            lines.append(_tree_line(entry, current_session_id, active_ids))
+
+    lines.extend([("", None), ("Recent Sessions", None)])
+    for entry in sorted(entries, key=lambda item: item.updated_at, reverse=True)[:6]:
         lines.append(_tree_line(entry, current_session_id, active_ids))
 
     lines.extend([("", None), ("Branch View", None)])
@@ -172,9 +199,15 @@ def render_session_tree(
     for sibling_list in children.values():
         sibling_list.sort(key=lambda item: (item.updated_at, item.id))
 
+    hidden_count = 0
+
     def walk(parent_id: Optional[str], prefix: str = "") -> None:
+        nonlocal hidden_count
         nodes = children.get(parent_id, [])
         for index, entry in enumerate(nodes):
+            if view_mode != "full" and entry.id not in active_ids:
+                hidden_count += 1
+                continue
             branch = "\\-" if index == len(nodes) - 1 else "|-"
             style = tree_style_for(entry.id, current_session_id, active_ids)
             pending = " ?plan" if entry.pending_plan_token else ""
@@ -186,13 +219,11 @@ def render_session_tree(
             walk(entry.id, prefix + ("  " if index == len(nodes) - 1 else "| "))
 
     walk(None)
+    if view_mode != "full" and hidden_count:
+        lines.append((f"... {hidden_count} older branch session(s) folded. Use /tree full to expand all branches.", None))
     if current_agent is not None and current_agent.session_id not in entry_index:
         lines.append(("\\- >>* unsaved current session", tree_style_for(current_agent.session_id, current_session_id, {current_agent.session_id})))
 
-    focus_id = focus_session_id or current_session_id or (entries[0].id if entries else None)
-    focus_turn_id: Optional[str] = None
-    if focus_id and "@" in focus_id:
-        focus_id, focus_turn_id = focus_id.split("@", 1)
     if focus_id:
         try:
             description = store.describe(focus_id)
@@ -241,7 +272,9 @@ def render_session_tree(
     turn_hint = f"{focus_short}@{short_turn(focus_turn_id)}" if focus_id and focus_turn_id else None
     lines.append(("", None))
     lines.append(("Branch Navigation", None))
+    lines.append(("  Default tree view shows the active lineage plus recent sessions.", None))
     lines.append(("  Active branch lines are green when rich output is available.", None))
+    lines.append(("  /tree full                    expand all branches", None))
     lines.append(("  /tree updated                 switch to the recent-first view", None))
     lines.append((f"  /tree focus {focus_short}           move the tree focus without changing chat", None))
     lines.append((f"  /resume {focus_short}               switch chat to the focused session head", None))

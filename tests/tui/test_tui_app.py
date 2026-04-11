@@ -4,7 +4,7 @@ from pathlib import Path
 
 from prompt_toolkit.clipboard import ClipboardData
 
-from pp_agent.tui.app import PromptToolkitTuiApp, _render_plan
+from pp_agent.tui.app import PromptToolkitTuiApp, _render_approval, _render_plan
 from pp_agent.tui.state import TuiState
 
 
@@ -93,3 +93,22 @@ def test_tui_copy_and_paste_helpers() -> None:
     app._paste_clipboard(event)
     assert layout.focused is app.input_area
     assert buffer.pasted == ["pasted text"]
+
+
+def test_render_approval_shows_structured_plan_details() -> None:
+    state = TuiState()
+    state.approval_state.awaiting_approval = True
+    state.approval_state.token_preview = "tok-1234"
+    state.plan_summary = ["Edit README.md [edit_file]"]
+    state.plan_files = ["README.md"]
+    state.plan_shell_commands = ["pytest -q"]
+    state.plan_high_risk_tools = ["edit_file"]
+
+    rendered = _render_plan(state)
+    approval = _render_approval(state)
+
+    assert "actions" in rendered
+    assert "/approve <token>" in rendered
+    assert "approval required" in approval
+    assert "files      README.md" in approval
+    assert "high-risk  edit_file" in approval

@@ -35,21 +35,43 @@ def approval_preview(item: dict, limit: int = 8) -> str:
     return "\n".join(lines[:limit]) if lines else "No diff preview."
 
 
+def approval_actions(item: dict) -> list[str]:
+    token = item["token"]
+    return [f"/approvals show {token}", f"/approve {token}", f"/reject {token}"]
+
+
 def render_approval_panel(workspace: Path) -> None:
     summary = approvals_summary_payload(workspace)
     items = summary["items"]
-    lines = ["Approvals Queue", f"Total: {summary['count']}", f"By type: {summary['by_type']}"]
+    lines = ["== Approvals Queue ==", f"total     {summary['count']}", f"by_type   {summary['by_type']}"]
     if not items:
-        lines.append("No pending actions.")
+        lines.extend(["", "No pending actions."])
         console.print("\n".join(lines))
         return
     for item in items[:5]:
+        details = item.get("details", {}) or {}
         lines.append("")
-        lines.append(f"[{short_token(item['token'])}] {item['action_type']} [{lifecycle_label(item)}]")
-        lines.append(f"Target: {compact_text(action_target(item), 110)}")
-        lines.append(f"Lifecycle: {lifecycle_label(item)}")
-        lines.append("Preview:")
-        lines.append(approval_preview(item, limit=6))
+        lines.append(f"-- {item['action_type']} [{lifecycle_label(item)}] --")
+        lines.append(f"token     {item['token']}")
+        lines.append(f"target    {compact_text(action_target(item), 110)}")
+        if item["action_type"] == "planner_approval":
+            summary_lines = details.get("summary") or []
+            files = details.get("files_touched_guess") or []
+            shell = details.get("shell_commands_guess") or []
+            high_risk = details.get("high_risk_tools") or []
+            if summary_lines:
+                lines.append("summary")
+                lines.extend(f"- {line}" for line in summary_lines[:4])
+            if files:
+                lines.append(f"files     {', '.join(files[:4])}")
+            if shell:
+                lines.append(f"shell     {', '.join(shell[:3])}")
+            if high_risk:
+                lines.append(f"high_risk {', '.join(high_risk[:4])}")
+        else:
+            lines.append("preview")
+            lines.append(approval_preview(item, limit=6))
+        lines.append(f"actions   {' | '.join(approval_actions(item))}")
     if len(items) > 5:
         lines.append("")
         lines.append(f"... {len(items) - 5} more pending actions")

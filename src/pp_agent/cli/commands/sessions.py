@@ -87,9 +87,20 @@ def sessions_list_main(workspace: Path) -> None:
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def sessions_tree_main(workspace: Path, session_id: Optional[str] = None, sort_mode: str = "branch") -> None:
-    sdk.get_session_tree(workspace, session_id=session_id, sort_mode=sort_mode)
-    render_session_tree(workspace, current_session_id=session_id, focus_session_id=session_id, sort_mode=sort_mode)
+def sessions_tree_main(
+    workspace: Path,
+    session_id: Optional[str] = None,
+    sort_mode: str = "branch",
+    view_mode: str = "default",
+) -> None:
+    sdk.get_session_tree(workspace, session_id=session_id, sort_mode=sort_mode, view_mode=view_mode)
+    render_session_tree(
+        workspace,
+        current_session_id=session_id,
+        focus_session_id=session_id,
+        sort_mode=sort_mode,
+        view_mode=view_mode,
+    )
 
 
 def sessions_fork_main(workspace: Path, session_id: str) -> None:

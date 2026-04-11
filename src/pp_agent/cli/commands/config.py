@@ -11,7 +11,11 @@ def config_show_main(workspace: Path) -> None:
     settings = load_settings(workspace)
     payload = {
         "workspace": str(settings.workspace),
+        "session_dir": str(settings.session_store_dir()),
         "timeline_dir": str(timeline_store_for(workspace).root),
+        "checkpoint_dir": str(settings.checkpoint_store_dir()),
+        "history_db_path": str(settings.history_db_path()),
+        "chroma_dir": str(settings.chroma_dir_path()),
         "global_dir": str(settings.global_dir),
         "project_dir": str(settings.project_dir),
         "base_url": settings.provider.base_url,
@@ -30,6 +34,7 @@ def config_show_main(workspace: Path) -> None:
             "mcp": settings.capabilities.mcp.model_dump(mode="json"),
             "extensions": settings.capabilities.extensions.model_dump(mode="json"),
         },
+        "storage": settings.storage.model_dump(mode="json"),
     }
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 

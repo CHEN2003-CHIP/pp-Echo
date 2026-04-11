@@ -1,13 +1,16 @@
 ﻿from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Optional
 
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
+from pp_agent.memory.provider import MemoryProvider, NoopMemoryProvider
 from pp_agent.runtime.compaction import ConversationCompactor
 from pp_agent.runtime.emitter import LifecycleEmitter
 from pp_agent.runtime.turn_loop import TurnController, TurnDecision
@@ -61,6 +64,14 @@ from pp_agent.tools.registry import ToolRegistry
 
 Subscriber = Callable[[AgentEvent], None]
 ConfirmCallback = Callable[[str, dict], bool]
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _TurnPersistContext:
+    new_message_start_index: int
+    turn_id: str
+    turn_started_at: float
 
 
 class AgentRuntime:
@@ -91,6 +102,7 @@ class AgentRuntime:
         require_plan_approval: bool = True,
         runtime_hooks: Optional[RuntimeHooks] = None,
         timeline_store: Optional[TimelineStore] = None,
+        memory_provider: Optional[MemoryProvider] = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -133,6 +145,7 @@ class AgentRuntime:
         self._runtime_hooks = self._compose_runtime_hooks(runtime_hooks)
         self.lifecycle = LifecycleEmitter()
         self._wire_lifecycle()
+        self.memory_provider = memory_provider or NoopMemoryProvider()
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -183,7 +196,12 @@ class AgentRuntime:
         """
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
         self.state.messages.append(user_message)
-        return self._collect_runtime_events(self._run_loop())
+        context = _TurnPersistContext(
+            new_message_start_index=len(self.state.messages) - 1,
+            turn_id=f"turn-{self.state.turn.turn_id + 1}",
+            turn_started_at=user_message.timestamp,
+        )
+        return self._collect_runtime_events(self._run_loop(turn_persist_context=context))
 
     def continue_(self) -> list[AgentEvent]:
         """如果当前没有挂起的 tool calls,并且没有挂起的 planner approval token,那才允许从 queued_messages 里取下一条消息出来；"""
@@ -197,7 +215,12 @@ class AgentRuntime:
         """把之前排队的后续消息正式送进会话，然后从这条新消息开始再跑一轮。"""
         if decision.action == "inject_message" and decision.queued_message is not None:
             return self._collect_runtime_events(self._inject_controller_message(decision, phase="continue"))
-        return self._collect_runtime_events(self._run_loop())
+        context = _TurnPersistContext(
+            new_message_start_index=len(self.state.messages),
+            turn_id=f"turn-{self.state.turn.turn_id + 1}",
+            turn_started_at=time.time(),
+        )
+        return self._collect_runtime_events(self._run_loop(turn_persist_context=context))
 
     def enqueue_message(self, text: str, delivery: str = "follow_up") -> QueuedMessage:
         """把一条消息先存进 runtime 的排队区，保存状态，并通知外界‘队列有新消息了"""
@@ -223,7 +246,12 @@ class AgentRuntime:
         self._pending_action_store().remove(token)
         self._approved_pending_plan = True
         self._queue_lifecycle_event(self._event(PLANNER_GATE_APPROVED, message=f"Approved planner gate {token}", details={"token": token}))
-        return self._collect_runtime_events(self._run_loop())
+        context = _TurnPersistContext(
+            new_message_start_index=len(self.state.messages),
+            turn_id=f"turn-{self.state.turn.turn_id + 1}",
+            turn_started_at=time.time(),
+        )
+        return self._collect_runtime_events(self._run_loop(turn_persist_context=context))
 
     def reject_pending_plan(self, token: str) -> None:
         if token != self.state.pending_plan_token:
@@ -241,7 +269,7 @@ class AgentRuntime:
             self._persist()
         return events
 
-    def _run_loop(self) -> Iterator[AgentEvent]:
+    def _run_loop(self, *, turn_persist_context: _TurnPersistContext) -> Iterator[AgentEvent]:
         """开始一轮 → 看有没有待审批计划 → 没有就先问模型 → 有工具就执行工具 → 处理成功/失败 → 必要时压缩上下文 → 结束这一轮"""
         self.state.is_streaming = True
         self.state.error_message = None
@@ -252,6 +280,7 @@ class AgentRuntime:
         yield from self._emit(self._event(AGENT_START, details={}))
 
         keep_running = True
+        persist_end_index = turn_persist_context.new_message_start_index
         while keep_running:
             #开始新 turn，标记当前阶段
             self.state.turn.turn_id += 1
@@ -337,6 +366,7 @@ class AgentRuntime:
                     end_decision = self.turn_controller.on_turn_end()
                     yield from self._emit(self._event(TURN_END, details={"turn_id": self.state.turn.turn_id}))
                     yield from self._set_turn_phase(end_decision.phase, end_decision.reason)
+                    persist_end_index = len(self.state.messages)
                     keep_running = False
                     break
             #如果模型这次没有工具调用
@@ -349,9 +379,11 @@ class AgentRuntime:
                 yield from self._set_turn_phase(decision.phase, decision.reason)
                 #如果有排队消息要注入，就注入
                 if decision.action == "inject_message" and decision.queued_message is not None:
+                    persist_end_index = len(self.state.messages)
                     yield from self._inject_controller_message(decision, phase="post_assistant")
                     keep_running = False
                     break
+                persist_end_index = len(self.state.messages)
                 keep_running = False
                 break
             #如果有工具调用，就进入工具执行阶段
@@ -445,14 +477,31 @@ class AgentRuntime:
             )
             yield from self._set_turn_phase(decision.phase, decision.reason)
             if decision.action == "inject_message" and decision.queued_message is not None:
+                persist_end_index = len(self.state.messages)
                 yield from self._inject_controller_message(decision, phase="post_turn")
                 keep_running = False
                 break
             if decision.action == "stop":
+                persist_end_index = len(self.state.messages)
                 keep_running = False
 
         self.state.is_streaming = False
-        self._persist()
+        turn_finished_at = time.time()
+        new_messages = [
+            message.model_copy(deep=True)
+            for message in self.state.messages[turn_persist_context.new_message_start_index:persist_end_index]
+        ]
+        self._persist(
+            dual_write_turn_id=turn_persist_context.turn_id,
+            new_messages=new_messages,
+            memory_metadata={
+                "source": "runtime_dual_write",
+                "workspace": str(self.tool_registry.workspace),
+                "session_head_id": self._session_record.active_head_id if self._session_record is not None else None,
+                "turn_started_at": turn_persist_context.turn_started_at,
+                "turn_finished_at": turn_finished_at,
+            },
+        )
         #这一整轮正式结束，保存状态，然后广播结束事件
         yield from self._emit(self._event(AGENT_END, details={}))
 
@@ -785,7 +834,8 @@ class AgentRuntime:
         queued = decision.queued_message
         if queued is None:
             return
-        self.state.messages.append(ChatMessage(role="user", content=[TextPart(text=queued.text)], timestamp=time.time()))
+        injected_message = ChatMessage(role="user", content=[TextPart(text=queued.text)], timestamp=time.time())
+        self.state.messages.append(injected_message)
         yield from self._emit(
             self._event(
                 QUEUE_DEQUEUED,
@@ -800,9 +850,20 @@ class AgentRuntime:
                 details={"action": "dequeued", "delivery": queued.delivery, "queued_id": queued.id, "text": queued.text, "controller_phase": phase, "reason": decision.reason, "queue_action": "dequeued", "queue_delivery": queued.delivery},
             )
         )
-        yield from self._run_loop()
+        context = _TurnPersistContext(
+            new_message_start_index=len(self.state.messages) - 1,
+            turn_id=f"turn-{self.state.turn.turn_id + 1}",
+            turn_started_at=injected_message.timestamp,
+        )
+        yield from self._run_loop(turn_persist_context=context)
 
-    def _persist(self) -> None:
+    def _persist(
+        self,
+        *,
+        dual_write_turn_id: Optional[str] = None,
+        new_messages: Optional[list[ChatMessage]] = None,
+        memory_metadata: Optional[dict[str, object]] = None,
+    ) -> None:
         """将内存中的所有实时状态永久保存到存储层"""
         ## 1. 如果本地没有缓存会话记录 → 加载或新建
         if self._session_record is None:
@@ -865,6 +926,28 @@ class AgentRuntime:
         self._base_head_id = active_head.parent_id if active_head is not None and active_head.status == "draft" else record.active_head_id
         # 10. 更新基础分支消息
         self._base_branch_messages = self.session_store.branch_messages(record, self._base_head_id)
+        if dual_write_turn_id and new_messages is not None and self.memory_provider.is_enabled():
+            try:
+                self.memory_provider.on_turn_persisted(
+                    session_id=self.session_id,
+                    turn_id=dual_write_turn_id,
+                    new_messages=new_messages,
+                    metadata={
+                        "source": "runtime_dual_write",
+                        "workspace": str(self.tool_registry.workspace),
+                        "session_head_id": record.active_head_id,
+                        "turn_started_at": None,
+                        "turn_finished_at": time.time(),
+                        **(memory_metadata or {}),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Memory dual write failed for session=%s turn=%s; falling back to primary storage only: %s",
+                    self.session_id,
+                    dual_write_turn_id,
+                    exc,
+                )
 
     def _session_exists(self) -> bool:
         try:
@@ -918,6 +1001,7 @@ class AgentRuntime:
         """Agent 工具执行前的「最终安全校验钩子」"""
         spec = registry.get_spec(call.name)
         decision = registry.evaluate_call(call.name, call.arguments)
+        metadata = registry.metadata().get(call.name)
         if decision.action == "deny":
             return BeforeToolCallDecision(
                 action="reject",
@@ -925,6 +1009,22 @@ class AgentRuntime:
                 details={"policy_action": decision.action, "permission_domain": decision.permission_domain, "policy_reason": decision.reason, **(decision.details or {})},
             )
         if decision.action == "ask" and not self._approved_pending_plan:
+            if (
+                metadata is not None
+                and metadata.tool_family in {"extension", "mcp"}
+                and metadata.exact_effect_mode == "required"
+            ):
+                return BeforeToolCallDecision(
+                    action="allow",
+                    message=decision.reason,
+                    details={
+                        "policy_action": decision.action,
+                        "permission_domain": decision.permission_domain,
+                        "policy_reason": decision.reason,
+                        "approval_expected": True,
+                        **(decision.details or {}),
+                    },
+                )
             return BeforeToolCallDecision(
                 action="reject",
                 message=decision.reason,

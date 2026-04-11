@@ -1,5 +1,16 @@
-﻿from pp_agent.storage.sessions import SessionRecord, SessionStore
-from pp_agent.storage.settings import Settings
-from pp_agent.storage.timeline import TimelineEntry, TimelineStore
+from importlib import import_module
 
-__all__ = ["SessionRecord", "SessionStore", "Settings", "TimelineEntry", "TimelineStore"]
+__all__ = ["CapabilitySettings", "SessionRecord", "SessionStore", "Settings", "TimelineEntry", "TimelineStore", "ToolPolicyConfig"]
+
+
+def __getattr__(name: str):
+    if name in {"CapabilitySettings", "Settings", "ToolPolicyConfig"}:
+        module = import_module("pp_agent.storage.settings")
+        return getattr(module, name)
+    if name in {"SessionRecord", "SessionStore"}:
+        module = import_module("pp_agent.storage.sessions")
+        return getattr(module, name)
+    if name in {"TimelineEntry", "TimelineStore"}:
+        module = import_module("pp_agent.storage.timeline")
+        return getattr(module, name)
+    raise AttributeError(name)

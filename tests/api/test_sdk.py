@@ -39,8 +39,12 @@ class FakeHost:
     def list_sessions(self, workspace: Path):
         return []
 
-    def get_tree(self, workspace: Path, session_id=None, *, sort_mode="branch", lifecycle_subscribers=None):
-        return type("View", (), {"model_dump": lambda self, mode="json": {"session_id": session_id, "sort_mode": sort_mode}})()
+    def get_tree(self, workspace: Path, session_id=None, *, sort_mode="branch", view_mode="default", lifecycle_subscribers=None):
+        return type(
+            "View",
+            (),
+            {"model_dump": lambda self, mode="json": {"session_id": session_id, "sort_mode": sort_mode, "view_mode": view_mode}},
+        )()
 
     def fork_session(self, workspace: Path, session_id: str, *, head_id=None, lifecycle_subscribers=None):
         return type("Result", (), {"model_dump": lambda self, mode="json": {"session_id": "forked"}})()

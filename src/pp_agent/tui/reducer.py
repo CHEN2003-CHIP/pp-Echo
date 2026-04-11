@@ -178,7 +178,7 @@ def _composer_state(state: TuiState) -> ComposerState:
             prompt_prefix="approve>",
             mode_label="APPROVAL",
             helper_text="Approval pending. Ctrl+S submits input; Ctrl+V pastes text; Ctrl+C copies selection.",
-            command_hint="Type 'approve' or 'reject' | Ctrl+S submit | /new | /resume <session_id>",
+            command_hint="Approve or reject | Ctrl+S submit | /approvals | /tree | /new | /resume <session_id>",
             focus_label="ACTION",
             placeholder="Approve, reject, or wait for the gate to clear",
             accent_variant="approval",
@@ -189,7 +189,7 @@ def _composer_state(state: TuiState) -> ComposerState:
             prompt_prefix="queue>",
             mode_label="BUSY",
             helper_text="Agent is working. Enter adds a new line; Ctrl+S submits; Ctrl+V pastes text.",
-            command_hint="Type follow-up guidance | Ctrl+S submit | /new | /resume <session_id>",
+            command_hint="Type follow-up guidance | Ctrl+S submit | /tree | /new | /resume <session_id>",
             focus_label="QUEUE",
             placeholder="Add a follow-up while the agent is working",
             accent_variant="busy",
@@ -210,7 +210,7 @@ def _composer_state(state: TuiState) -> ComposerState:
         prompt_prefix=">",
         mode_label="READY",
         helper_text="Enter adds a new line; Ctrl+S submits; Ctrl+V pastes; Ctrl+C copies selection.",
-        command_hint="Commands: /approve /reject /new /resume <session_id> | Ctrl+S submit",
+        command_hint="Commands: /approve /reject /tree /new /resume <session_id> | Ctrl+S submit",
         focus_label="INPUT",
         placeholder="Ask pp-Echo what to do next",
         accent_variant="ready",
@@ -352,4 +352,5 @@ def _commit_active_assistant_message(state: TuiState) -> None:
         )
     )
     state.active_assistant_message = ActiveAssistantMessage()
+
 

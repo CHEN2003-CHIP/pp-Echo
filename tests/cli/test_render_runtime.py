@@ -117,11 +117,26 @@ def test_chat_renderer_prints_completion_marker_after_approval_turn(monkeypatch)
 
     renderer.render(_event("turn_start", details={"turn_id": 1}))
     renderer.render(_event("planner_start"))
-    renderer.render(_event("planner_end", details={"requires_approval": True, "token": "tok-1"}))
+    renderer.render(
+        _event(
+            "planner_end",
+            details={
+                "requires_approval": True,
+                "token": "tok-1",
+                "summary": ["Edit README.md [edit_file]"],
+                "files_touched_guess": ["README.md"],
+                "shell_commands_guess": ["pytest -q"],
+                "high_risk_tools": ["edit_file"],
+            },
+        )
+    )
     renderer.render(_event("turn_end", details={"turn_id": 1}))
 
     text = fake_console.rendered_text()
-    assert "Planner paused. Approve with /approve tok-1 or reject with /reject tok-1\n" in text
+    assert "== Approval Required ==" in text
+    assert "token      tok-1" in text
+    assert "actions    /approve tok-1 | /reject tok-1" in text
+    assert "- Edit README.md [edit_file]" in text
     assert text.endswith(TURN_COMPLETE_MARKER + "\n")
 
 
@@ -138,3 +153,22 @@ def test_chat_renderer_does_not_replay_previous_turn_assistant_text(monkeypatch)
     text = fake_console.rendered_text()
     assert "Applied staged edit_file token to hello.py" not in text
     assert text == EMPTY_TURN_FALLBACK + "\n" + TURN_COMPLETE_MARKER + "\n"
+
+
+def test_chat_renderer_formats_tool_events_as_structured_blocks(monkeypatch) -> None:
+    fake_console = FakeConsole()
+    monkeypatch.setattr(runtime_render, "console", fake_console)
+    agent = SimpleNamespace(state=SimpleNamespace(messages=[]))
+    renderer = ChatEventRenderer(agent)
+
+    renderer.render(_event("turn_start", details={"turn_id": 1}))
+    renderer.render(_event("tool_start", tool_name="list_files", tool_args={"path": "."}))
+    renderer.render(_event("tool_end", tool_name="list_files", message="README.md", is_error=False))
+
+    text = fake_console.rendered_text()
+    assert "== Tool Start ==" in text
+    assert "tool       list_files" in text
+    assert "== Tool Result ==" in text
+    assert "result     README.md" in text
+
+

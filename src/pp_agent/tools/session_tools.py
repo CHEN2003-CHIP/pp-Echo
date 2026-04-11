@@ -119,17 +119,7 @@ def _resolve_session_ref(workspace: Path, session_ref: str, *, current_session_i
 
 def _session_store_for(workspace: Path) -> SessionStore:
     settings = Settings.load(workspace)
-    candidates = [settings.global_dir / "sessions", settings.project_dir / "global" / "sessions"]
-    last_error: Optional[Exception] = None
-    for candidate in candidates:
-        try:
-            return SessionStore(candidate)
-        except PermissionError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise last_error
-    raise PermissionError("Unable to create a writable session tree store")
+    return SessionStore(settings.session_store_dir())
 
 
 def _preview_rewind(workspace: Any, session_id: str, **kwargs: Any) -> dict[str, Any]:

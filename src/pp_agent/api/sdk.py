@@ -135,6 +135,7 @@ def get_session_tree(
     session_id: Optional[str] = None,
     *,
     sort_mode: str = "branch",
+    view_mode: str = "default",
     lifecycle_subscribers: Optional[list[Subscriber]] = None,
     host: Optional[SessionHost] = None,
 ) -> dict:
@@ -142,6 +143,7 @@ def get_session_tree(
         workspace,
         session_id=session_id,
         sort_mode=sort_mode,
+        view_mode=view_mode,
         lifecycle_subscribers=lifecycle_subscribers,
     )
     return view.model_dump(mode="json")

@@ -31,7 +31,7 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
             "event_count": len(events),
             "result": "approved_and_executed",
         }
-    registry = create_tool_registry(workspace)
+    registry = create_tool_registry(workspace, include_dynamic_extensions=True)
     result = registry.host_execute("approve_pending_action", {"token": token})
     if render:
         console.print(result.content)
@@ -52,7 +52,7 @@ def reject_pending_action(workspace: Path, token: str, render: bool = True) -> d
         if render:
             console.print(message)
         return {"token": token, "action_type": payload["action_type"], "result": message}
-    registry = create_tool_registry(workspace)
+    registry = create_tool_registry(workspace, include_dynamic_extensions=True)
     result = registry.host_execute("reject_pending_action", {"token": token})
     if render:
         console.print(result.content)
@@ -69,7 +69,7 @@ def approvals_summary_main(workspace: Path) -> None:
 
 
 def approvals_show_main(workspace: Path, token: str) -> None:
-    registry = create_tool_registry(workspace)
+    registry = create_tool_registry(workspace, include_dynamic_extensions=True)
     result = registry.host_execute("preview_pending_action", {"token": token})
     console.print(f"Token: {token}")
     console.print(result.content)

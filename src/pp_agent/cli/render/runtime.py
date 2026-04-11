@@ -40,6 +40,16 @@ PLAN_MARKERS = {
 }
 
 
+def render_kv_block(title: str, rows: list[tuple[str, str]], bullets: Optional[list[str]] = None) -> None:
+    console.print(f"== {title} ==")
+    for key, value in rows:
+        if value:
+            console.print(f"{key:<10} {value}")
+    if bullets:
+        for bullet in bullets:
+            console.print(f"- {bullet}")
+
+
 def compact_text(value: str, limit: int = 90) -> str:
     text = value.replace("\r", " ").replace("\n", " ").strip()
     if len(text) <= limit:
@@ -51,6 +61,16 @@ def format_plan_step(step) -> str:
     tool_part = f" [{step.tool_name}]" if step.tool_name else ""
     marker = PLAN_MARKERS.get(step.status, "[-]")
     return f"{marker} {step.title}{tool_part}"
+
+
+def summarize_tool_args(arguments: object, limit: int = 120) -> str:
+    if not arguments:
+        return "{}"
+    try:
+        payload = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        payload = str(arguments)
+    return compact_text(payload, limit=limit)
 
 
 def format_runtime_status(snapshot) -> str:
@@ -87,32 +107,65 @@ class ChatEventRenderer:
             self._visible_output = True
             return
         if event.type == "planner_start":
-            console.print("\n=== Planner ===")
-            console.print("Planned steps:")
+            console.print()
+            render_kv_block("Plan", [("status", "planning"), ("next", "Waiting for planner steps")])
             self._visible_output = True
             return
         if event.type == "planner_step" and event.plan_step is not None:
-            if event.plan_step.status == "pending":
-                console.print(f"  {format_plan_step(event.plan_step)}", markup=False)
-            else:
-                console.print(f"Planner update: {format_plan_step(event.plan_step)}", markup=False)
+            render_kv_block(
+                "Plan Step",
+                [
+                    ("status", event.plan_step.status),
+                    ("step", event.plan_step.title),
+                    ("tool", event.plan_step.tool_name or "-"),
+                ],
+            )
             self._visible_output = True
             return
         if event.type == "planner_end":
             token = event.details.get("token")
             if event.details.get("requires_approval"):
-                console.print(f"Planner paused. Approve with /approve {token} or reject with /reject {token}")
+                summary = [str(item) for item in event.details.get("summary", []) if str(item).strip()]
+                files = [str(item) for item in event.details.get("files_touched_guess", []) if str(item).strip()]
+                shell = [str(item) for item in event.details.get("shell_commands_guess", []) if str(item).strip()]
+                high_risk = [str(item) for item in event.details.get("high_risk_tools", []) if str(item).strip()]
+                render_kv_block(
+                    "Approval Required",
+                    [
+                        ("status", "awaiting approval"),
+                        ("token", str(token or "-")),
+                        ("files", ", ".join(files[:4])),
+                        ("shell", ", ".join(shell[:3])),
+                        ("high_risk", ", ".join(high_risk[:4])),
+                        ("actions", f"/approve {token} | /reject {token}" if token else "approve or reject"),
+                    ],
+                    bullets=summary[:4] or None,
+                )
             else:
-                console.print("=== Executor ===")
+                render_kv_block("Plan", [("status", "ready"), ("next", "Executor is starting")])
             self._visible_output = True
             return
         if event.type == "tool_start":
-            console.print(f"Start {event.tool_name} {event.tool_args}")
+            render_kv_block(
+                "Tool Start",
+                [
+                    ("tool", event.tool_name or "-"),
+                    ("args", summarize_tool_args(event.tool_args)),
+                    ("status", "running"),
+                ],
+            )
             self._visible_output = True
             return
         if event.type == "tool_end":
             label = "error" if event.is_error else "done"
-            console.print(f"{label.upper()} {event.tool_name}: {event.message}")
+            render_kv_block(
+                "Tool Result",
+                [
+                    ("tool", event.tool_name or "-"),
+                    ("status", label),
+                    ("result", compact_text(event.message or "", limit=140)),
+                ],
+            )
             self._visible_output = True
             return
         if event.type == "compaction":
@@ -122,7 +175,7 @@ class ChatEventRenderer:
             action = event.details.get("action")
             delivery = event.details.get("delivery")
             text_value = compact_text(event.details.get("text", ""), limit=80)
-            console.print(f"[Queue] {action} {delivery}: {text_value}")
+            render_kv_block("Queue Update", [("action", str(action or "-")), ("delivery", str(delivery or "-")), ("text", text_value)])
             snapshot = RUNTIME_MONITOR.snapshot_from_event(event)
             if snapshot is not None:
                 console.print(format_runtime_status(snapshot))
@@ -133,7 +186,7 @@ class ChatEventRenderer:
                 console.print(format_runtime_status(snapshot))
             return
         if event.type == "error":
-            console.print(f"[Error] {event.message}")
+            render_kv_block("Error", [("message", event.message or "unknown error")])
             self._visible_output = True
             return
         if event.type == "turn_end":
@@ -177,7 +230,7 @@ def render_event(event: AgentEvent) -> None:
         action = event.details.get("action")
         delivery = event.details.get("delivery")
         text_value = compact_text(event.details.get("text", ""), limit=80)
-        console.print(f"[Queue] {action} {delivery}: {text_value}")
+        render_kv_block("Queue Update", [("action", str(action or "-")), ("delivery", str(delivery or "-")), ("text", text_value)])
         snapshot = RUNTIME_MONITOR.snapshot_from_event(event)
         if snapshot is not None:
             console.print(format_runtime_status(snapshot))
@@ -228,6 +281,8 @@ __all__ = [
     "format_runtime_status",
     "load_timeline_entries",
     "render_event",
+    "render_kv_block",
     "render_runtime_status",
     "render_settings",
+    "summarize_tool_args",
 ]

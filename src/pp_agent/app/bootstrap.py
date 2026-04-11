@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,14 @@ from pp_agent.extensions.hooks import LifecycleSubscriber
 from pp_agent.extensions.index import extension_search_roots
 from pp_agent.llm.models import ModelConfig, ProviderConfig
 from pp_agent.llm.registry import create_llm_client
+from pp_agent.memory import HistoryIndexer, NoopMemoryProvider, SQLiteHistoryStore, SQLiteMemoryProvider
+from pp_agent.memory.embedding import DashScopeEmbeddingProvider, NoopEmbeddingProvider
+from pp_agent.memory.index_pipeline import MemoryIndexPipeline
+from pp_agent.memory.recall_builder import RecallSnippetBuilder
+from pp_agent.memory.reranker import LightweightReranker, NoopReranker
+from pp_agent.memory.retrieval import HistoryRetriever
+from pp_agent.memory.retrieval_hook import MemoryRetrievalHook
+from pp_agent.memory.vector_index import ChromaVectorIndex, NoopVectorIndex
 from pp_agent.mcp import MCPManager
 from pp_agent.mcp.config import load_mcp_server_configs
 from pp_agent.runtime.git_checkpoint import GitCheckpointManager
@@ -39,6 +48,8 @@ from pp_agent.storage.settings import Settings
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.legacy_hints_readiness import build_legacy_hint_readiness_report, scan_workspace_for_legacy_analysis_hints
 from pp_agent.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -358,17 +369,7 @@ def create_session_store(settings: Settings) -> SessionStore:
     :return: 会话存储实例
     :raises PermissionError: 无写入权限时抛出
     """
-    candidates = [settings.global_dir / "sessions", settings.project_dir / "global" / "sessions"]
-    last_error: Optional[Exception] = None
-    for candidate in candidates:
-        try:
-            return SessionStore(candidate)
-        except PermissionError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise last_error
-    raise PermissionError("Unable to create a writable session tree store")
+    return SessionStore(settings.session_store_dir())
 
 
 def session_store_for(workspace: Path) -> SessionStore:
@@ -388,17 +389,7 @@ def timeline_store_for(workspace: Path) -> TimelineStore:
     :raises PermissionError: 无写入权限时抛出
     """
     settings = load_settings(workspace)
-    candidates = [settings.global_dir / "timelines", settings.project_dir / "global" / "timelines"]
-    last_error: Optional[Exception] = None
-    for candidate in candidates:
-        try:
-            return TimelineStore(candidate)
-        except PermissionError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise last_error
-    raise PermissionError("Unable to create a writable timeline store")
+    return TimelineStore(settings.timeline_store_dir())
 
 
 def pending_action_store_for(workspace: Path) -> PendingActionStore:
@@ -410,6 +401,118 @@ def pending_action_store_for(workspace: Path) -> PendingActionStore:
     return PendingActionStore(workspace.resolve() / ".pp-agent" / "pending-edits")
 
 
+def memory_provider_for(workspace: Path):
+    settings = load_settings(workspace)
+    memory_settings = settings.memory
+    if not memory_settings.enable or memory_settings.backend != "sqlite":
+        return NoopMemoryProvider()
+    store = SQLiteHistoryStore(settings.history_db_path(), busy_timeout_ms=memory_settings.sqlite_busy_timeout_ms)
+    indexer = HistoryIndexer(
+        chunk_target_tokens=memory_settings.chunk_target_tokens,
+        chunk_max_tokens=memory_settings.chunk_max_tokens,
+    )
+    return SQLiteMemoryProvider(store=store, indexer=indexer)
+
+
+def history_store_for(workspace: Path) -> SQLiteHistoryStore:
+    settings = load_settings(workspace)
+    memory_settings = settings.memory
+    return SQLiteHistoryStore(settings.history_db_path(), busy_timeout_ms=memory_settings.sqlite_busy_timeout_ms)
+
+
+def embedding_provider_for(workspace: Path):
+    settings = load_settings(workspace)
+    memory_settings = settings.memory
+    if not memory_settings.embedding_enable or memory_settings.embedding_provider != "dashscope":
+        return NoopEmbeddingProvider()
+    return DashScopeEmbeddingProvider(
+        api_key_env=memory_settings.dashscope_api_key_env,
+        model=memory_settings.embedding_model,
+    )
+
+
+def vector_index_for(workspace: Path):
+    settings = load_settings(workspace)
+    memory_settings = settings.memory
+    if not memory_settings.vector_enable or memory_settings.vector_backend != "chroma":
+        return NoopVectorIndex()
+    try:
+        return ChromaVectorIndex(path=settings.chroma_dir_path(), collection_name=memory_settings.chroma_collection)
+    except RuntimeError as exc:
+        logger.warning("Vector index disabled because Chroma is unavailable: %s", exc)
+        return NoopVectorIndex()
+
+
+def memory_index_pipeline_for(workspace: Path) -> MemoryIndexPipeline:
+    settings = load_settings(workspace)
+    return MemoryIndexPipeline(
+        store=history_store_for(workspace),
+        embedding_provider=embedding_provider_for(workspace),
+        vector_index=vector_index_for(workspace),
+        embedding_batch_size=settings.memory.embedding_batch_size,
+        indexing_batch_size=settings.memory.indexing_batch_size,
+    )
+
+
+def history_retriever_for(workspace: Path, *, session_id: str | None = None) -> HistoryRetriever | None:
+    settings = load_settings(workspace)
+    if not (
+        settings.memory.enable
+        and settings.memory.retrieval_enable
+        and settings.memory.embedding_enable
+        and settings.memory.vector_enable
+    ):
+        return None
+    return HistoryRetriever(
+        store=history_store_for(workspace),
+        embedding_provider=embedding_provider_for(workspace),
+        vector_index=vector_index_for(workspace),
+        same_session_bias=settings.memory.retrieval_same_session_bias,
+        hybrid_enable=settings.memory.hybrid_enable,
+        hybrid_keyword_limit=settings.memory.hybrid_keyword_limit,
+        hybrid_vector_limit=settings.memory.hybrid_vector_limit,
+        reranker=reranker_for(workspace),
+    )
+
+
+def recall_builder_for(workspace: Path) -> RecallSnippetBuilder:
+    settings = load_settings(workspace)
+    return RecallSnippetBuilder(
+        categorize=settings.memory.snippet_categorize_enable,
+        prioritize_long_term_preferences=settings.memory.snippet_prioritize_long_term_preferences,
+        compress_error_stacks=settings.memory.snippet_compress_error_stacks,
+        path_weight_boost=settings.memory.snippet_path_weight_boost,
+    )
+
+
+def reranker_for(workspace: Path):
+    settings = load_settings(workspace)
+    if not settings.memory.reranker_enable or settings.memory.reranker_backend != "lightweight":
+        return NoopReranker()
+    return LightweightReranker(
+        enabled=True,
+        max_candidates=settings.memory.reranker_limit,
+        path_weight_boost=settings.memory.snippet_path_weight_boost,
+    )
+
+
+def memory_retrieval_hook_for(workspace: Path, *, session_id: str | None = None) -> MemoryRetrievalHook:
+    settings = load_settings(workspace)
+    retriever = history_retriever_for(workspace, session_id=session_id)
+    return MemoryRetrievalHook(
+        retriever=retriever,
+        builder=recall_builder_for(workspace),
+        session_id=session_id,
+        enabled=retriever is not None and settings.memory.retrieval_enable,
+        retrieval_limit=settings.memory.retrieval_limit,
+        retrieval_max_snippets=settings.memory.retrieval_max_snippets,
+        retrieval_max_chars=settings.memory.retrieval_max_chars,
+        recent_dedup_enable=settings.memory.recent_dedup_enable,
+        recent_dedup_use_chunk_metadata=settings.memory.recent_dedup_use_chunk_metadata,
+        retrieval_version="v2_rerank_metadata",
+    )
+
+
 def checkpoint_store_for(workspace: Path) -> CheckpointStore:
     """
     根据工作空间获取检查点存储实例
@@ -418,27 +521,39 @@ def checkpoint_store_for(workspace: Path) -> CheckpointStore:
     :raises PermissionError: 无写入权限时抛出
     """
     settings = load_settings(workspace)
-    candidates = [settings.global_dir / "checkpoints", settings.project_dir / "global" / "checkpoints"]
-    last_error: Optional[Exception] = None
-    for candidate in candidates:
-        try:
-            return CheckpointStore(candidate)
-        except PermissionError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise last_error
-    raise PermissionError("Unable to create a writable checkpoint store")
+    return CheckpointStore(settings.checkpoint_store_dir())
 
 
-def create_tool_registry(workspace: Path) -> ToolRegistry:
+def create_tool_registry(
+    workspace: Path,
+    *,
+    include_dynamic_extensions: bool = False,
+    include_mcp: Optional[bool] = None,
+    transport_factory=None,
+    time_fn=None,
+) -> ToolRegistry:
     """
     创建工具注册器实例
     :param workspace: 工作空间路径
     :return: 工具注册器实例
     """
     settings = load_settings(workspace)
-    return ToolRegistry(workspace, policy=settings.tool_policy)
+    registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    if include_dynamic_extensions:
+        runtime_hooks = RuntimeHooks()
+        extension_runtime = load_executable_extensions(
+            workspace,
+            settings=settings,
+            tool_registry=registry,
+            runtime_hooks=runtime_hooks,
+            search_roots=_extension_roots_for(workspace.resolve(), settings),
+            include_mcp=include_mcp,
+            transport_factory=transport_factory,
+            time_fn=time_fn,
+        )
+        if extension_runtime.mcp_runtime is not None:
+            extension_runtime.mcp_runtime.ensure_discovered()
+    return registry
 
 
 def create_capability_catalog(
@@ -653,6 +768,7 @@ def create_runtime_from_record(
         require_plan_approval=settings.tool_policy.confirm_high_risk_plan,
         runtime_hooks=runtime_hooks,
         timeline_store=timeline_store_for(workspace),
+        memory_provider=memory_provider_for(workspace),
     )
     # 安装自动检查点钩子
     _install_auto_checkpoint_hook(
@@ -679,6 +795,8 @@ def create_runtime_from_record(
         search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
     # 注册上下文转换钩子
+    retrieval_hook = memory_retrieval_hook_for(workspace, session_id=record.id)
+    agent.runtime_hooks.transform_context_hooks.append(retrieval_hook.transform_context)
     agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
@@ -743,6 +861,8 @@ def reload_runtime_extensions(
         config=settings.capabilities.skills,
         search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
+    retrieval_hook = memory_retrieval_hook_for(workspace, session_id=agent.session_id)
+    agent.runtime_hooks.transform_context_hooks.append(retrieval_hook.transform_context)
     agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
