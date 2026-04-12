@@ -25,6 +25,7 @@ from pp_agent.extensions.index import extension_search_roots
 from pp_agent.llm.models import ModelConfig, ProviderConfig
 from pp_agent.llm.registry import create_llm_client
 from pp_agent.memory import HistoryIndexer, NoopMemoryProvider, SQLiteHistoryStore, SQLiteMemoryProvider
+from pp_agent.memory.auto_index import AsyncMemoryIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.embedding import DashScopeEmbeddingProvider, NoopEmbeddingProvider
 from pp_agent.memory.index_pipeline import MemoryIndexPipeline
 from pp_agent.memory.recall_builder import RecallSnippetBuilder
@@ -454,6 +455,21 @@ def memory_index_pipeline_for(workspace: Path) -> MemoryIndexPipeline:
     )
 
 
+def auto_index_scheduler_for(workspace: Path):
+    settings = load_settings(workspace)
+    if not (
+        settings.memory.enable
+        and settings.memory.embedding_enable
+        and settings.memory.vector_enable
+        and settings.memory.indexing_enable
+    ):
+        return NoopAutoIndexScheduler()
+    return AsyncMemoryIndexScheduler(
+        pipeline=memory_index_pipeline_for(workspace),
+        limit=settings.memory.indexing_batch_size,
+    )
+
+
 def history_retriever_for(workspace: Path, *, session_id: str | None = None) -> HistoryRetriever | None:
     settings = load_settings(workspace)
     if not (
@@ -769,6 +785,7 @@ def create_runtime_from_record(
         runtime_hooks=runtime_hooks,
         timeline_store=timeline_store_for(workspace),
         memory_provider=memory_provider_for(workspace),
+        auto_index_scheduler=auto_index_scheduler_for(workspace),
     )
     # 安装自动检查点钩子
     _install_auto_checkpoint_hook(

@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryIndexPipeline:
+    """先从 SQLite 里找还没建索引的文本 chunk 
+    → 调 embedding 模型转成向量 
+    → 写进向量库 
+    → 再回写 SQLite，标记这个 chunk 已经 embed / indexed"""
     def __init__(
         self,
         *,
@@ -42,6 +46,7 @@ class MemoryIndexPipeline:
         return self._index_records(records)
 
     def _index_records(self, records) -> IndexingSummary:
+        """把一批 memory chunk 做向量化并写入向量索引，同时把处理状态回写到数据库。"""
         summary = IndexingSummary(scanned=len(records))
         if not records:
             return summary

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agent_core.types import ChatMessage, ModelConfig, TextPart
 from pp_agent.memory import HistoryIndexer, NoopMemoryProvider, SQLiteHistoryStore, SQLiteMemoryProvider
+from pp_agent.memory.auto_index import NoopAutoIndexScheduler
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.tools.registry import ToolRegistry
@@ -26,7 +27,21 @@ class _FailingMemoryProvider:
         raise RuntimeError("simulated memory failure")
 
 
-def _build_runtime(tmp_path: Path, *, memory_provider) -> AgentRuntime:
+class _RecordingAutoIndexScheduler:
+    def __init__(self, *, enabled: bool = True, submit_result: bool = True) -> None:
+        self.enabled = enabled
+        self.submit_result = submit_result
+        self.submit_calls = 0
+
+    def is_enabled(self) -> bool:
+        return self.enabled
+
+    def submit(self) -> bool:
+        self.submit_calls += 1
+        return self.submit_result
+
+
+def _build_runtime(tmp_path: Path, *, memory_provider, auto_index_scheduler=None) -> AgentRuntime:
     store = SessionStore(tmp_path / "sessions")
     record = store.create("system", ModelConfig())
     agent = AgentRuntime(
@@ -38,6 +53,7 @@ def _build_runtime(tmp_path: Path, *, memory_provider) -> AgentRuntime:
         confirm_callback=lambda _name, _args: True,
         require_plan_approval=False,
         memory_provider=memory_provider,
+        auto_index_scheduler=auto_index_scheduler or NoopAutoIndexScheduler(),
     )
     agent.restore_session_record(record)
     return agent
@@ -135,3 +151,30 @@ def test_no_duplicate_write_after_provider_restart(tmp_path: Path) -> None:
     assert initial_chunk_count >= 1
     assert message_count == initial_message_count
     assert chunk_count == initial_chunk_count
+
+
+def test_auto_index_submit_happens_after_successful_dual_write(tmp_path: Path) -> None:
+    db_path = tmp_path / "history.db"
+    provider = SQLiteMemoryProvider(
+        store=SQLiteHistoryStore(db_path),
+        indexer=HistoryIndexer(chunk_target_tokens=30, chunk_max_tokens=40),
+    )
+    scheduler = _RecordingAutoIndexScheduler()
+    agent = _build_runtime(tmp_path, memory_provider=provider, auto_index_scheduler=scheduler)
+
+    events = agent.prompt("hello")
+
+    assert any(event.type == "agent_end" for event in events)
+    assert scheduler.submit_calls == 1
+
+
+def test_auto_index_submit_skipped_when_dual_write_fails(tmp_path: Path, caplog) -> None:
+    scheduler = _RecordingAutoIndexScheduler()
+    agent = _build_runtime(tmp_path, memory_provider=_FailingMemoryProvider(), auto_index_scheduler=scheduler)
+
+    with caplog.at_level(logging.WARNING):
+        events = agent.prompt("hello")
+
+    assert any(event.type == "agent_end" for event in events)
+    assert "Memory dual write failed" in caplog.text
+    assert scheduler.submit_calls == 0

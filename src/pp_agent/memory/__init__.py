@@ -1,7 +1,10 @@
 from importlib import import_module
 
 _MODULE_MAP = {
+    "AsyncMemoryIndexScheduler": "pp_agent.memory.auto_index",
+    "AutoIndexScheduler": "pp_agent.memory.auto_index",
     "MemorySettings": "pp_agent.memory.config",
+    "NoopAutoIndexScheduler": "pp_agent.memory.auto_index",
     "DashScopeEmbeddingProvider": "pp_agent.memory.embedding",
     "EmbeddingProvider": "pp_agent.memory.embedding",
     "NoopEmbeddingProvider": "pp_agent.memory.embedding",

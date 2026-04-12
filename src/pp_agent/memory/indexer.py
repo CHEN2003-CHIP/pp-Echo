@@ -22,6 +22,11 @@ _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
 class HistoryIndexer:
+    """
+    把一条历史消息切成适合存储/检索的小块。
+    它会先按段落拆，再把过长段落继续切开，最后输出 HistoryChunkInput 列表，
+    每个 chunk 带有 chunk_index、text、token_estimate、source_kind 和 metadata。
+    """
     def __init__(self, *, chunk_target_tokens: int = 350, chunk_max_tokens: int = 420) -> None:
         self.chunk_target_tokens = max(1, chunk_target_tokens)
         self.chunk_max_tokens = max(self.chunk_target_tokens, chunk_max_tokens)

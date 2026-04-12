@@ -42,6 +42,7 @@ class NoopMemoryProvider:
 
 
 class SQLiteMemoryProvider:
+    """把一轮对话的新消息落到 memory store 里，并顺手把每条消息切成 chunk，供后面检索/索引用"""
     def __init__(self, *, store: HistoryStore, indexer: HistoryIndexer) -> None:
         self.store = store
         self.indexer = indexer

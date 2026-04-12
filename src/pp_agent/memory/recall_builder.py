@@ -16,6 +16,7 @@ SECTION_ORDER = (
 
 @dataclass(frozen=True)
 class RecallSnippetBuilder:
+    """把检索出来的历史 chunk，重新排序、分类、压缩，然后拼成一段可塞回 prompt 的 [History Recall] 提示文本。"""
     categorize: bool = True
     prioritize_long_term_preferences: bool = True
     compress_error_stacks: bool = True
@@ -63,6 +64,7 @@ class RecallSnippetBuilder:
         return score
 
     def _build_categorized(self, retrieved_chunks: list[RetrievedChunk], *, max_chars: int) -> str:
+        """把检索出来的历史片段按类别分组，去重，按顺序拼成一段不超过 max_chars 的“历史回忆文本”。"""
         grouped: dict[str, list[str]] = {title: [] for title in SECTION_ORDER}
         seen: set[str] = set()
         for chunk in retrieved_chunks:

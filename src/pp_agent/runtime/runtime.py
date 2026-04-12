@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
+from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.provider import MemoryProvider, NoopMemoryProvider
 from pp_agent.runtime.compaction import ConversationCompactor
 from pp_agent.runtime.emitter import LifecycleEmitter
@@ -103,6 +104,7 @@ class AgentRuntime:
         runtime_hooks: Optional[RuntimeHooks] = None,
         timeline_store: Optional[TimelineStore] = None,
         memory_provider: Optional[MemoryProvider] = None,
+        auto_index_scheduler: Optional[AutoIndexScheduler] = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -146,6 +148,7 @@ class AgentRuntime:
         self.lifecycle = LifecycleEmitter()
         self._wire_lifecycle()
         self.memory_provider = memory_provider or NoopMemoryProvider()
+        self.auto_index_scheduler = auto_index_scheduler or NoopAutoIndexScheduler()
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -948,6 +951,20 @@ class AgentRuntime:
                     dual_write_turn_id,
                     exc,
                 )
+            else:
+                if self.auto_index_scheduler.is_enabled():
+                    if self.auto_index_scheduler.submit():
+                        logger.debug(
+                            "Submitted async memory indexing for session=%s turn=%s",
+                            self.session_id,
+                            dual_write_turn_id,
+                        )
+                    else:
+                        logger.debug(
+                            "Skipped async memory indexing for session=%s turn=%s because a prior indexing task is still running",
+                            self.session_id,
+                            dual_write_turn_id,
+                        )
 
     def _session_exists(self) -> bool:
         try:
