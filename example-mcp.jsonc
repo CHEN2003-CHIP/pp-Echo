@@ -1,0 +1,140 @@
+{
+  "settings": {
+    // MCP 工具名前缀。
+    // 例如前缀为 mcp 时，工具名可能展示为 mcp.fetch_markdown。
+    "tool_prefix": "mcp",
+
+    // 默认空闲超时，单位秒。
+    // 单个 server 没单独配置时会继承这个值。
+    "idle_timeout": 300,
+
+    // 生命周期策略。
+    // 当前项目默认值为 lazy，表示按需启动。
+    "lifecycle": "lazy",
+
+    // 是否将工具直接暴露，而不是走统一前缀路由。
+    "direct_tools": false
+  },
+
+  "servers": [
+    {
+      // MCP server 名称，后续过滤与展示都依赖它。
+      "name": "fetch",
+
+      // 服务描述信息。
+      "description": "Community standard MCP server for fetching web pages as HTML, text, markdown, JSON, and readable article content.",
+
+      // 意图标签，可用于分类和路由提示。
+      "intent_tags": [
+        "web",
+        "fetch",
+        "docs"
+      ],
+
+      // 自动匹配示例，帮助系统理解它适合什么场景。
+      "auto_match_examples": [
+        "Fetch this URL and summarize it",
+        "Read webpage content"
+      ],
+
+      // 传输方式。
+      // 可选值通常包括 stdio / http / auto。
+      "transport": "stdio",
+
+      // 协议模式。
+      // 项目代码支持 auto / compat / standard。
+      "protocol": "standard",
+
+      // stdio 模式下要启动的命令。
+      "command": "node",
+
+      // stdio 模式下传给命令的参数。
+      "args": [
+        ".mcp-tools/fetch-mcp/node_modules/mcp-fetch-server/dist/index.js"
+      ],
+
+      // HTTP 模式下使用的 URL。
+      // stdio server 不需要时可设为 null。
+      "url": null,
+
+      // 附加请求头。
+      "headers": {},
+
+      // 直接写死的 bearer token。
+      // 一般不推荐，通常建议改用 bearer_token_env。
+      "bearer_token": null,
+
+      // Bearer Token 对应的环境变量名。
+      "bearer_token_env": null,
+
+      // 启动子进程时附带的环境变量。
+      "env": {
+        "DEFAULT_LIMIT": "12000"
+      },
+
+      // 启动工作目录。
+      "cwd": ".",
+
+      // 是否远程服务。
+      // 对于 stdio 一般是 false。
+      "is_remote": false,
+
+      // 是否要求鉴权。
+      "requires_auth": false,
+
+      // 审批模式，当前示例保持 default。
+      "approval_mode": "default",
+
+      // 单服务空闲超时，单位秒。
+      "idle_timeout_seconds": 300,
+
+      // 工具调用超时，单位秒。
+      "timeout_seconds": 60
+    },
+    {
+      "name": "demo-http",
+      "description": "Example remote MCP server over HTTP.",
+      "intent_tags": [
+        "remote",
+        "api"
+      ],
+      "auto_match_examples": [
+        "Use remote tools",
+        "Call company MCP server"
+      ],
+
+      // 这个例子演示 HTTP 远程 MCP。
+      "transport": "http",
+      "protocol": "standard",
+
+      // HTTP 模式一般不需要本地 command。
+      "command": null,
+      "args": [],
+
+      // 远程 MCP 地址。
+      "url": "https://example.com/mcp",
+
+      // 自定义请求头。
+      "headers": {
+        "X-Team": "demo"
+      },
+
+      "bearer_token": null,
+
+      // 从环境变量读取访问令牌，更安全。
+      "bearer_token_env": "DEMO_MCP_TOKEN",
+
+      // HTTP 模式下通常不需要额外子进程环境变量。
+      "env": {},
+
+      // HTTP 模式下 cwd 通常无意义，可以为 null。
+      "cwd": null,
+
+      "is_remote": true,
+      "requires_auth": true,
+      "approval_mode": "default",
+      "idle_timeout_seconds": 300,
+      "timeout_seconds": 30
+    }
+  ]
+}

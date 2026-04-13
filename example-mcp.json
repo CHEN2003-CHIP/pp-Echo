@@ -1,0 +1,71 @@
+{
+  "settings": {
+    "tool_prefix": "mcp",
+    "idle_timeout": 300,
+    "lifecycle": "lazy",
+    "direct_tools": false
+  },
+  "servers": [
+    {
+      "name": "fetch",
+      "description": "Community standard MCP server for fetching web pages as HTML, text, markdown, JSON, and readable article content.",
+      "intent_tags": [
+        "web",
+        "fetch",
+        "docs"
+      ],
+      "auto_match_examples": [
+        "Fetch this URL and summarize it",
+        "Read webpage content"
+      ],
+      "transport": "stdio",
+      "protocol": "standard",
+      "command": "node",
+      "args": [
+        ".mcp-tools/fetch-mcp/node_modules/mcp-fetch-server/dist/index.js"
+      ],
+      "url": null,
+      "headers": {},
+      "bearer_token": null,
+      "bearer_token_env": null,
+      "env": {
+        "DEFAULT_LIMIT": "12000"
+      },
+      "cwd": ".",
+      "is_remote": false,
+      "requires_auth": false,
+      "approval_mode": "default",
+      "idle_timeout_seconds": 300,
+      "timeout_seconds": 60
+    },
+    {
+      "name": "demo-http",
+      "description": "Example remote MCP server over HTTP.",
+      "intent_tags": [
+        "remote",
+        "api"
+      ],
+      "auto_match_examples": [
+        "Use remote tools",
+        "Call company MCP server"
+      ],
+      "transport": "http",
+      "protocol": "standard",
+      "command": null,
+      "args": [],
+      "url": "https://example.com/mcp",
+      "headers": {
+        "X-Team": "demo"
+      },
+      "bearer_token": null,
+      "bearer_token_env": "DEMO_MCP_TOKEN",
+      "env": {},
+      "cwd": null,
+      "is_remote": true,
+      "requires_auth": true,
+      "approval_mode": "default",
+      "idle_timeout_seconds": 300,
+      "timeout_seconds": 30
+    }
+  ]
+}

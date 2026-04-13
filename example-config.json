@@ -1,0 +1,100 @@
+{
+  "model": "qwen3.5-plus",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "enable_thinking": false,
+  "shell_timeout_seconds": 30,
+  "capabilities": {
+    "builtin_tools": {
+      "enable": true
+    },
+    "skills": {
+      "enable_project": true,
+      "enable_user": true,
+      "enable_builtin": true,
+      "custom_directories": [
+        "C:/pp-agent/skills",
+        "./.pp-agent/custom-skills"
+      ],
+      "ignored": [
+        "draft-*",
+        "test-*"
+      ],
+      "include": [
+        "*"
+      ]
+    },
+    "extensions": {
+      "enable_project": true,
+      "enable_user": true,
+      "enable_builtin": false,
+      "custom_directories": [
+        "C:/pp-agent/extensions",
+        "./.pp-agent/custom-extensions"
+      ],
+      "ignored": [
+        "draft-*",
+        "experimental-*"
+      ],
+      "include": [
+        "*"
+      ]
+    },
+    "mcp": {
+      "enable": true,
+      "config_paths": [
+        "./.pp-agent/mcp.json",
+        "C:/pp-agent/shared-mcp.json"
+      ],
+      "server_filters": [
+        "*"
+      ]
+    }
+  },
+  "tool_confirmation": {
+    "write_file": true,
+    "edit_file": true,
+    "run_shell": true,
+    "high_risk_plan": true
+  },
+  "storage": {
+    "sessions_dir": "./.pp-agent/sessions",
+    "timelines_dir": "./.pp-agent/timelines",
+    "checkpoints_dir": "./.pp-agent/checkpoints"
+  },
+  "memory": {
+    "enable": false,
+    "backend": "sqlite",
+    "sqlite_path": "./.pp-agent/history.db",
+    "chunk_target_tokens": 350,
+    "chunk_max_tokens": 420,
+    "sqlite_busy_timeout_ms": 5000,
+    "embedding_enable": false,
+    "embedding_provider": "dashscope",
+    "embedding_model": "multimodal-embedding-v1",
+    "dashscope_api_key_env": "DASHSCOPE_API_KEY",
+    "embedding_batch_size": 16,
+    "vector_enable": false,
+    "vector_backend": "chroma",
+    "chroma_path": "./.pp-agent/chroma",
+    "chroma_collection": "pp_agent_history",
+    "indexing_enable": false,
+    "indexing_batch_size": 100,
+    "retrieval_enable": false,
+    "retrieval_limit": 6,
+    "retrieval_same_session_bias": 1.0,
+    "retrieval_max_snippets": 4,
+    "retrieval_max_chars": 1600,
+    "hybrid_enable": false,
+    "hybrid_keyword_limit": 12,
+    "hybrid_vector_limit": 12,
+    "recent_dedup_enable": true,
+    "recent_dedup_use_chunk_metadata": true,
+    "snippet_categorize_enable": true,
+    "reranker_enable": false,
+    "reranker_backend": "lightweight",
+    "reranker_limit": 8,
+    "snippet_prioritize_long_term_preferences": true,
+    "snippet_compress_error_stacks": true,
+    "snippet_path_weight_boost": 1.0
+  }
+}

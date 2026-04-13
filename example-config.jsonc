@@ -1,0 +1,229 @@
+{
+  // 使用的模型名称。
+  // 对应 .pp-agent/config.json 中的顶层字段。
+  "model": "qwen3.5-plus",
+
+  // LLM 服务的 OpenAI 兼容接口地址。
+  // 例如阿里云百炼兼容接口。
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+
+  // 是否开启模型思考模式。
+  // true/false，具体效果取决于接入的模型提供方。
+  "enable_thinking": false,
+
+  // Shell 命令的默认超时时间，单位秒。
+  "shell_timeout_seconds": 30,
+
+  "capabilities": {
+    "builtin_tools": {
+      // 是否启用内置工具。
+      "enable": true
+    },
+
+    "skills": {
+      // 是否加载当前项目内的 skills。
+      "enable_project": true,
+
+      // 是否加载用户全局目录下的 skills。
+      "enable_user": true,
+
+      // 是否加载内置 skills。
+      "enable_builtin": true,
+
+      // 额外自定义 skill 目录。
+      // 支持绝对路径，也支持相对工作区的相对路径。
+      "custom_directories": [
+        "C:/pp-agent/skills",
+        "./.pp-agent/custom-skills"
+      ],
+
+      // skill 黑名单，支持 fnmatch 通配符。
+      // 例如 draft-* 会屏蔽所有 draft- 开头的 skill。
+      "ignored": [
+        "draft-*",
+        "test-*"
+      ],
+
+      // skill 白名单，支持 fnmatch 通配符。
+      // 如果这里非空，则只有匹配到的 skill 会被加载。
+      "include": [
+        "*"
+      ]
+    },
+
+    "extensions": {
+      // 是否加载当前项目内的 extensions。
+      "enable_project": true,
+
+      // 是否加载用户全局目录下的 extensions。
+      "enable_user": true,
+
+      // 是否加载内置 extensions。
+      "enable_builtin": false,
+
+      // 额外自定义 extension 目录。
+      "custom_directories": [
+        "C:/pp-agent/extensions",
+        "./.pp-agent/custom-extensions"
+      ],
+
+      // extension 黑名单，支持通配符。
+      "ignored": [
+        "draft-*",
+        "experimental-*"
+      ],
+
+      // extension 白名单，支持通配符。
+      "include": [
+        "*"
+      ]
+    },
+
+    "mcp": {
+      // 是否启用 MCP 能力。
+      "enable": true,
+
+      // MCP 配置文件路径列表。
+      // 如果留空，项目默认会尝试读取 .pp-agent/mcp.json。
+      "config_paths": [
+        "./.pp-agent/mcp.json",
+        "C:/pp-agent/shared-mcp.json"
+      ],
+
+      // 允许启用的 MCP server 名称过滤器。
+      // 留空表示不过滤；["*"] 表示全部允许。
+      "server_filters": [
+        "*"
+      ]
+    }
+  },
+
+  "tool_confirmation": {
+    // 写新文件前是否要求确认。
+    "write_file": true,
+
+    // 编辑现有文件前是否要求确认。
+    "edit_file": true,
+
+    // 执行 shell 前是否要求确认。
+    "run_shell": true,
+
+    // 高风险计划是否要求确认。
+    "high_risk_plan": true
+  },
+
+  "storage": {
+    // 会话数据目录。
+    "sessions_dir": "./.pp-agent/sessions",
+
+    // 时间线数据目录。
+    "timelines_dir": "./.pp-agent/timelines",
+
+    // 检查点数据目录。
+    "checkpoints_dir": "./.pp-agent/checkpoints"
+  },
+
+  "memory": {
+    // 是否启用长期记忆能力。
+    "enable": false,
+
+    // 记忆后端类型，目前代码默认是 sqlite。
+    "backend": "sqlite",
+
+    // SQLite 历史库路径。
+    "sqlite_path": "./.pp-agent/history.db",
+
+    // 文本分块目标 token 数。
+    "chunk_target_tokens": 350,
+
+    // 单块最大 token 数。
+    "chunk_max_tokens": 420,
+
+    // SQLite busy timeout，单位毫秒。
+    "sqlite_busy_timeout_ms": 5000,
+
+    // 是否启用 embedding。
+    "embedding_enable": false,
+
+    // embedding 提供方名称。
+    "embedding_provider": "dashscope",
+
+    // embedding 模型名称。
+    "embedding_model": "multimodal-embedding-v1",
+
+    // embedding API Key 对应的环境变量名。
+    "dashscope_api_key_env": "DASHSCOPE_API_KEY",
+
+    // embedding 批处理大小。
+    "embedding_batch_size": 16,
+
+    // 是否启用向量检索。
+    "vector_enable": false,
+
+    // 向量后端类型，目前默认 chroma。
+    "vector_backend": "chroma",
+
+    // Chroma 数据目录。
+    "chroma_path": "./.pp-agent/chroma",
+
+    // Chroma 集合名称。
+    "chroma_collection": "pp_agent_history",
+
+    // 是否启用索引构建。
+    "indexing_enable": false,
+
+    // 索引批量写入大小。
+    "indexing_batch_size": 100,
+
+    // 是否启用记忆检索。
+    "retrieval_enable": false,
+
+    // 单次检索返回上限。
+    "retrieval_limit": 6,
+
+    // 同会话内容的加权偏置，1.0 表示不额外偏置。
+    "retrieval_same_session_bias": 1.0,
+
+    // 最多返回多少个片段。
+    "retrieval_max_snippets": 4,
+
+    // 检索片段总字符数上限。
+    "retrieval_max_chars": 1600,
+
+    // 是否启用混合检索。
+    "hybrid_enable": false,
+
+    // 混合检索时关键词候选上限。
+    "hybrid_keyword_limit": 12,
+
+    // 混合检索时向量候选上限。
+    "hybrid_vector_limit": 12,
+
+    // 是否启用最近片段去重。
+    "recent_dedup_enable": true,
+
+    // 去重时是否使用 chunk metadata。
+    "recent_dedup_use_chunk_metadata": true,
+
+    // 是否启用片段分类。
+    "snippet_categorize_enable": true,
+
+    // 是否启用 reranker 重排。
+    "reranker_enable": false,
+
+    // reranker 后端名称。
+    "reranker_backend": "lightweight",
+
+    // reranker 输入上限。
+    "reranker_limit": 8,
+
+    // 是否优先长期偏好类片段。
+    "snippet_prioritize_long_term_preferences": true,
+
+    // 是否压缩错误堆栈类片段内容。
+    "snippet_compress_error_stacks": true,
+
+    // 文件路径命中时的额外权重提升。
+    "snippet_path_weight_boost": 1.0
+  }
+}
