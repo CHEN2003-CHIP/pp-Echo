@@ -1,11 +1,14 @@
 # pp-Echo
 
 <p align="center">
-  <strong>pp-Echo is a CLI-first coding agent that shows its plan, asks before risky actions, and can rewind both your repo and your conversation.</strong><br />
-  面向真实仓库工作的 CLI 编码代理：先给计划，再做动作；高风险操作先审批；代码和会话都能安全回退。</p>
+  <strong>A beginner-friendly, CLI-first coding agent you can actually study, run locally, and extend.</strong><br />
+  It shows plans before execution, asks before risky actions, and can rewind both repository state and conversation history.
+</p>
 
 <p align="center">
   <a href="#quick-start"><img alt="Quick Start" src="https://img.shields.io/badge/Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
+  <a href="#why-this-repo-is-worth-studying"><img alt="Why Study" src="https://img.shields.io/badge/Why_Study-1E293B?style=for-the-badge&logo=bookstack&logoColor=white"></a>
+  <a href="#quick-learning-path"><img alt="Learning Path" src="https://img.shields.io/badge/Learning_Path-2563EB?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
   <a href="#demo--screenshots"><img alt="Demo" src="https://img.shields.io/badge/Demo-163257?style=for-the-badge&logo=gitlfs&logoColor=white"></a>
   <a href="https://github.com/CHEN2003-CHIP/pp-Echo/releases"><img alt="Releases" src="https://img.shields.io/badge/Releases-F8D66D?style=for-the-badge&logo=github&logoColor=111827"></a>
 </p>
@@ -13,25 +16,107 @@
 ![pp-Echo hero](docs/assets/hero.svg)
 
 <p align="center">
-  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Rewind code + conversation safely</code>
+  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Rewind code + conversation safely</code> | <code>CLI + TUI</code>
 </p>
+
+pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
+
+## Why This Repo Is Worth Studying
+
+- It is not just a toy chatbot. It contains a real runtime loop, tool registry, session host, memory layer, approvals, rewind, and multiple user interfaces.
+- It is beginner-friendly. The repo includes Chinese and English learning guides plus a source map for reading the code in a sensible order.
+- It is practical. You can run it locally, inspect its behavior, and use it as a reference when building your own agent system.
+- It is opinionated in the right places. Planning is visible, risky actions are reviewable, and the system is designed around repo work instead of generic chat.
+- It is a good bridge project. Beginners can learn architecture here, and experienced builders can borrow patterns for runtime orchestration, tool calling, and safety boundaries.
+
+## Best For
+
+- Beginners who want to understand how an agent project is organized end to end.
+- Developers who want a local coding agent with visible planning and approval flow.
+- Builders who want to learn how runtime, tools, memory, sessions, CLI, and TUI fit together.
+- People comparing agent repos and looking for one that is easier to read, extend, and trust.
+
+## What You Will Learn
+
+- How an agent runtime manages turns, planning, tools, and execution.
+- How tool registration and dispatch work in a repo-aware coding assistant.
+- How session hosting, rewind, and checkpoint ideas can improve agent usability.
+- How memory and vector retrieval integrate into an agent workflow.
+- How one backend can drive both a CLI chat experience and a richer TUI.
+- How to structure a project so it is usable as both product and learning material.
+
+## Quick Start
+
+pp-Echo targets Python 3.9+ and is easiest to try on Windows first.
+
+Before you start:
+
+- Set `PP_AGENT_API_KEY` in your environment.
+- Use `start-agent.bat` for the fastest first run.
+- If you run from source, set `PYTHONPATH=src`.
+
+### Fastest Windows path
+
+```powershell
+set PP_AGENT_API_KEY=your_api_key
+.\start-agent.bat
+```
+
+This is the shortest path from clone to first conversation.
+
+### TUI on Windows
+
+```powershell
+set PP_AGENT_API_KEY=your_api_key
+.\echo-cli.bat
+```
+
+Use this when you want the richer terminal UI instead of plain chat output.
+
+### Run from source
+
+```powershell
+git clone https://github.com/CHEN2003-CHIP/pp-Echo.git
+cd pp-Echo
+set PP_AGENT_API_KEY=your_api_key
+set PYTHONPATH=src
+python -m pp_agent.cli.main chat
+```
+
+Minimal non-interactive demo:
+
+```powershell
+set PP_AGENT_API_KEY=your_api_key
+set PYTHONPATH=src
+python -m pp_agent.cli.main run "Give me a quick overview of this repo"
+```
+
+### Installed CLI
+
+```powershell
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+pp-agent chat
+```
+
+If `pip install -e .` fails on an older environment, use the source-run path first.
 
 ## Quick Learning Path
 
-If you are new to this repo, use this order:
+If you are new to this repo, read in this order:
 
-1. Read the learning guides
-   [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
-   [docs/agent-learning-en.md](docs/agent-learning-en.md)
+1. Start with the learning docs:
+   [docs/agent-learning-zh.md](docs/agent-learning-zh.md),
+   [docs/agent-learning-en.md](docs/agent-learning-en.md),
    [docs/source-map.md](docs/source-map.md)
-2. Read the three core files
-   [src/pp_agent/runtime/runtime.py](src/pp_agent/runtime/runtime.py)
-   [src/pp_agent/tools/registry.py](src/pp_agent/tools/registry.py)
+2. Then read the three core backend files:
+   [src/pp_agent/runtime/runtime.py](src/pp_agent/runtime/runtime.py),
+   [src/pp_agent/tools/registry.py](src/pp_agent/tools/registry.py),
    [src/pp_agent/runtime/session_host.py](src/pp_agent/runtime/session_host.py)
-3. Then explore the product layers
-   `chat`: `src/pp_agent/cli/chat.py`
-   `tui`: `src/pp_agent/tui/app.py`
-   `bootstrap`: `src/pp_agent/app/bootstrap.py`
+3. Then move to the product layers:
+   [src/pp_agent/cli/chat.py](src/pp_agent/cli/chat.py),
+   [src/pp_agent/tui/app.py](src/pp_agent/tui/app.py),
+   [src/pp_agent/app/bootstrap.py](src/pp_agent/app/bootstrap.py)
 
 ```mermaid
 flowchart TD
@@ -61,65 +146,11 @@ flowchart TD
   F --> F3["cli/render/*"]
 ```
 
-## Quick Start
-
-pp-Echo currently targets CLI-first CLI workflows and expects Python 3.9+.
-
-Before you start:
-
-- Set `PP_AGENT_API_KEY` in your environment.
-- Prefer Windows PowerShell or `start-agent.bat` for the smoothest first run.
-- If you run the module directly from a cloned repo, you must set `PYTHONPATH=src`.
-
-### One-click on Windows
-
-```powershell
-set PP_AGENT_API_KEY=your_api_key
-.\start-agent.bat
-```
-
-This is the fastest path for people who want to clone the repo and see the agent immediately.
-
-### From cloned repo
-
-Run directly from source without packaging:
-
-```powershell
-git clone https://github.com/CHEN2003-CHIP/pp-Echo.git
-cd pp-Echo
-set PP_AGENT_API_KEY=your_api_key
-set PYTHONPATH=src
-python -m pp_agent.cli.main chat
-```
-
-Minimal non-interactive demo:
-
-```powershell
-set PP_AGENT_API_KEY=your_api_key
-set PYTHONPATH=src
-python -m pp_agent.cli.main run "Give me a quick overview of this repo"
-```
-
-### Installed CLI
-
-If you want the `pp-agent` command on your machine:
-
-```powershell
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
-pp-agent chat
-```
-
-Notes:
-
-- In this local environment, editable install depends on a modern `pip` / `setuptools` toolchain.
-- If `pip install -e .` fails on an older Python setup, use the source-run path above first, then upgrade your packaging tools.
-
 ## Demo / Screenshots
 
 ![pp-Echo demo](docs/assets/demo.gif)
 
-- Launch with `start-agent.bat` or the source CLI entrypoint.
+- Launch with `start-agent.bat` for chat or `echo-cli.bat` for the TUI.
 - Ask the agent to inspect a repo task and preview risky work before execution.
 - Review approvals, create checkpoints, and use safe rewind to recover both code and conversation state.
 
@@ -129,13 +160,15 @@ Notes:
 
 ## Why pp-Echo
 
-Most coding agents are good at producing output. Fewer are good at making their behavior visible and reversible once a repository gets messy. pp-Echo is built for that real-world gap.
+Most coding agents are good at producing output. Fewer are good at making their behavior visible, reviewable, and reversible once a real repository gets messy. pp-Echo is built for that gap.
 
 - Planning stays visible before execution, so you can supervise direction instead of reacting after changes land.
 - High-risk operations can pause behind approvals instead of mutating the workspace immediately.
 - Sessions are stored as a tree, making branch, resume, compare, and rewind workflows easier to reason about.
 - Safe rewind is git-backed, so you can restore the conversation, the workspace, or both together.
 - Skills, extensions, and MCP-backed capabilities fit into the same repo-aware runtime rather than feeling bolted on.
+
+If this repo helps you learn agents faster or gives you a useful starting point for your own system, a Star helps more people discover it.
 
 ## Safety Boundary
 
@@ -440,4 +473,3 @@ Start here:
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
-
