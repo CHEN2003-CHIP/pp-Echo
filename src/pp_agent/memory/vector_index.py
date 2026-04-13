@@ -100,9 +100,16 @@ class ChromaVectorIndex:
             return self._client_factory(self.path)
         try:
             import chromadb
+            from chromadb.config import Settings
         except ImportError as exc:  # pragma: no cover - environment dependent
             raise RuntimeError("chromadb is not installed") from exc
-        return chromadb.PersistentClient(path=str(self.path))
+        # Disable anonymized telemetry to avoid noisy posthog-related warnings in local CLI runs.
+        settings = Settings(anonymized_telemetry=False)
+        settings.chroma_product_telemetry_impl = "pp_agent.memory.chroma_telemetry.NoOpProductTelemetryClient"
+        return chromadb.PersistentClient(
+            path=str(self.path),
+            settings=settings,
+        )
 
     @staticmethod
     def _metadata(chunk: IndexedChunk) -> dict[str, Any]:

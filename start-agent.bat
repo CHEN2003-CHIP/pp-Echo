@@ -11,12 +11,29 @@ if errorlevel 1 (
   exit /b 1
 )
 
-set PYTHONPATH=src
+set "PYTHONPATH=%CD%\src"
 if "%PP_AGENT_API_KEY%"=="" (
   echo [WARN] PP_AGENT_API_KEY is not set.
   echo You can still open the CLI, but model requests will fail until you set it.
   echo Example:
   echo   set PP_AGENT_API_KEY=your_api_key
+  echo.
+)
+
+python -c "import httpx, prompt_toolkit, pydantic, rich, typer, chromadb" >nul 2>nul
+if errorlevel 1 (
+  echo [INFO] Missing one or more core dependencies. Attempting to install main package dependencies...
+  python -m pip install --default-timeout 180 .
+  if errorlevel 1 (
+    echo [ERROR] Failed to install required dependencies automatically.
+    echo This usually means your network is too slow or pip is too old for this environment.
+    echo Try one of these commands:
+    echo   python -m pip install --default-timeout 180 .
+    echo   python -m pip install --upgrade pip setuptools wheel
+    echo Then run start-agent.bat again.
+    pause
+    exit /b 1
+  )
   echo.
 )
 
