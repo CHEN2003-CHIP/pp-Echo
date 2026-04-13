@@ -16,6 +16,51 @@
   <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Rewind code + conversation safely</code>
 </p>
 
+## Quick Learning Path
+
+If you are new to this repo, use this order:
+
+1. Read the learning guides
+   [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
+   [docs/agent-learning-en.md](docs/agent-learning-en.md)
+   [docs/source-map.md](docs/source-map.md)
+2. Read the three core files
+   [src/pp_agent/runtime/runtime.py](src/pp_agent/runtime/runtime.py)
+   [src/pp_agent/tools/registry.py](src/pp_agent/tools/registry.py)
+   [src/pp_agent/runtime/session_host.py](src/pp_agent/runtime/session_host.py)
+3. Then explore the product layers
+   `chat`: `src/pp_agent/cli/chat.py`
+   `tui`: `src/pp_agent/tui/app.py`
+   `bootstrap`: `src/pp_agent/app/bootstrap.py`
+
+```mermaid
+flowchart TD
+  A["Start Here"] --> B["Learning Guides"]
+  B --> B1["docs/agent-learning-zh.md"]
+  B --> B2["docs/agent-learning-en.md"]
+  B --> B3["docs/source-map.md"]
+
+  B3 --> C["Core Runtime Path"]
+  C --> C1["runtime/runtime.py"]
+  C1 --> C2["tools/registry.py"]
+  C2 --> C3["runtime/session_host.py"]
+
+  C3 --> D["System Assembly"]
+  D --> D1["app/bootstrap.py"]
+  D1 --> D2["storage/settings.py"]
+
+  C1 --> E["Capability Layers"]
+  E --> E1["memory/*"]
+  E --> E2["skills/*"]
+  E --> E3["extensions/*"]
+  E --> E4["mcp/*"]
+
+  C1 --> F["Product Layers"]
+  F --> F1["cli/chat.py"]
+  F --> F2["tui/app.py"]
+  F --> F3["cli/render/*"]
+```
+
 ## Quick Start
 
 pp-Echo currently targets CLI-first CLI workflows and expects Python 3.9+.
@@ -302,6 +347,14 @@ flowchart LR
   CKPT --> SESS["Session tree + workspace state"]
   SESS --> CLI
 ```
+
+## Learning Docs
+
+If you are new to agent engineering or want a guided tour of this codebase:
+
+- Chinese learning guide: [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
+- English learning guide: [docs/agent-learning-en.md](docs/agent-learning-en.md)
+- Source map / module call graph: [docs/source-map.md](docs/source-map.md)
 
 ## Configuration
 
