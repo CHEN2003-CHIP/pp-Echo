@@ -21,6 +21,8 @@
 
 pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
 
+pp-Echo 既是一个可实际运行的本地 coding agent，也是一个适合边读边学的 agent engineering 参考项目。如果你是 agent 初学者，这个仓库提供了很多项目没有的东西：真实可运行的 runtime、可见的 planning、审批门控、memory、session 恢复能力，以及一套不依赖庞大平台、可以真正顺着读懂的代码结构。
+
 ## Why This Repo Is Worth Studying
 
 - It is not just a toy chatbot. It contains a real runtime loop, tool registry, session host, memory layer, approvals, rewind, and multiple user interfaces.
