@@ -1,0 +1,23 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="56" fill="#0B0F14"/>
+  <circle cx="128" cy="128" r="88" fill="url(#glow)" opacity="0.18"/>
+  <g stroke="#E6EDF3" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 46L173 72V122L128 148L83 122V72L128 46Z" opacity="0.96"/>
+    <path d="M173 72L210 94V144L165 170L128 148" opacity="0.9"/>
+    <path d="M165 170L128 210L83 184V122" opacity="0.92"/>
+    <path d="M83 184L46 162V112L83 72" opacity="0.88"/>
+    <path d="M46 112L91 86H136" opacity="0.84"/>
+    <path d="M120 194H165L210 144" opacity="0.82"/>
+  </g>
+  <g stroke="#59D0A8" stroke-width="7" stroke-linecap="round" opacity="0.9">
+    <path d="M173 72L128 98"/>
+    <path d="M128 148L83 184"/>
+    <path d="M83 72L128 46"/>
+  </g>
+  <defs>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(128 128) rotate(90) scale(88)">
+      <stop stop-color="#59D0A8"/>
+      <stop offset="1" stop-color="#59D0A8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+</svg>

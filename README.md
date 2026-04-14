@@ -1,6 +1,10 @@
 # pp-Echo
 
 <p align="center">
+  <img src="docs/assets/logo-echo.svg" alt="pp-Echo logo" width="104" height="104" />
+</p>
+
+<p align="center">
   <strong>A beginner-friendly, CLI-first coding agent you can actually study, run locally, and extend.</strong><br />
   It shows plans before execution, asks before risky actions, and can rewind both repository state and conversation history.
 </p>
