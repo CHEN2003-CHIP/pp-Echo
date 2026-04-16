@@ -287,6 +287,23 @@ class ToolRegistry:
             for name, registration in self._registrations.items()
         }
 
+    def clone_selected(self, names: list[str], *, current_session_id: Optional[str] = None) -> "ToolRegistry":
+        cloned = ToolRegistry(
+            self.workspace,
+            policy=self.policy.model_copy(deep=True),
+            current_session_id=current_session_id,
+        )
+        cloned._registrations = {
+            name: self._registrations[name]
+            for name in names
+            if name in self._registrations
+        }
+        cloned._builtin_registration_names = {
+            name for name in cloned._registrations if name in self._builtin_registration_names
+        }
+        cloned._instances = {}
+        return cloned
+
     def evaluate_call(self, name: str, arguments: dict[str, Any]):
         spec = self.get_spec(name)
         metadata = self._registrations[name].metadata

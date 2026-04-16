@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
     PromptSession = None
 
 from pp_agent.api import chat as create_chat_runtime
-from pp_agent.cli.commands.approvals import approve_or_execute_pending_action, load_pending_action
+from pp_agent.cli.commands.approvals import approve_or_execute_pending_action, load_pending_action_or_user_error
 from pp_agent.cli.dispatcher import handle_command, handle_queue_command
 from pp_agent.cli.render.runtime import ChatEventRenderer, console, render_runtime_status
 
@@ -158,7 +158,11 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
             # 处理审批命令
             if raw.startswith("/approve "):
                 token = raw.split(" ", 1)[1].strip()
-                payload = load_pending_action(workspace, token)
+                try:
+                    payload = load_pending_action_or_user_error(workspace, token)
+                except ValueError as exc:
+                    console.print(str(exc))
+                    continue
                 # 计划审批：校验会话归属
                 if payload["action_type"] == "planner_approval":
                     session_for_token = payload.get("details", {}).get("session_id")

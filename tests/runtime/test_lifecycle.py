@@ -54,6 +54,19 @@ class FailingToolLLMClient:
         }
 
 
+class ProtectedEnvReadLLMClient:
+    def __init__(self) -> None:
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        yield {
+            "text": "",
+            "tool_calls": [{"id": "call-1", "name": "read_file", "arguments_chunk": '{"path":".env"}'}],
+            "finish_reason": "tool_calls",
+            "raw": {},
+        }
+
+
 def _agent(tmp_path: Path, llm_client, subscribers=None):
     from pp_agent.runtime.runtime import AgentRuntime
     from pp_agent.storage.sessions import SessionStore
@@ -111,3 +124,14 @@ def test_tool_lifecycle_error_order(tmp_path: Path) -> None:
     types = [event.type for event in events]
 
     assert types.index(TOOL_CALL) < types.index(TOOL_START) < types.index(TOOL_ERROR) < types.index(TOOL_END)
+
+
+def test_protected_env_read_surfaces_friendly_guidance(tmp_path: Path) -> None:
+    agent = _agent(tmp_path, ProtectedEnvReadLLMClient())
+
+    events = agent.prompt("check the model from .env")
+    tool_error = next(event for event in events if event.type == TOOL_ERROR)
+
+    assert "Cannot read protected file .env directly." in (tool_error.message or "")
+    assert "/settings" in (tool_error.message or "")
+    assert "pp-agent config show" in (tool_error.message or "")

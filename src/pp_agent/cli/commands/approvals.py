@@ -13,8 +13,22 @@ def load_pending_action(workspace: Path, token: str) -> dict:
     return pending_action_store_for(workspace).load(token)
 
 
+def explain_missing_pending_action(token: str) -> str:
+    normalized = token.strip()
+    if normalized.lower() == "list":
+        return "Use /approvals in chat mode, or run `pp-agent approvals list` in the shell to list pending actions."
+    return f"Pending action token not found: {normalized}. Use /approvals to inspect available tokens."
+
+
+def load_pending_action_or_user_error(workspace: Path, token: str) -> dict:
+    try:
+        return load_pending_action(workspace, token)
+    except FileNotFoundError as exc:
+        raise ValueError(explain_missing_pending_action(token)) from exc
+
+
 def approve_or_execute_pending_action(workspace: Path, token: str, render: bool = True) -> dict:
-    payload = load_pending_action(workspace, token)
+    payload = load_pending_action_or_user_error(workspace, token)
     if payload["action_type"] == "planner_approval":
         session_id = payload.get("details", {}).get("session_id")
         if not session_id:
@@ -41,7 +55,7 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
 
 
 def reject_pending_action(workspace: Path, token: str, render: bool = True) -> dict:
-    payload = load_pending_action(workspace, token)
+    payload = load_pending_action_or_user_error(workspace, token)
     if payload["action_type"] == "planner_approval":
         session_id = payload.get("details", {}).get("session_id")
         if not session_id:
@@ -108,6 +122,8 @@ __all__ = [
     "approvals_show_main",
     "approvals_summary_main",
     "approvals_summary_payload",
+    "explain_missing_pending_action",
     "load_pending_action",
+    "load_pending_action_or_user_error",
     "reject_pending_action",
 ]

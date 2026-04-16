@@ -48,7 +48,9 @@ from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.settings import Settings
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.legacy_hints_readiness import build_legacy_hint_readiness_report, scan_workspace_for_legacy_analysis_hints
-from pp_agent.tools.registry import ToolRegistry
+from pp_agent.tools.metadata import ToolMetadata
+from pp_agent.tools.registry import ToolRegistration, ToolRegistry
+from pp_agent.tools.subagent_tool import SpawnSubagentTool
 
 logger = logging.getLogger(__name__)
 
@@ -751,6 +753,47 @@ def confirm_tool_call(tool_name: str, args: dict) -> bool:
     return answer in {"y", "yes"}
 
 
+def _register_spawn_subagent_tool(
+    *,
+    workspace: Path,
+    session_store: SessionStore,
+    tool_registry: ToolRegistry,
+    current_session_id: str,
+) -> None:
+    # Register subagent delegation as a normal model-callable tool. The tool
+    # factory resolves a fresh SessionHost when materialized, but registration
+    # itself stays lightweight and does not create another runtime framework.
+    def _tool_factory() -> SpawnSubagentTool:
+        return SpawnSubagentTool(
+            workspace,
+            session_host=create_session_host(workspace),
+            session_store=session_store,
+            parent_registry=tool_registry,
+            current_session_id=current_session_id,
+        )
+
+    spec = _tool_factory().spec
+    tool_registry.register(
+        ToolRegistration(
+            name=spec.name,
+            category="subagent",
+            spec_factory=lambda: spec.model_copy(deep=True),
+            tool_factory=_tool_factory,
+            metadata=ToolMetadata(
+                name=spec.name,
+                category="subagent",
+                requires_confirmation=spec.requires_confirmation,
+                permission_domain=spec.permission_domain,
+                sensitive=spec.sensitive,
+                model_callable=spec.model_callable,
+                tool_family="subagent",
+                exact_effect_mode="none",
+            ),
+        ),
+        replace=True,
+    )
+
+
 def create_runtime_from_record(
     workspace: Path,
     record: SessionRecord,
@@ -766,6 +809,12 @@ def create_runtime_from_record(
     settings = load_settings(workspace)
     session_store = session_store_for(workspace)
     tool_registry = ToolRegistry(workspace, policy=settings.tool_policy, current_session_id=record.id)
+    _register_spawn_subagent_tool(
+        workspace=workspace,
+        session_store=session_store,
+        tool_registry=tool_registry,
+        current_session_id=record.id,
+    )
     runtime_hooks = RuntimeHooks()
     agent = AgentRuntime(
         llm_client=create_llm_client(

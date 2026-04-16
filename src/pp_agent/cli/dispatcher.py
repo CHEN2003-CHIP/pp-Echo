@@ -19,7 +19,7 @@ from pp_agent.app.bootstrap import reload_runtime_extensions
 # 导入审批相关能力: 加载/执行/驳回待审批动作
 from pp_agent.cli.commands.approvals import (
     approve_or_execute_pending_action,
-    load_pending_action,
+    load_pending_action_or_user_error,
     reject_pending_action,
 )
 # 导入会话管理能力: 分支/回溯/恢复/解析会话ID与轮次
@@ -365,7 +365,11 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
     # 手动审批指定待执行令牌
     if raw.startswith("/approve "):
         token = raw.split(" ", 1)[1].strip()
-        payload = load_pending_action(workspace, token)
+        try:
+            payload = load_pending_action_or_user_error(workspace, token)
+        except ValueError as exc:
+            console.print(str(exc))
+            return "handled"
         if payload["action_type"] == "planner_approval":
             session_id = payload.get("details", {}).get("session_id")
             if session_id != agent.session_id:
@@ -379,7 +383,11 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
     
     if raw.startswith("/reject "):
         token = raw.split(" ", 1)[1].strip()
-        payload = load_pending_action(workspace, token)
+        try:
+            payload = load_pending_action_or_user_error(workspace, token)
+        except ValueError as exc:
+            console.print(str(exc))
+            return "handled"
         if payload["action_type"] == "planner_approval":
             session_id = payload.get("details", {}).get("session_id")
             if session_id != agent.session_id:
