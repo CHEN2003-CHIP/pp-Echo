@@ -20,7 +20,7 @@
 ![pp-Echo hero](docs/assets/hero.svg)
 
 <p align="center">
-  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Rewind code + conversation safely</code> | <code>CLI + TUI</code>
+  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Explicit @subagent handoff</code> | <code>Rewind code + conversation safely</code> | <code>CLI + TUI</code>
 </p>
 
 pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
@@ -173,6 +173,7 @@ Most coding agents are good at producing output. Fewer are good at making their 
 - Sessions are stored as a tree, making branch, resume, compare, and rewind workflows easier to reason about.
 - Safe rewind is git-backed, so you can restore the conversation, the workspace, or both together.
 - Skills, extensions, and MCP-backed capabilities fit into the same repo-aware runtime rather than feeling bolted on.
+- Subagent delegation is explicit: users can require a child handoff with `@subagent` instead of guessing when the agent will delegate on its own.
 
 If this repo helps you learn agents faster or gives you a useful starting point for your own system, a Star helps more people discover it.
 
@@ -337,6 +338,26 @@ set PYTHONPATH=src
 python -m pp_agent.cli.main chat
 python -m pp_agent.cli.main run "Audit this repo and summarize risky commands"
 ```
+
+### 1A. Explicit subagent handoff
+
+Use `@subagent` when you want the runtime to force a child handoff before the main agent touches other tools.
+
+```text
+@subagent Read README.md and summarize the project
+@subagent Review the current diff and call out the biggest risks
+```
+
+Current built-in subagent specs:
+
+- `repo-researcher`: read-only repository inspection with `read_file`, `list_files`, `search_text`, and `grep_code`
+- `change-reviewer`: change-review flow with `git_status` and `git_diff_worktree` added to the read-only tool set
+
+Behavior notes:
+
+- `@subagent` is required before `spawn_subagent` can run.
+- If the model invents an unknown child name, runtime normalizes it back to a valid built-in subagent spec.
+- In chat mode, `@subagent` requests are forced through `spawn_subagent` instead of silently falling back to direct main-agent file reads.
 
 ### 2. Sessions and tree navigation
 

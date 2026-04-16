@@ -2,11 +2,13 @@
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
@@ -60,12 +62,14 @@ from pp_agent.domain import ChatMessage, TextPart, ToolCall, ToolCallPart
 from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.tools.effects import is_protected_path
 from pp_agent.tools.registry import ToolRegistry
 
 
 Subscriber = Callable[[AgentEvent], None]
 ConfirmCallback = Callable[[str, dict], bool]
 logger = logging.getLogger(__name__)
+TEXT_TOOL_CALL_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s+(\{.*\})\s*$", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -457,18 +461,19 @@ class AgentRuntime:
                     发失败状态的 PLANNER_STEP
                     发 TOOL_END(is_error=True)
                     """
-                    error_result = self.tool_registry.error_result(call, str(exc))
+                    friendly_message = self._friendly_tool_exception_message(call, exc)
+                    error_result = self.tool_registry.error_result(call, friendly_message)
                     self.state.messages.append(error_result.as_chat_message())
                     plan_steps[index].status = "failed"
                     tool_failed = True
-                    error_event = self._event(TOOL_ERROR, tool_name=call.name, message=str(exc), details={**tool_details, "success": False, "preview": str(exc)})
+                    error_event = self._event(TOOL_ERROR, tool_name=call.name, message=friendly_message, details={**tool_details, "success": False, "preview": friendly_message})
                     error_decision = self.lifecycle.emit_tool_error(error_event, self.state, call, exc)
                     error_event.details.update(error_result.details)
                     error_event.details.update(error_decision.details)
                     continue_after_error = continue_after_error or error_decision.continue_loop
                     yield from self._emit(error_event)
                     yield from self._emit(self._event(PLANNER_STEP, plan_step=plan_steps[index].model_copy(deep=True), details={"status": "failed", **error_decision.details}))
-                    yield from self._emit(self._event(TOOL_END, tool_name=call.name, message=str(exc), details={**error_result.details, **error_decision.details, **tool_details}, is_error=True))
+                    yield from self._emit(self._event(TOOL_END, tool_name=call.name, message=friendly_message, details={**error_result.details, **error_decision.details, **tool_details}, is_error=True))
             #把“已批准”开关关掉，避免影响下一轮
             self._approved_pending_plan = False
             yield from self._emit_compaction_if_needed()
@@ -596,6 +601,31 @@ class AgentRuntime:
         #使用决策信息
         assistant_text = response_decision.assistant_text or "".join(text_chunks)
         resolved_tool_calls = response_decision.tool_calls or tool_calls
+        if not resolved_tool_calls and assistant_text.strip():
+            fallback_tool_calls = self._tool_calls_from_text_fallback(assistant_text)
+            if fallback_tool_calls:
+                response_event.details["tool_call_text_fallback"] = True
+                resolved_tool_calls = fallback_tool_calls
+                assistant_text = ""
+        explicit_subagent = self._explicit_subagent_request(self.state)
+        if (
+            explicit_subagent is not None
+            and not self._has_subagent_result_since_latest_user(self.state)
+            and not any(call.name == "spawn_subagent" for call in resolved_tool_calls)
+        ):
+            response_event.details["subagent_forced"] = True
+            resolved_tool_calls = [
+                ToolCall(
+                    id=str(uuid.uuid4()),
+                    name="spawn_subagent",
+                    arguments={
+                        "subagent_type": explicit_subagent["spec_name"],
+                        "task": explicit_subagent["task"],
+                    },
+                )
+            ]
+            assistant_text = ""
+        resolved_tool_calls = self._normalize_subagent_tool_calls(resolved_tool_calls, explicit_subagent)
         #没有回复文本与工具调用结果时，尝试用工具结果内容做回退；如果还是没有，就发 ProviderError 事件并报错
         if not assistant_text.strip() and not resolved_tool_calls:
             fallback_text = self._tool_result_fallback(messages)
@@ -640,6 +670,97 @@ class AgentRuntime:
         if not tool_texts:
             return ""
         return "\n\n".join(tool_texts)
+
+    def _friendly_tool_exception_message(self, call: ToolCall, exc: Exception) -> str:
+        message = str(exc)
+        if not isinstance(exc, PermissionError) or call.name != "read_file":
+            return message
+
+        raw_path = str(call.arguments.get("path", "")).strip()
+        if not raw_path:
+            return message
+
+        try:
+            resolved = Path(raw_path)
+            if not resolved.is_absolute():
+                resolved = self.tool_registry.workspace / resolved
+            resolved = resolved.resolve()
+        except OSError:
+            return message
+
+        if not is_protected_path(self.tool_registry.workspace, resolved):
+            return message
+
+        name = resolved.name.lower()
+        if name == ".env" or name.startswith(".env."):
+            return (
+                f"Cannot read protected file {raw_path} directly. Secrets in .env are blocked by policy. "
+                "To check the active model, use /settings or `pp-agent config show` instead."
+            )
+        return f"Cannot read protected file {raw_path} directly. Protected paths and secret-like files are blocked by policy."
+
+    def _tool_calls_from_text_fallback(self, assistant_text: str) -> list[ToolCall]:
+        match = TEXT_TOOL_CALL_RE.match(assistant_text)
+        if not match:
+            return []
+
+        name = match.group(1).strip()
+        raw_arguments = match.group(2).strip()
+        try:
+            self.tool_registry.get_spec(name)
+        except KeyError:
+            return []
+
+        try:
+            arguments = json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(arguments, dict):
+            return []
+        return [ToolCall(id=str(uuid.uuid4()), name=name, arguments=arguments)]
+
+    @staticmethod
+    def _available_subagent_specs() -> set[str]:
+        from pp_agent.subagents.specs import default_subagent_specs
+
+        return set(default_subagent_specs())
+
+    def _explicit_subagent_request(self, state: AgentState) -> dict[str, str] | None:
+        latest_user_text = self._latest_user_text(state)
+        if "@subagent" not in latest_user_text:
+            return None
+        _, _, remainder = latest_user_text.partition("@subagent")
+        task = remainder.strip(" \t\r\n:：,-")
+        if not task:
+            task = "Handle the user's explicit subagent request."
+        lowered = task.lower()
+        spec_name = "change-reviewer" if any(token in lowered for token in ("review", "diff", "change", "审查", "评审", "改动")) else "repo-researcher"
+        return {"spec_name": spec_name, "task": task}
+
+    def _normalize_subagent_tool_calls(
+        self,
+        tool_calls: list[ToolCall],
+        explicit_subagent: dict[str, str] | None,
+    ) -> list[ToolCall]:
+        if not tool_calls:
+            return tool_calls
+
+        available_specs = self._available_subagent_specs()
+        normalized: list[ToolCall] = []
+        for call in tool_calls:
+            if call.name != "spawn_subagent":
+                normalized.append(call)
+                continue
+
+            arguments = dict(call.arguments)
+            if explicit_subagent is not None:
+                requested_type = str(arguments.get("subagent_type", "")).strip()
+                if requested_type not in available_specs:
+                    arguments["subagent_type"] = explicit_subagent["spec_name"]
+                if not str(arguments.get("task", "")).strip():
+                    arguments["task"] = explicit_subagent["task"]
+            normalized.append(call.model_copy(update={"arguments": arguments}))
+        return normalized
 
     def _build_plan_steps(self, tool_calls: list[ToolCall]) -> list[PlanStep]:
         """??????????????ToolCall?? ? ??? Agent ??????????????PlanStep??"""
@@ -1014,8 +1135,49 @@ class AgentRuntime:
         )
         return [messages[0], directive, *messages[1:]] if messages else [directive]
 
-    def _default_before_tool_call(self, _state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
+    @staticmethod
+    def _latest_user_text(state: AgentState) -> str:
+        for message in reversed(state.messages):
+            if message.role != "user":
+                continue
+            parts = [part.text.strip() for part in message.content if isinstance(part, TextPart) and part.text.strip()]
+            if parts:
+                return "\n".join(parts).strip()
+        return ""
+
+    @staticmethod
+    def _latest_user_index(state: AgentState) -> int | None:
+        for index in range(len(state.messages) - 1, -1, -1):
+            if state.messages[index].role == "user":
+                return index
+        return None
+
+    def _has_subagent_result_since_latest_user(self, state: AgentState) -> bool:
+        latest_user_index = self._latest_user_index(state)
+        start = 0 if latest_user_index is None else latest_user_index + 1
+        for message in state.messages[start:]:
+            if message.role == "tool" and message.tool_name == "spawn_subagent":
+                return True
+        return False
+
+    def _default_before_tool_call(self, state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
         """Agent 工具执行前的「最终安全校验钩子」"""
+        explicit_subagent = self._explicit_subagent_request(state)
+        subagent_handoff_done = self._has_subagent_result_since_latest_user(state)
+        if explicit_subagent is not None and not subagent_handoff_done and call.name != "spawn_subagent":
+            message = "This request explicitly asked for `@subagent`, so the main agent must hand off via `spawn_subagent` before using other tools."
+            return BeforeToolCallDecision(
+                action="reject",
+                message=message,
+                details={"policy_action": "reject", "permission_domain": "read", "policy_reason": message},
+            )
+        if call.name == "spawn_subagent" and explicit_subagent is None:
+            message = "Subagent calls require explicit user intent. Ask the user to include `@subagent` followed by the task."
+            return BeforeToolCallDecision(
+                action="reject",
+                message=message,
+                details={"policy_action": "reject", "permission_domain": "read", "policy_reason": message},
+            )
         spec = registry.get_spec(call.name)
         decision = registry.evaluate_call(call.name, call.arguments)
         metadata = registry.metadata().get(call.name)

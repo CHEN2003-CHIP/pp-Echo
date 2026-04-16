@@ -51,7 +51,7 @@ python -m pytest tests\api
 ## Pull Requests
 
 - Keep each PR focused on one user-visible improvement or one internal refactor.
-- Update docs when CLI behavior, startup flow, approvals, checkpointing, or capability discovery changes.
+- Update docs when CLI behavior, startup flow, approvals, checkpointing, subagent delegation rules, or capability discovery changes.
 - Prefer adding or updating tests with behavior changes.
 - Call out risks, migration notes, and user-facing command changes in the PR description.
 

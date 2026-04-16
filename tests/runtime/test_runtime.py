@@ -123,6 +123,60 @@ class FailingToolLLMClient:
         }
 
 
+class TextToolCallLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": ' list_files {"path":"src"}',
+                "tool_calls": [],
+                "finish_reason": "stop",
+                "raw": {},
+            }
+        else:
+            yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
+class SubagentToolLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": "",
+                "tool_calls": [{"id": "call-1", "name": "spawn_subagent", "arguments_chunk": '{"subagent_type":"repo-researcher","task":"Read README.md"}'}],
+                "finish_reason": "tool_calls",
+                "raw": {},
+            }
+        else:
+            yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
+class ReadFileThenDoneLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": "",
+                "tool_calls": [{"id": "call-1", "name": "read_file", "arguments_chunk": '{"path":"README.md"}'}],
+                "finish_reason": "tool_calls",
+                "raw": {},
+            }
+        else:
+            yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
 class SelfApproveLLMClient:
     def __init__(self) -> None:
         self.model = ModelConfig()
@@ -220,6 +274,140 @@ def test_agent_runtime_rejects_sensitive_tool_without_host_approval(tmp_path: Pa
 
     assert any(event.type == "tool_error" and "host-side approval" in (event.message or "") for event in events)
     assert (tmp_path / "a.txt").exists() is False
+
+
+def test_agent_runtime_promotes_textual_tool_call_syntax_to_real_tool_call(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, TextToolCallLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("use a subagent")
+
+    assert any(event.type == "tool_call" and event.tool_name == "list_files" for event in events)
+    assert any(event.type == "tool_end" and event.tool_name == "list_files" for event in events)
+    assert any(message.role == "tool" and message.tool_name == "list_files" for message in agent.state.messages)
+
+
+def test_agent_runtime_rejects_subagent_without_explicit_user_marker(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="spawn_subagent",
+        description="Delegate to a subagent.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "subagent_type": {"type": "string"},
+                "task": {"type": "string"},
+            },
+            "required": ["subagent_type", "task"],
+        },
+        executor=lambda _workspace, arguments: f"delegated:{arguments['subagent_type']}",
+        category="subagent",
+        permission_domain="read",
+        tool_family="subagent",
+        exact_effect_mode="none",
+    )
+    agent = AgentSession(
+        llm_client=SubagentToolLLMClient(),
+        tool_registry=registry,
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=False,
+    )
+    agent.restore_session_record(record)
+
+    events = agent.prompt("Read README.md")
+
+    assert any(
+        event.type == "tool_end"
+        and event.tool_name == "spawn_subagent"
+        and event.is_error
+        and "@subagent" in (event.message or "")
+        for event in events
+    )
+
+
+def test_agent_runtime_allows_subagent_with_explicit_user_marker(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="spawn_subagent",
+        description="Delegate to a subagent.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "subagent_type": {"type": "string"},
+                "task": {"type": "string"},
+            },
+            "required": ["subagent_type", "task"],
+        },
+        executor=lambda _workspace, arguments: f"delegated:{arguments['subagent_type']}",
+        category="subagent",
+        permission_domain="read",
+        tool_family="subagent",
+        exact_effect_mode="none",
+    )
+    agent = AgentSession(
+        llm_client=SubagentToolLLMClient(),
+        tool_registry=registry,
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=False,
+    )
+    agent.restore_session_record(record)
+
+    events = agent.prompt("@subagent Read README.md")
+
+    assert any(
+        event.type == "tool_end"
+        and event.tool_name == "spawn_subagent"
+        and not event.is_error
+        and "@subagent" not in (event.message or "")
+        for event in events
+    )
+
+
+def test_agent_runtime_forces_spawn_subagent_when_user_explicitly_requests_it(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    registry = ToolRegistry(tmp_path)
+    registry.register_function_tool(
+        name="spawn_subagent",
+        description="Delegate to a subagent.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "subagent_type": {"type": "string"},
+                "task": {"type": "string"},
+            },
+            "required": ["subagent_type", "task"],
+        },
+        executor=lambda _workspace, arguments: f"delegated:{arguments['subagent_type']}:{arguments['task']}",
+        category="subagent",
+        permission_domain="read",
+        tool_family="subagent",
+        exact_effect_mode="none",
+    )
+    agent = AgentSession(
+        llm_client=ReadFileThenDoneLLMClient(),
+        tool_registry=registry,
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=False,
+    )
+    agent.restore_session_record(record)
+
+    events = agent.prompt("@subagent 阅读 README.md 并总结项目特点")
+
+    assert any(event.type == "tool_call" and event.tool_name == "spawn_subagent" for event in events)
+    assert not any(event.type == "tool_call" and event.tool_name == "read_file" for event in events)
 
 
 def test_agent_runtime_stages_network_mcp_tool_for_host_approval(tmp_path: Path) -> None:
