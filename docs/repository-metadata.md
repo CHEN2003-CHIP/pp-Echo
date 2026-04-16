@@ -4,7 +4,7 @@ Use the following values in GitHub repository settings.
 
 ## Description
 
-`A Windows-first coding agent CLI with plan-before-act, approval gates, explicit @subagent delegation, session branching, and git-backed safe rewind.`
+`A Windows-first local coding agent CLI with visible planning, approval gates, explicit subagent MVP handoff, session branching, and git-backed safe rewind.`
 
 ## Topics
 
@@ -19,6 +19,7 @@ Use the following values in GitHub repository settings.
 - `git`
 - `mcp`
 - `subagent`
+- `learning-resource`
 
 ## Release
 

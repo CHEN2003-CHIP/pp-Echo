@@ -1,5 +1,12 @@
 # pp-Echo Source Map
 
+Before using this map, keep these repository facts in mind:
+
+- `pp-Echo` is currently Windows-first.
+- The runtime, approval, rewind, and session model are real and worth studying.
+- Subagent support exists, but it is still MVP-level.
+- “Agent team” should be treated as a future direction, not a completed subsystem.
+
 This document is a practical source-code reading map for the `pp-Echo` project.  
 It is designed for developers who want to answer two questions quickly:
 
@@ -31,6 +38,7 @@ flowchart TD
   BOOT --> SKILLS["skills/*"]
   BOOT --> EXT["extensions/*"]
   BOOT --> MCP["mcp/*"]
+  BOOT --> SUB["subagents/*"]
 
   RUNTIME --> TURN["runtime/turn_loop.py"]
   RUNTIME --> EVENTS["runtime/events.py + runtime/lifecycle.py"]
@@ -43,6 +51,7 @@ flowchart TD
   REG --> SHELL["tools/shell_tool.py"]
   REG --> POLICY["tools/policy.py"]
   REG --> EFFECTS["tools/effects.py"]
+  REG --> SUBTOOL["tools/subagent_tool.py"]
 
   HOST --> CHECKPOINT["runtime/git_checkpoint.py"]
   HOST --> REWIND["runtime/safe_rewind.py"]
@@ -104,6 +113,19 @@ These files explain:
 - how session trees work,
 - how checkpoints are created,
 - and how workspace + conversation rewind is coordinated.
+
+### Subagent MVP path
+
+- [src/pp_agent/tools/subagent_tool.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/subagent_tool.py)
+- [src/pp_agent/subagents/specs.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/subagents/specs.py)
+- [src/pp_agent/subagents/manager.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/subagents/manager.py)
+
+These files explain the current real scope of subagent support:
+
+- explicit child handoff
+- limited built-in child roles
+- restricted tool allowlists
+- summary-oriented child execution
 
 ### Persistence and configuration
 

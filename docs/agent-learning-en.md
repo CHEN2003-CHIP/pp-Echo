@@ -1,5 +1,29 @@
 # pp-Echo Learning Guide (English)
 
+This guide should be read with one important framing in mind: `pp-Echo` is currently a Windows-first project. The runtime, approval model, rewind flow, and session architecture are real and worth studying now, but the repo should not be described as a finished cross-platform agent platform or a mature agent-team framework.
+
+## 0. Read This First
+
+Before going deep into the modules, keep these project truths in mind:
+
+- Windows is the clearest and most supported path today.
+- The core runtime and safety architecture are already substantial and studyable.
+- Subagent support exists, but it is currently MVP-level.
+- “Agent team” should be treated as a direction, not as a completed subsystem.
+
+## 0A. What Subagent Means Here Today
+
+The repository already contains explicit subagent handoff support, but its scope is intentionally narrow.
+
+Current reality:
+
+- users can explicitly request `@subagent`
+- runtime routes that request through `spawn_subagent`
+- the built-in child specs are currently `repo-researcher` and `change-reviewer`
+- the child path is summary-oriented: fork session, restricted tools, constrained execution, summary return
+
+This is useful and real, but it is not the same thing as a broad multi-agent planner or a mature agent-team system.
+
 This guide is for developers who are new to agent systems. The goal is not to explain every implementation detail, but to help you quickly build a strong mental model of:
 
 1. how the project starts,
@@ -596,6 +620,28 @@ The session model here is a tree, not just a list.
 ### 11.4 Do Not Think of Memory as Dumping More History Into the Prompt
 
 The design uses retrieval augmentation, not raw history stuffing.
+
+## 11A. Common Misunderstandings
+
+### “This is already a full agent team.”
+
+It is not. The repo has explicit subagent MVP support, but not a mature agent-team orchestration layer.
+
+### “If it runs from source, it is already equally supported on Linux and macOS.”
+
+Not yet. The project is still Windows-first in its external support story.
+
+### “Planner approval and execution approval are basically the same thing.”
+
+They are intentionally different, and the codebase is worth studying partly because it keeps them separate.
+
+## 11B. Current Limitations
+
+- Windows is the main supported path today.
+- Some shell and UX assumptions are still Windows-oriented.
+- Subagent behavior is intentionally narrow and summary-oriented.
+- “Agent team” is still a roadmap direction rather than a completed product layer.
+- Some architecture edges are still being tightened as the project evolves.
 
 ## 12. Final Takeaway
 

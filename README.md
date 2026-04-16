@@ -5,12 +5,13 @@
 </p>
 
 <p align="center">
-  <strong>A beginner-friendly, CLI-first coding agent you can actually study, run locally, and extend.</strong><br />
+  <strong>A Windows-first, CLI-first coding agent you can actually study, run locally, and extend.</strong><br />
   It shows plans before execution, asks before risky actions, and can rewind both repository state and conversation history.
 </p>
 
 <p align="center">
   <a href="#quick-start"><img alt="Quick Start" src="https://img.shields.io/badge/Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
+  <a href="docs/agent-learning-zh.md"><img alt="中文学习路径" src="https://img.shields.io/badge/中文学习路径-DC2626?style=for-the-badge&logo=readme&logoColor=white"></a>
   <a href="#why-this-repo-is-worth-studying"><img alt="Why Study" src="https://img.shields.io/badge/Why_Study-1E293B?style=for-the-badge&logo=bookstack&logoColor=white"></a>
   <a href="#quick-learning-path"><img alt="Learning Path" src="https://img.shields.io/badge/Learning_Path-2563EB?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
   <a href="#demo--screenshots"><img alt="Demo" src="https://img.shields.io/badge/Demo-163257?style=for-the-badge&logo=gitlfs&logoColor=white"></a>
@@ -26,6 +27,45 @@
 pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
 
 pp-Echo 既是一个可实际运行的本地 coding agent，也是一个适合边读边学的 agent engineering 参考项目。如果你是 agent 初学者，这个仓库提供了很多项目没有的东西：真实可运行的 runtime、可见的 planning、审批门控、memory、session 恢复能力，以及一套不依赖庞大平台、可以真正顺着读懂的代码结构。
+
+## Current Status
+
+pp-Echo should currently be understood as a `Windows-first` project.
+
+- Windows is the main supported and most tested path today.
+- The helper scripts and the quickest onboarding path are Windows-oriented.
+- Linux and macOS should not be assumed to have equal support yet.
+- The runtime, approvals, rewind, session tree, and storage model are real and useful today.
+- Subagent support exists, but it is still MVP-level rather than a finished agent-team system.
+
+In other words: this repo already contains real architecture worth studying, but it is still evolving and should not be described as a fully mature multi-agent platform.
+
+## Windows-First Scope
+
+The project is intentionally described as `Windows-first` to avoid confusion.
+
+- Use Windows for the clearest supported experience.
+- Treat Linux/macOS compatibility as future work rather than current parity.
+- Read the `.bat` scripts as the primary convenience entrypoints, not as optional historical leftovers.
+
+## Subagent Progress
+
+The `@subagent` path is real, but narrow by design today.
+
+What exists now:
+
+- explicit user-triggered `@subagent` handoff
+- a built-in `spawn_subagent` tool
+- two built-in child specs: `repo-researcher` and `change-reviewer`
+- child execution that forks a session, narrows tools, runs a constrained prompt, and returns a summary
+
+What does not exist yet:
+
+- full agent-team orchestration
+- rich long-running multi-agent coordination
+- a broad child-role ecosystem
+
+The honest description is: `subagent support exists, but it is currently an MVP child-handoff workflow rather than a finished agent-team system`.
 
 ## Why This Repo Is Worth Studying
 
@@ -343,6 +383,8 @@ python -m pp_agent.cli.main run "Audit this repo and summarize risky commands"
 
 Use `@subagent` when you want the runtime to force a child handoff before the main agent touches other tools.
 
+This is currently an MVP child workflow, not a full agent-team planner. Treat it as explicit delegated inspection with a constrained child, not as mature multi-agent orchestration.
+
 ```text
 @subagent Read README.md and summarize the project
 @subagent Review the current diff and call out the biggest risks
@@ -358,6 +400,7 @@ Behavior notes:
 - `@subagent` is required before `spawn_subagent` can run.
 - If the model invents an unknown child name, runtime normalizes it back to a valid built-in subagent spec.
 - In chat mode, `@subagent` requests are forced through `spawn_subagent` instead of silently falling back to direct main-agent file reads.
+- Current child execution is intentionally narrow: fork session, restrict tools, run a constrained prompt, return summary output.
 
 ### 2. Sessions and tree navigation
 

@@ -525,3 +525,36 @@ flowchart TD
 - 状态持久化在 `storage`
 
 只要先读通这三层，这个项目后面的 planner、approval、timeline、extensions 演进方向就会比较自然。
+## Learning Index
+
+Use this file as the study entry for the repository.
+
+The recommended document split is now:
+
+- `README.md`: public project positioning, Windows-first scope, and current status
+- `docs/agent-learning-en.md`: main English learning guide
+- `docs/agent-learning-zh.md`: main Chinese learning guide
+- `docs/source-map.md`: compact module and call-chain map
+- `PROJECT_LEARNING.md`: study index and reading entry
+
+Before reading deeply, keep these points in mind:
+
+- `pp-Echo` is currently Windows-first.
+- The runtime, approvals, rewind, and session model are already real and worth studying.
+- Subagent support exists, but it is still MVP-level.
+- “Agent team” should be treated as a direction, not a completed subsystem.
+
+### Best first files
+
+1. `src/pp_agent/runtime/runtime.py`
+2. `src/pp_agent/tools/registry.py`
+3. `src/pp_agent/runtime/session_host.py`
+4. `src/pp_agent/app/bootstrap.py`
+5. `src/pp_agent/storage/settings.py`
+
+### Suggested study tasks
+
+1. Trace one prompt from CLI/TUI input to runtime persistence.
+2. Explain the difference between planner approval and execution approval.
+3. Explain how session tree, checkpoint, and safe rewind fit together.
+4. Explain the current real scope of `@subagent`.
