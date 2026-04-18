@@ -82,10 +82,20 @@ class SpawnSubagentTool(BaseTool):
                 details={
                     "spec_name": result.spec_name,
                     "session_id": result.session_id,
+                    "child_session_id": result.session_id,
                     "success": result.success,
                     "event_count": result.event_count,
                     "tool_calls_used": list(result.tool_calls_used),
                     "error_message": result.error_message,
+                    "failure_kind": result.failure_kind,
+                    "summary": result.summary,
+                    "findings": list(result.findings),
+                    "recommended_next_action": result.recommended_next_action,
+                    "inspected_paths": list(result.inspected_paths),
+                    "confidence": result.confidence,
+                    "started_at": result.started_at,
+                    "finished_at": result.finished_at,
+                    "duration_ms": result.duration_ms,
                 },
             )
         except Exception as exc:  # noqa: BLE001
@@ -112,5 +122,11 @@ class SpawnSubagentTool(BaseTool):
                     "event_count": 0,
                     "tool_calls_used": [],
                     "error_message": message,
+                    "failure_kind": "child_runtime_error",
+                    "summary": message,
+                    "findings": [f"Subagent run failed: {message}"],
+                    "recommended_next_action": "Review the task and retry.",
+                    "inspected_paths": [],
+                    "confidence": "low",
                 },
             )

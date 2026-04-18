@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from pp_agent.llm.models import ModelConfig
 from pp_agent.runtime.session_host import SessionHost
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.checkpoints import CheckpointStore
@@ -19,14 +20,28 @@ class StubRuntime:
         self.state = SimpleNamespace(
             system_prompt=system_prompt,
             messages=[],
+            model=ModelConfig(),
+            turn=SimpleNamespace(turn_id=0),
         )
         self.require_plan_approval = False
         self.tool_registry = ToolRegistry(session_store.root.parent, current_session_id=session_id)
         self._recorder = recorder
+        self._pending_events = []
+        self.llm_client = SimpleNamespace(model=ModelConfig())
 
     def restore_session_record(self, record, *, emit_event: bool = True) -> None:
         self._recorder["restore_called"] = True
         self._recorder["restored_session_id"] = record.id
+
+    def _event(self, event_type: str, **kwargs):
+        return SimpleNamespace(type=event_type, **kwargs)
+
+    def _queue_lifecycle_event(self, event) -> None:
+        self._pending_events.append(event)
+
+    def _emit(self, event):
+        self._recorder.setdefault("emitted_events", []).append(event.type)
+        return [event]
 
     def prompt(self, prompt_text: str):
         self._recorder["prompt_calls"] = int(self._recorder.get("prompt_calls", 0)) + 1
@@ -109,6 +124,10 @@ def test_subagent_manager_runs_in_forked_session_with_restricted_tools(tmp_path:
     assert result.success is True
     assert result.session_id != parent_runtime.session_id
     assert result.final_text.startswith("Findings")
+    assert result.summary == "Repository notes inspected."
+    assert result.recommended_next_action == "Continue with the requested change."
+    assert result.inspected_paths == ["notes.txt"]
+    assert result.confidence == "medium"
     assert result.tool_calls_used == ["read_file"]
     assert result.event_count > 0
     assert recorder["tools"] == ["read_file", "list_files", "search_text", "grep_code"]

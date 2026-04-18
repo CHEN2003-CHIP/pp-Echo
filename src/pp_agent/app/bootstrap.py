@@ -51,6 +51,7 @@ from pp_agent.tools.legacy_hints_readiness import build_legacy_hint_readiness_re
 from pp_agent.tools.metadata import ToolMetadata
 from pp_agent.tools.registry import ToolRegistration, ToolRegistry
 from pp_agent.tools.subagent_tool import SpawnSubagentTool
+from pp_agent.subagents.catalog import SubAgentCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -874,6 +875,10 @@ def create_runtime_from_record(
     for subscriber in lifecycle_subscribers or []:
         agent.subscribe(subscriber)
     return agent
+
+
+def list_subagent_specs() -> list[str]:
+    return [spec.name for spec in SubAgentCatalog().list()]
 
 
 def reload_runtime_extensions(

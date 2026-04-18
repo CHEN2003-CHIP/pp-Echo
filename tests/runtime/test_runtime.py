@@ -141,6 +141,24 @@ class TextToolCallLLMClient:
             yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
+class ProseThenTextToolCallLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": '我来查看文件。 read_file {"path":"README.md"}',
+                "tool_calls": [],
+                "finish_reason": "stop",
+                "raw": {},
+            }
+        else:
+            yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
 class SubagentToolLLMClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -284,6 +302,16 @@ def test_agent_runtime_promotes_textual_tool_call_syntax_to_real_tool_call(tmp_p
     assert any(event.type == "tool_call" and event.tool_name == "list_files" for event in events)
     assert any(event.type == "tool_end" and event.tool_name == "list_files" for event in events)
     assert any(message.role == "tool" and message.tool_name == "list_files" for message in agent.state.messages)
+
+
+def test_agent_runtime_promotes_trailing_textual_tool_call_after_prose(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("demo", encoding="utf-8")
+    agent = build_agent(tmp_path, ProseThenTextToolCallLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("read readme")
+
+    assert any(event.type == "tool_call" and event.tool_name == "read_file" for event in events)
+    assert any(event.type == "tool_end" and event.tool_name == "read_file" for event in events)
 
 
 def test_agent_runtime_rejects_subagent_without_explicit_user_marker(tmp_path: Path) -> None:

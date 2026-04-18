@@ -69,7 +69,7 @@ from pp_agent.tools.registry import ToolRegistry
 Subscriber = Callable[[AgentEvent], None]
 ConfirmCallback = Callable[[str, dict], bool]
 logger = logging.getLogger(__name__)
-TEXT_TOOL_CALL_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s+(\{.*\})\s*$", re.DOTALL)
+TEXT_TOOL_CALL_RE = re.compile(r"([A-Za-z0-9_.-]+)\s+(\{.*\})\s*$", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -700,7 +700,7 @@ class AgentRuntime:
         return f"Cannot read protected file {raw_path} directly. Protected paths and secret-like files are blocked by policy."
 
     def _tool_calls_from_text_fallback(self, assistant_text: str) -> list[ToolCall]:
-        match = TEXT_TOOL_CALL_RE.match(assistant_text)
+        match = TEXT_TOOL_CALL_RE.search(assistant_text)
         if not match:
             return []
 

@@ -4,7 +4,15 @@ from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from pp_agent.subagents.specs import SubAgentRunResult, SubAgentSpec, default_subagent_specs
+from pp_agent.runtime.lifecycle import SUBAGENT_END, SUBAGENT_FAIL, SUBAGENT_START
+from pp_agent.subagents.catalog import SubAgentCatalog
+from pp_agent.subagents.runtime_adapter import SubAgentRuntimeAdapter, SubAgentTurnLimitReached
+from pp_agent.subagents.specs import (
+    SubAgentRunResult,
+    SubAgentSpec,
+    failure_result,
+    parse_subagent_output,
+)
 
 if TYPE_CHECKING:
     from pp_agent.runtime.runtime import AgentRuntime
@@ -43,20 +51,20 @@ class SubAgentManager:
         session_store: SessionStore,
         runtime_factory: Optional[RuntimeFactory] = None,
         specs: Optional[dict[str, SubAgentSpec]] = None,
+        catalog: Optional[SubAgentCatalog] = None,
     ) -> None:
         self.workspace = workspace.resolve()
         self.session_host = session_host
         self.parent_registry = parent_registry
         self.session_store = session_store
         self.runtime_factory = runtime_factory or self._default_runtime_factory()
-        self._specs = specs or default_subagent_specs()
+        self.catalog = catalog or SubAgentCatalog(specs)
 
     def list_specs(self) -> list[SubAgentSpec]:
-        return [spec.model_copy(deep=True) for spec in self._specs.values()]
+        return self.catalog.list()
 
     def get_spec(self, name: str) -> Optional[SubAgentSpec]:
-        spec = self._specs.get(name)
-        return spec.model_copy(deep=True) if spec is not None else None
+        return self.catalog.get(name)
 
     def run_sync(
         self,
@@ -66,20 +74,38 @@ class SubAgentManager:
         spec_name: str,
         task: str,
     ) -> SubAgentRunResult:
+        started_at = self._now()
         spec = self.get_spec(spec_name)
         if spec is None:
-            return self._failure_result(
+            return failure_result(
                 spec_name=spec_name,
                 session_id="",
                 active_head_id=None,
                 message=f"Subagent '{spec_name}' is not available.",
+                failure_kind="spec_not_found",
+                started_at=started_at,
+                finished_at=self._now(),
             )
         if spec.return_format != "summary":
-            return self._failure_result(
+            return failure_result(
                 spec_name=spec.name,
                 session_id="",
                 active_head_id=None,
                 message=f"Subagent '{spec.name}' only supports summary output in this MVP.",
+                failure_kind="child_runtime_error",
+                started_at=started_at,
+                finished_at=self._now(),
+            )
+        validation_error = self._validate_spec(spec)
+        if validation_error is not None:
+            return failure_result(
+                spec_name=spec.name,
+                session_id="",
+                active_head_id=None,
+                message=validation_error,
+                failure_kind="tool_validation_failed",
+                started_at=started_at,
+                finished_at=self._now(),
             )
 
         forked = self.session_host.fork_session(
@@ -90,51 +116,131 @@ class SubAgentManager:
         child_session_id = forked.session_id
         child_head_id = forked.active_head_id
         try:
-            # Keep the child execution path intentionally narrow for the MVP:
-            # fork, restore, inject child constraints, run one prompt, extract
-            # only the final assistant summary.
             child_record = self.session_store.load(child_session_id)
             child_runtime = self.runtime_factory(self.workspace, child_record, None)
-            child_runtime.restore_session_record(child_record, emit_event=False)
-            child_runtime.state.system_prompt = spec.system_prompt
-            child_runtime.require_plan_approval = spec.require_plan_approval
-            child_runtime.tool_registry = build_subagent_tool_registry(
-                self.parent_registry,
-                self.workspace,
-                child_session_id,
-                spec.tool_allowlist,
+            child = SubAgentRuntimeAdapter(child_runtime)
+            child.restore_session_record(child_record, emit_event=False)
+            child.set_system_prompt(spec.system_prompt)
+            child.set_require_plan_approval(spec.require_plan_approval)
+            child.set_model_override(spec.model_override)
+            child.set_tool_registry(
+                build_subagent_tool_registry(
+                    self.parent_registry,
+                    self.workspace,
+                    child_session_id,
+                    spec.tool_allowlist,
+                )
             )
-            events = child_runtime.prompt(self._build_subagent_prompt(spec, task))
-            final_text = self._extract_final_text(child_runtime)
+            child.queue_lifecycle_event(
+                SUBAGENT_START,
+                details={
+                    "parent_session_id": parent_session_id,
+                    "spec_name": spec.name,
+                    "max_turns": spec.max_turns,
+                },
+            )
+            events = child.prompt(self._build_subagent_prompt(spec, task), max_turns=spec.max_turns)
+            final_text = child.extract_final_text()
             tool_calls_used = self._tool_calls_used(events)
             active_head_id = child_runtime.session_store.load(child_session_id).active_head_id
-            if not final_text:
-                message = "Subagent completed without producing a final summary."
-                return SubAgentRunResult(
+            finished_at = self._now()
+            if self._used_tool_result_fallback(events):
+                message = "Subagent model returned an empty response after tool results, so no reliable summary was produced."
+                child.emit_lifecycle_event(
+                    SUBAGENT_FAIL,
+                    message=message,
+                    details={"spec_name": spec.name, "failure_kind": "child_runtime_error"},
+                    is_error=True,
+                )
+                return failure_result(
                     spec_name=spec.name,
                     session_id=child_session_id,
                     active_head_id=active_head_id,
-                    final_text=self._failure_summary(message),
+                    message=message,
+                    failure_kind="child_runtime_error",
                     tool_calls_used=tool_calls_used,
                     event_count=len(events),
-                    success=False,
-                    error_message=message,
+                    started_at=started_at,
+                    finished_at=finished_at,
                 )
-            return SubAgentRunResult(
+            if not final_text:
+                message = "Subagent completed without producing a final summary."
+                child.emit_lifecycle_event(
+                    SUBAGENT_FAIL,
+                    message=message,
+                    details={"spec_name": spec.name, "failure_kind": "empty_result"},
+                    is_error=True,
+                )
+                return failure_result(
+                    spec_name=spec.name,
+                    session_id=child_session_id,
+                    active_head_id=active_head_id,
+                    message=message,
+                    failure_kind="empty_result",
+                    tool_calls_used=tool_calls_used,
+                    event_count=len(events),
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+            parsed = parse_subagent_output(final_text)
+            result = SubAgentRunResult(
                 spec_name=spec.name,
                 session_id=child_session_id,
                 active_head_id=active_head_id,
+                summary=str(parsed["summary"]),
+                findings=list(parsed["findings"]),
+                recommended_next_action=str(parsed["recommended_next_action"]),
+                inspected_paths=list(parsed["inspected_paths"]),
+                confidence=str(parsed["confidence"]),
                 final_text=final_text,
                 tool_calls_used=tool_calls_used,
                 event_count=len(events),
                 success=True,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=max(int((finished_at - started_at) * 1000), 0),
             )
-        except Exception as exc:  # noqa: BLE001
-            return self._failure_result(
+            child.emit_lifecycle_event(
+                SUBAGENT_END,
+                details={
+                    "spec_name": spec.name,
+                    "tool_calls_used": tool_calls_used,
+                    "event_count": len(events),
+                    "duration_ms": result.duration_ms,
+                },
+            )
+            return result
+        except SubAgentTurnLimitReached as exc:
+            finished_at = self._now()
+            return failure_result(
                 spec_name=spec.name,
                 session_id=child_session_id,
                 active_head_id=child_head_id,
                 message=self._safe_error_message(exc),
+                failure_kind="turn_limit_reached",
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+        except Exception as exc:  # noqa: BLE001
+            finished_at = self._now()
+            message = self._safe_error_message(exc)
+            try:
+                child.emit_lifecycle_event(  # type: ignore[name-defined]
+                    SUBAGENT_FAIL,
+                    message=message,
+                    details={"spec_name": spec.name, "failure_kind": "child_runtime_error"},
+                    is_error=True,
+                )
+            except Exception:
+                pass
+            return failure_result(
+                spec_name=spec.name,
+                session_id=child_session_id,
+                active_head_id=child_head_id,
+                message=message,
+                failure_kind="child_runtime_error",
+                started_at=started_at,
+                finished_at=finished_at,
             )
 
     @staticmethod
@@ -146,24 +252,15 @@ class SubAgentManager:
             "- Use only the tools already available to you.\n"
             "- Do not ask follow-up questions.\n"
             "- Do not expand the requested scope.\n"
+            "- Never call `spawn_subagent`.\n"
             "- Return summary output only.\n\n"
             "Output format:\n"
+            "0. Summary\n"
             "1. Findings\n"
             "2. Recommended next action\n"
             "3. Files/paths inspected\n"
             "4. Confidence\n"
         )
-
-    @staticmethod
-    def _extract_final_text(runtime: AgentRuntime) -> str:
-        for message in reversed(runtime.state.messages):
-            if message.role != "assistant":
-                continue
-            parts = [part.text.strip() for part in message.content if getattr(part, "text", "").strip()]
-            text = "\n".join(parts).strip()
-            if text:
-                return text
-        return ""
 
     @staticmethod
     def _tool_calls_used(events) -> list[str]:
@@ -176,42 +273,31 @@ class SubAgentManager:
         return used
 
     @staticmethod
+    def _used_tool_result_fallback(events) -> bool:
+        for event in events:
+            if event.type == "provider_response" and event.details.get("fallback") == "tool_results":
+                return True
+        return False
+
+    @staticmethod
     def _safe_error_message(exc: Exception) -> str:
         message = str(exc).strip() or exc.__class__.__name__
         return message.splitlines()[0][:240]
 
-    @classmethod
-    def _failure_result(
-        cls,
-        *,
-        spec_name: str,
-        session_id: str,
-        active_head_id: Optional[str],
-        message: str,
-    ) -> SubAgentRunResult:
-        return SubAgentRunResult(
-            spec_name=spec_name,
-            session_id=session_id,
-            active_head_id=active_head_id,
-            final_text=cls._failure_summary(message),
-            tool_calls_used=[],
-            event_count=0,
-            success=False,
-            error_message=message,
-        )
+    def _validate_spec(self, spec: SubAgentSpec) -> Optional[str]:
+        metadata = self.parent_registry.metadata()
+        for name in spec.tool_allowlist:
+            if name == "spawn_subagent":
+                return f"Subagent '{spec.name}' cannot allow tool 'spawn_subagent'."
+            if name not in metadata:
+                return f"Subagent '{spec.name}' references unknown tool '{name}'."
+        return None
 
     @staticmethod
-    def _failure_summary(message: str) -> str:
-        return (
-            "Findings\n"
-            f"- Subagent run failed: {message}\n\n"
-            "Recommended next action\n"
-            "- Review the request or child tool access and try again.\n\n"
-            "Files/paths inspected\n"
-            "- None\n\n"
-            "Confidence\n"
-            "- low\n"
-        )
+    def _now() -> float:
+        import time
+
+        return time.time()
 
     @staticmethod
     def _default_runtime_factory() -> RuntimeFactory:
