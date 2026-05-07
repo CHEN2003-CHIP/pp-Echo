@@ -1,14 +1,27 @@
 from __future__ import annotations
 
-import time
-from collections.abc import Callable
 from typing import Any, Optional
-
-from pp_agent.llm.models import ModelConfig
 
 
 class SubAgentTurnLimitReached(RuntimeError):
     pass
+
+
+class _LimitedLLMClient:
+    """Child-only LLM wrapper that enforces a prompt-call budget without mutating the shared client."""
+
+    def __init__(self, base_client: Any, *, max_turns: int) -> None:
+        self._base_client = base_client
+        self._max_turns = max_turns
+        self._call_count = 0
+        self.model = getattr(base_client, "model", None)
+        self.provider = getattr(base_client, "provider", None)
+
+    def stream_chat(self, messages, tools=None):
+        self._call_count += 1
+        if self._call_count > self._max_turns:
+            raise SubAgentTurnLimitReached(f"Subagent exceeded max_turns={self._max_turns}.")
+        yield from self._base_client.stream_chat(messages, tools=tools)
 
 
 class SubAgentRuntimeAdapter:
@@ -94,21 +107,12 @@ class SubAgentRuntimeAdapter:
         stream_chat = getattr(llm_client, "stream_chat", None)
         if llm_client is None or not callable(stream_chat) or max_turns <= 0:
             return self._runtime.prompt(prompt_text)
-
-        call_count = 0
-
-        def _limited_stream_chat(messages, tools=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count > max_turns:
-                raise SubAgentTurnLimitReached(f"Subagent exceeded max_turns={max_turns}.")
-            yield from stream_chat(messages, tools=tools)
-
-        llm_client.stream_chat = _limited_stream_chat  # type: ignore[method-assign]
+        original_client = llm_client
+        self._runtime.llm_client = _LimitedLLMClient(original_client, max_turns=max_turns)
         try:
             return self._runtime.prompt(prompt_text)
         finally:
-            llm_client.stream_chat = stream_chat  # type: ignore[method-assign]
+            self._runtime.llm_client = original_client
 
     def extract_final_text(self) -> str:
         messages = getattr(self._runtime.state, "messages", [])

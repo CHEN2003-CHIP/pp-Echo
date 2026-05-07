@@ -92,3 +92,32 @@ def test_subagent_manager_enforces_max_turns(tmp_path: Path) -> None:
 
     assert result.success is False
     assert result.failure_kind == "turn_limit_reached"
+
+
+def test_subagent_turn_limit_wrapper_does_not_mutate_shared_client(tmp_path: Path) -> None:
+    shared_client = TwoTurnLLMClient()
+    session_store = SessionStore(tmp_path / "sessions")
+    record = session_store.create("system", ModelConfig())
+    runtime = AgentRuntime(
+        llm_client=shared_client,
+        tool_registry=ToolRegistry(tmp_path, current_session_id=record.id),
+        session_store=session_store,
+        session_id=record.id,
+        system_prompt="system",
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=False,
+    )
+    runtime.restore_session_record(record)
+
+    from pp_agent.subagents.runtime_adapter import SubAgentRuntimeAdapter
+
+    original_stream_chat = shared_client.stream_chat.__func__
+    adapter = SubAgentRuntimeAdapter(runtime)
+
+    try:
+        adapter.prompt("Read README.md", max_turns=1)
+    except Exception:
+        pass
+
+    assert runtime.llm_client is shared_client
+    assert shared_client.stream_chat.__func__ is original_stream_chat

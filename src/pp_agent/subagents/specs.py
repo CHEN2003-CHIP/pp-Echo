@@ -206,7 +206,33 @@ SubAgentFailureKind = Literal[
     "child_runtime_error",
     "empty_result",
     "turn_limit_reached",
+    "invalid_summary",
 ]
+
+
+def render_subagent_tool_message(
+    *,
+    success: bool,
+    summary: str,
+    findings: list[str],
+    recommended_next_action: str,
+    confidence: str,
+    failure_kind: Optional[str] = None,
+) -> str:
+    status = "success" if success else "failed"
+    lines = [f"Subagent {status}"]
+    if failure_kind:
+        lines[0] += f" ({failure_kind})"
+    if summary.strip():
+        lines.append(f"Summary: {summary.strip()}")
+    trimmed_findings = [item.strip() for item in findings if item.strip()][:3]
+    if trimmed_findings:
+        lines.append("Findings: " + " | ".join(trimmed_findings))
+    if recommended_next_action.strip():
+        lines.append(f"Next: {recommended_next_action.strip()}")
+    if confidence.strip():
+        lines.append(f"Confidence: {confidence.strip()}")
+    return "\n".join(lines)
 
 
 def default_subagent_specs() -> dict[str, SubAgentSpec]:

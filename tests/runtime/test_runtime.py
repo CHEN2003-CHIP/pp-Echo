@@ -10,6 +10,7 @@ from storage.timeline import TimelineStore
 from tools.pending_actions import PendingActionStore
 from tools.registry import ToolRegistry
 from pp_agent.runtime.runtime import AgentRuntime
+from pp_agent.tools.base import ToolExecutionResult
 
 
 class FakeLLMClient:
@@ -177,6 +178,21 @@ class SubagentToolLLMClient:
             yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
+class FailedSubagentToolLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        yield {
+            "text": "",
+            "tool_calls": [{"id": "call-1", "name": "spawn_subagent", "arguments_chunk": '{"subagent_type":"repo-researcher","task":"Read README.md"}'}],
+            "finish_reason": "tool_calls",
+            "raw": {},
+        }
+
+
 class ReadFileThenDoneLLMClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -302,16 +318,40 @@ def test_agent_runtime_promotes_textual_tool_call_syntax_to_real_tool_call(tmp_p
     assert any(event.type == "tool_call" and event.tool_name == "list_files" for event in events)
     assert any(event.type == "tool_end" and event.tool_name == "list_files" for event in events)
     assert any(message.role == "tool" and message.tool_name == "list_files" for message in agent.state.messages)
+    assert any(event.type == "provider_response" and event.details.get("tool_call_text_fallback_mode") == "trailing_single_call" for event in events)
 
 
-def test_agent_runtime_promotes_trailing_textual_tool_call_after_prose(tmp_path: Path) -> None:
+def test_agent_runtime_rejects_sensitive_trailing_textual_tool_call_after_prose(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("demo", encoding="utf-8")
     agent = build_agent(tmp_path, ProseThenTextToolCallLLMClient(), require_plan_approval=False)
 
     events = agent.prompt("read readme")
 
-    assert any(event.type == "tool_call" and event.tool_name == "read_file" for event in events)
-    assert any(event.type == "tool_end" and event.tool_name == "read_file" for event in events)
+    assert not any(event.type == "tool_call" and event.tool_name == "read_file" for event in events)
+    assert any(event.type == "provider_error" and "empty response" in (event.message or "").lower() for event in events)
+
+
+def test_agent_runtime_rejects_sensitive_textual_subagent_fallback(tmp_path: Path) -> None:
+    class ProseThenSubagentTextToolCallLLMClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.model = ModelConfig()
+
+        def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+            self.calls += 1
+            yield {
+                "text": 'I should delegate this. spawn_subagent {"subagent_type":"repo-researcher","task":"Read README.md"}',
+                "tool_calls": [],
+                "finish_reason": "stop",
+                "raw": {},
+            }
+
+    agent = build_agent(tmp_path, ProseThenSubagentTextToolCallLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("@subagent Read README.md")
+
+    assert not any(event.type == "tool_call" and event.tool_name == "spawn_subagent" for event in events)
+    assert any(event.type == "provider_error" and "empty response" in (event.message or "").lower() for event in events)
 
 
 def test_agent_runtime_rejects_subagent_without_explicit_user_marker(tmp_path: Path) -> None:
@@ -436,6 +476,39 @@ def test_agent_runtime_forces_spawn_subagent_when_user_explicitly_requests_it(tm
 
     assert any(event.type == "tool_call" and event.tool_name == "spawn_subagent" for event in events)
     assert not any(event.type == "tool_call" and event.tool_name == "read_file" for event in events)
+
+
+def test_agent_runtime_stops_after_failed_subagent_and_injects_failure_note(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    failing_result = ToolExecutionResult(
+        tool_call_id="call-1",
+        tool_name="spawn_subagent",
+        content="Subagent failed (invalid_summary)\nSummary: No reliable summary was produced.\nNext: Retry or switch to direct execution\nConfidence: low",
+        is_error=True,
+        details={
+            "success": False,
+            "failure_kind": "invalid_summary",
+            "error_message": "No reliable summary was produced.",
+            "summary": "No reliable summary was produced.",
+            "findings": ["Child only returned raw content"],
+            "recommended_next_action": "Retry or switch to direct execution",
+            "confidence": "low",
+        },
+    )
+    failing_message = failing_result.as_chat_message()
+    agent.state.messages.append(failing_message)
+
+    decision = agent._default_after_tool_call(
+        agent.state,
+        ToolCall(id="call-1", name="spawn_subagent", arguments={"subagent_type": "repo-researcher", "task": "Read README.md"}),
+        failing_result,
+    )
+    transformed = agent._default_transform_context(agent.state, [ChatMessage(role="system", content=[TextPart(text="sys")], timestamp=0.0)])
+
+    assert decision.continue_loop is False
+    assert decision.details["subagent_failure"] is True
+    assert any(message.role == "tool" and message.tool_name == "spawn_subagent" and message.metadata.get("is_error") for message in agent.state.messages)
+    assert any("most recent subagent delegation failed" in part.text.lower() for message in transformed for part in message.content if isinstance(part, TextPart))
 
 
 def test_agent_runtime_stages_network_mcp_tool_for_host_approval(tmp_path: Path) -> None:

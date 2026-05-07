@@ -69,7 +69,9 @@ from pp_agent.tools.registry import ToolRegistry
 Subscriber = Callable[[AgentEvent], None]
 ConfirmCallback = Callable[[str, dict], bool]
 logger = logging.getLogger(__name__)
-TEXT_TOOL_CALL_RE = re.compile(r"([A-Za-z0-9_.-]+)\s+(\{.*\})\s*$", re.DOTALL)
+TEXT_TOOL_NAME_RE = re.compile(r"([A-Za-z0-9_.-]+)\s*$")
+TEXT_TOOL_CALL_FALLBACK_ALLOWLIST = {"list_files", "search_text", "grep_code", "git_status"}
+TEXT_TOOL_CALL_FALLBACK_DENYLIST = {"spawn_subagent", "read_file", "write_file", "edit_file", "run_shell"}
 
 
 @dataclass(frozen=True)
@@ -605,6 +607,7 @@ class AgentRuntime:
             fallback_tool_calls = self._tool_calls_from_text_fallback(assistant_text)
             if fallback_tool_calls:
                 response_event.details["tool_call_text_fallback"] = True
+                response_event.details["tool_call_text_fallback_mode"] = "trailing_single_call"
                 resolved_tool_calls = fallback_tool_calls
                 assistant_text = ""
         explicit_subagent = self._explicit_subagent_request(self.state)
@@ -700,15 +703,27 @@ class AgentRuntime:
         return f"Cannot read protected file {raw_path} directly. Protected paths and secret-like files are blocked by policy."
 
     def _tool_calls_from_text_fallback(self, assistant_text: str) -> list[ToolCall]:
-        match = TEXT_TOOL_CALL_RE.search(assistant_text)
-        if not match:
+        last_brace = assistant_text.rfind("{")
+        if last_brace < 0:
             return []
-
-        name = match.group(1).strip()
-        raw_arguments = match.group(2).strip()
+        prefix = assistant_text[:last_brace].rstrip()
+        name_match = TEXT_TOOL_NAME_RE.search(prefix)
+        if not name_match:
+            return []
+        name = name_match.group(1).strip()
+        raw_arguments = assistant_text[last_brace:].strip()
+        if name in TEXT_TOOL_CALL_FALLBACK_DENYLIST:
+            return []
+        if name not in TEXT_TOOL_CALL_FALLBACK_ALLOWLIST:
+            return []
         try:
-            self.tool_registry.get_spec(name)
+            spec = self.tool_registry.get_spec(name)
         except KeyError:
+            return []
+        metadata = self.tool_registry.metadata().get(name)
+        if spec.permission_domain != "read":
+            return []
+        if metadata is not None and metadata.tool_family not in {None, "file", "repo"}:
             return []
 
         try:
@@ -1126,6 +1141,9 @@ class AgentRuntime:
         if follow_up_count:
             notes.append(f"Queued follow-up count: {follow_up_count}. Treat them as later requests after the current work is complete.")
         notes.append(f"Active session id: {self.session_id}. Use this exact id for session-scoped tools; safe rewind also accepts 'current'.")
+        subagent_failure_note = self._latest_subagent_failure_note(state)
+        if subagent_failure_note:
+            notes.append(subagent_failure_note)
         if not notes:
             return messages
         directive = ChatMessage(
@@ -1159,6 +1177,28 @@ class AgentRuntime:
             if message.role == "tool" and message.tool_name == "spawn_subagent":
                 return True
         return False
+
+    @staticmethod
+    def _latest_subagent_failure_note(state: AgentState) -> str:
+        for message in reversed(state.messages):
+            if message.role != "tool" or message.tool_name != "spawn_subagent":
+                continue
+            if not bool(message.metadata.get("is_error")):
+                return ""
+            details = dict(message.metadata.get("tool_details") or {})
+            failure_kind = str(details.get("failure_kind") or "subagent_failed").strip()
+            error_message = str(details.get("error_message") or details.get("summary") or "").strip()
+            if error_message:
+                return (
+                    "The most recent subagent delegation failed "
+                    f"({failure_kind}): {error_message}. Explain the failure clearly and suggest retrying or switching to direct execution. "
+                    "Do not assume the delegated task already completed."
+                )
+            return (
+                f"The most recent subagent delegation failed ({failure_kind}). Explain the failure clearly and suggest retrying or switching to direct execution. "
+                "Do not assume the delegated task already completed."
+            )
+        return ""
 
     def _default_before_tool_call(self, state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
         """Agent 工具执行前的「最终安全校验钩子」"""
@@ -1218,6 +1258,15 @@ class AgentRuntime:
 
     def _default_after_tool_call(self, _state: AgentState, _call: ToolCall, _result) -> AfterToolCallDecision:
         """Agent 工具执行后的「默认后续决策钩子」，默认继续执行后续工具调用（如果有）"""
+        if _call.name == "spawn_subagent" and getattr(_result, "is_error", False):
+            return AfterToolCallDecision(
+                continue_loop=False,
+                details={
+                    "subagent_failure": True,
+                    "failure_kind": _result.details.get("failure_kind"),
+                    "next_action_hint": "Explain the subagent failure and recommend retrying or switching to direct execution.",
+                },
+            )
         return AfterToolCallDecision(continue_loop=True)
 
     def _default_tool_error_hook(self, _state: AgentState, _call: ToolCall, _error: Exception) -> ToolErrorDecision:

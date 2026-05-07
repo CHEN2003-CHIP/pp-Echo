@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pp_agent.subagents.specs import SubAgentRunResult, parse_subagent_output
+from pp_agent.subagents.specs import SubAgentRunResult, parse_subagent_output, render_subagent_tool_message
 
 
 def test_parse_subagent_output_reads_sectioned_summary() -> None:
@@ -64,3 +64,18 @@ def test_subagent_run_result_renders_final_text_from_structured_fields() -> None
     assert result.final_text.startswith("Findings")
     assert "Found runtime hook path" in result.final_text
     assert "Update manager validation" in result.final_text
+
+
+def test_render_subagent_tool_message_stays_compact() -> None:
+    rendered = render_subagent_tool_message(
+        success=False,
+        summary="No reliable summary was produced.",
+        findings=["Provider returned no content", "Child only produced raw file content", "Retry recommended", "extra item"],
+        recommended_next_action="Retry or switch to direct execution",
+        confidence="low",
+        failure_kind="invalid_summary",
+    )
+
+    assert rendered.startswith("Subagent failed (invalid_summary)")
+    assert "Summary: No reliable summary was produced." in rendered
+    assert "extra item" not in rendered

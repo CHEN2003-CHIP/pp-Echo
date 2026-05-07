@@ -18,6 +18,7 @@ class ToolExecutionResult(ToolResult):
             tool_call_id=self.tool_call_id,
             tool_name=self.tool_name,
             content=[TextPart(text=self.content)],
+            metadata={"tool_details": dict(self.details), "is_error": self.is_error},
             timestamp=time.time(),
         )
 

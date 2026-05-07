@@ -55,6 +55,11 @@ def test_spawn_subagent_tool_returns_summary_only(tmp_path: Path, monkeypatch) -
                 spec_name="repo-researcher",
                 session_id="child-session-1",
                 active_head_id="child-head-1",
+                summary="thin summary",
+                findings=["thin summary"],
+                recommended_next_action="proceed",
+                inspected_paths=["src"],
+                confidence="high",
                 final_text="Findings\n- thin summary\n\nRecommended next action\n- proceed\n\nFiles/paths inspected\n- src\n\nConfidence\n- high",
                 tool_calls_used=["read_file"],
                 event_count=3,
@@ -69,12 +74,13 @@ def test_spawn_subagent_tool_returns_summary_only(tmp_path: Path, monkeypatch) -
     )
 
     assert result.is_error is False
-    assert result.content.startswith("Findings")
-    assert result.content == "Findings\n- thin summary\n\nRecommended next action\n- proceed\n\nFiles/paths inspected\n- src\n\nConfidence\n- high"
+    assert result.content.startswith("Subagent success")
+    assert "Summary: thin summary" in result.content
     assert result.details["success"] is True
     assert result.details["session_id"] == "child-session-1"
     assert result.details["event_count"] == 3
     assert result.details["tool_calls_used"] == ["read_file"]
+    assert result.details["final_text"].startswith("Findings")
     assert "events" not in result.details
     assert "messages" not in result.details
     assert calls == [(session_id, "repo-researcher", "Read the notes and summarize them.")]
@@ -95,11 +101,17 @@ def test_spawn_subagent_tool_returns_failure_summary(tmp_path: Path, monkeypatch
                 spec_name=spec_name,
                 session_id="",
                 active_head_id=None,
+                summary="Subagent 'missing-spec' is not available.",
+                findings=["Subagent run failed: missing spec"],
+                recommended_next_action="retry",
+                inspected_paths=[],
+                confidence="low",
                 final_text="Findings\n- Subagent run failed: missing spec\n\nRecommended next action\n- retry\n\nFiles/paths inspected\n- None\n\nConfidence\n- low\n",
                 tool_calls_used=[],
                 event_count=0,
                 success=False,
                 error_message="Subagent 'missing-spec' is not available.",
+                failure_kind="spec_not_found",
             )
 
     monkeypatch.setattr("pp_agent.tools.subagent_tool._get_subagent_manager_class", lambda: FakeManager)
@@ -107,7 +119,8 @@ def test_spawn_subagent_tool_returns_failure_summary(tmp_path: Path, monkeypatch
     result = tool.execute({"subagent_type": "missing-spec", "task": "anything"})
 
     assert result.is_error is True
-    assert "Subagent run failed" in result.content
+    assert result.content.startswith("Subagent failed")
     assert result.details["success"] is False
     assert result.details["error_message"] == "Subagent 'missing-spec' is not available."
+    assert result.details["failure_kind"] == "spec_not_found"
     assert calls == [session_id]

@@ -50,6 +50,22 @@ class ConversationCompactor:
     def _message_to_line(message: ChatMessage) -> str:
         role = message.role.upper()
         if message.role == "tool":
+            if message.tool_name == "spawn_subagent":
+                details = dict(message.metadata.get("tool_details") or {})
+                success = bool(not message.metadata.get("is_error"))
+                failure_kind = str(details.get("failure_kind") or "").strip()
+                summary = str(details.get("summary") or "").strip()
+                confidence = str(details.get("confidence") or "").strip()
+                inspected = list(details.get("inspected_paths") or [])
+                inspected_suffix = ""
+                if inspected:
+                    inspected_suffix = f" inspected={len(inspected)}"
+                status = "ok" if success else "failed"
+                failure_suffix = f"/{failure_kind}" if failure_kind else ""
+                compact = f"TOOL[spawn_subagent:{status}{failure_suffix}]{inspected_suffix}: {summary[:120]}"
+                if confidence:
+                    compact += f" (confidence={confidence})"
+                return compact
             text = " ".join(part.text for part in message.content if isinstance(part, TextPart))
             return f"TOOL[{message.tool_name or 'unknown'}]: {text[:200]}"
 

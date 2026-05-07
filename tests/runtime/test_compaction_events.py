@@ -53,3 +53,30 @@ def test_compact_now_noop_emits_no_completed_event(tmp_path: Path) -> None:
     events = agent.compact_now()
 
     assert events == []
+
+
+def test_compaction_uses_short_spawn_subagent_summary(tmp_path: Path) -> None:
+    from pp_agent.runtime.compaction import ConversationCompactor
+
+    message = ChatMessage(
+        role="tool",
+        tool_name="spawn_subagent",
+        tool_call_id="call-1",
+        content=[TextPart(text="very long raw text that should not be used directly")],
+        metadata={
+            "is_error": True,
+            "tool_details": {
+                "failure_kind": "invalid_summary",
+                "summary": "No reliable summary was produced.",
+                "confidence": "low",
+                "inspected_paths": ["README.md", "docs/guide.md"],
+            },
+        },
+        timestamp=1.0,
+    )
+
+    line = ConversationCompactor._message_to_line(message)
+
+    assert "spawn_subagent:failed/invalid_summary" in line
+    assert "No reliable summary was produced." in line
+    assert "inspected=2" in line

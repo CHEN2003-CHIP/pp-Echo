@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from pp_agent.domain import ToolSpec
+from pp_agent.subagents.specs import render_subagent_tool_message
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.policy import PermissionDomain
 
@@ -74,10 +75,18 @@ class SpawnSubagentTool(BaseTool):
                 spec_name=subagent_type,
                 task=task,
             )
+            compact_content = render_subagent_tool_message(
+                success=result.success,
+                summary=result.summary,
+                findings=result.findings,
+                recommended_next_action=result.recommended_next_action,
+                confidence=result.confidence,
+                failure_kind=result.failure_kind,
+            )
             return ToolExecutionResult(
                 tool_call_id="",
                 tool_name=self.spec.name,
-                content=result.final_text,
+                content=compact_content,
                 is_error=not result.success,
                 details={
                     "spec_name": result.spec_name,
@@ -93,6 +102,7 @@ class SpawnSubagentTool(BaseTool):
                     "recommended_next_action": result.recommended_next_action,
                     "inspected_paths": list(result.inspected_paths),
                     "confidence": result.confidence,
+                    "final_text": result.final_text,
                     "started_at": result.started_at,
                     "finished_at": result.finished_at,
                     "duration_ms": result.duration_ms,
@@ -100,20 +110,18 @@ class SpawnSubagentTool(BaseTool):
             )
         except Exception as exc:  # noqa: BLE001
             message = (str(exc).strip() or "Subagent execution failed.").splitlines()[0][:240]
-            summary = (
-                "Findings\n"
-                f"- Subagent run failed: {message}\n\n"
-                "Recommended next action\n"
-                "- Review the task and retry.\n\n"
-                "Files/paths inspected\n"
-                "- None\n\n"
-                "Confidence\n"
-                "- low\n"
+            compact_content = render_subagent_tool_message(
+                success=False,
+                summary=message,
+                findings=[f"Subagent run failed: {message}"],
+                recommended_next_action="Review the task and retry.",
+                confidence="low",
+                failure_kind="child_runtime_error",
             )
             return ToolExecutionResult(
                 tool_call_id="",
                 tool_name=self.spec.name,
-                content=summary,
+                content=compact_content,
                 is_error=True,
                 details={
                     "spec_name": subagent_type,
@@ -128,5 +136,6 @@ class SpawnSubagentTool(BaseTool):
                     "recommended_next_action": "Review the task and retry.",
                     "inspected_paths": [],
                     "confidence": "low",
+                    "final_text": compact_content,
                 },
             )

@@ -149,7 +149,7 @@ class SubAgentManager:
                 child.emit_lifecycle_event(
                     SUBAGENT_FAIL,
                     message=message,
-                    details={"spec_name": spec.name, "failure_kind": "child_runtime_error"},
+                    details={"spec_name": spec.name, "failure_kind": "invalid_summary"},
                     is_error=True,
                 )
                 return failure_result(
@@ -157,7 +157,7 @@ class SubAgentManager:
                     session_id=child_session_id,
                     active_head_id=active_head_id,
                     message=message,
-                    failure_kind="child_runtime_error",
+                    failure_kind="invalid_summary",
                     tool_calls_used=tool_calls_used,
                     event_count=len(events),
                     started_at=started_at,
@@ -183,6 +183,25 @@ class SubAgentManager:
                     finished_at=finished_at,
                 )
             parsed = parse_subagent_output(final_text)
+            validation_error = self._validate_summary_text(final_text, parsed)
+            if validation_error is not None:
+                child.emit_lifecycle_event(
+                    SUBAGENT_FAIL,
+                    message=validation_error,
+                    details={"spec_name": spec.name, "failure_kind": "invalid_summary"},
+                    is_error=True,
+                )
+                return failure_result(
+                    spec_name=spec.name,
+                    session_id=child_session_id,
+                    active_head_id=active_head_id,
+                    message=validation_error,
+                    failure_kind="invalid_summary",
+                    tool_calls_used=tool_calls_used,
+                    event_count=len(events),
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
             result = SubAgentRunResult(
                 spec_name=spec.name,
                 session_id=child_session_id,
@@ -291,6 +310,24 @@ class SubAgentManager:
                 return f"Subagent '{spec.name}' cannot allow tool 'spawn_subagent'."
             if name not in metadata:
                 return f"Subagent '{spec.name}' references unknown tool '{name}'."
+        return None
+
+    @staticmethod
+    def _validate_summary_text(final_text: str, parsed: dict[str, object]) -> Optional[str]:
+        if len(final_text) > 2500:
+            return "Subagent summary was too large and looked more like raw content than a concise summary."
+        summary = str(parsed.get("summary") or "").strip()
+        findings = [str(item).strip() for item in parsed.get("findings", []) if str(item).strip()]
+        next_action = str(parsed.get("recommended_next_action") or "").strip()
+        confidence = str(parsed.get("confidence") or "").strip()
+        if not summary:
+            return "Subagent summary did not include a usable summary section."
+        if not findings:
+            return "Subagent summary did not include any findings."
+        if not next_action:
+            return "Subagent summary did not include a recommended next action."
+        if not confidence:
+            return "Subagent summary did not include a confidence rating."
         return None
 
     @staticmethod
