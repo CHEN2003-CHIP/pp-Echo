@@ -22,6 +22,15 @@ from pp_agent.cli.commands.approvals import (
     load_pending_action_or_user_error,
     reject_pending_action,
 )
+from pp_agent.cli.commands.learning import (
+    apply_learning_candidate,
+    consolidate_project_memory,
+    dumps_payload,
+    learning_review_payload,
+    learning_show_payload,
+    learning_status_payload,
+    reject_learning_candidate,
+)
 # 导入会话管理能力: 分支/回溯/恢复/解析会话ID与轮次
 from pp_agent.cli.commands.sessions import (
     branch_session,
@@ -209,6 +218,40 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
         console.print("Cleared active skills.")
         return "handled"
     # 查看MCP协议服务运行状态
+    if raw == "/learn status":
+        console.print(dumps_payload(learning_status_payload(workspace)))
+        return "handled"
+    if raw == "/learn review":
+        console.print(dumps_payload(learning_review_payload(workspace)))
+        return "handled"
+    if raw.startswith("/learn show "):
+        candidate_id = raw.split(" ", 2)[2].strip()
+        payload = learning_show_payload(workspace, candidate_id)
+        if payload is None:
+            console.print(f"Unknown learning candidate: {candidate_id}")
+        else:
+            console.print(dumps_payload(payload))
+        return "handled"
+    if raw.startswith("/learn reject "):
+        candidate_id = raw.split(" ", 2)[2].strip()
+        if reject_learning_candidate(workspace, candidate_id):
+            console.print(f"Rejected learning candidate {candidate_id}")
+        else:
+            console.print(f"Unknown learning candidate: {candidate_id}")
+        return "handled"
+    if raw.startswith("/learn apply "):
+        parts = raw.split()
+        if len(parts) != 4:
+            console.print("Usage: /learn apply <id> memory|skill")
+            return "handled"
+        payload = apply_learning_candidate(agent, workspace, parts[2], parts[3])
+        console.print(dumps_payload(payload))
+        if payload.get("ok") and parts[3] == "skill":
+            reload_runtime_extensions(agent, workspace)
+        return "handled"
+    if raw == "/learn consolidate":
+        console.print(dumps_payload(consolidate_project_memory(agent, workspace)))
+        return "handled"
     if raw == "/mcp status":
         mcp_runtime = getattr(agent, "mcp_runtime", None)
         payload = {"enabled": False, "server_count": 0, "servers": [], "discovered": False, "active_sessions": [], "tool_count": 0, "resource_count": 0}

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from pp_agent.learning.models import LearningSettings
 from pp_agent.memory.config import MemorySettings
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 
@@ -163,6 +164,7 @@ class Settings(BaseModel):
     capabilities: CapabilitySettings = Field(default_factory=CapabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    learning: LearningSettings = Field(default_factory=LearningSettings)
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
     @classmethod
@@ -272,6 +274,9 @@ class Settings(BaseModel):
         memory_config = data.get("memory", {})
         if memory_config:
             self._apply_memory_config(memory_config)
+        learning_config = data.get("learning", {})
+        if learning_config:
+            self._apply_learning_config(learning_config)
 
     def _apply_storage_config(self, storage_config: dict) -> None:
         if "sessions_dir" in storage_config:
@@ -400,6 +405,22 @@ class Settings(BaseModel):
             self.memory.snippet_compress_error_stacks = bool(memory_config["snippet_compress_error_stacks"])
         if "snippet_path_weight_boost" in memory_config:
             self.memory.snippet_path_weight_boost = float(memory_config["snippet_path_weight_boost"])
+
+    def _apply_learning_config(self, learning_config: dict) -> None:
+        if "enable" in learning_config:
+            self.learning.enable = bool(learning_config["enable"])
+        if "auto_extract" in learning_config:
+            self.learning.auto_extract = bool(learning_config["auto_extract"])
+        if "project_memory_enable" in learning_config:
+            self.learning.project_memory_enable = bool(learning_config["project_memory_enable"])
+        if "project_memory_char_limit" in learning_config:
+            self.learning.project_memory_char_limit = int(learning_config["project_memory_char_limit"])
+        if "candidate_limit_per_turn" in learning_config:
+            self.learning.candidate_limit_per_turn = int(learning_config["candidate_limit_per_turn"])
+        if "min_confidence_to_suggest" in learning_config:
+            self.learning.min_confidence_to_suggest = str(learning_config["min_confidence_to_suggest"])
+        if "llm_extractor_enable" in learning_config:
+            self.learning.llm_extractor_enable = bool(learning_config["llm_extractor_enable"])
 
     def session_store_dir(self) -> Path:
         return self._resolve_runtime_path(
