@@ -24,6 +24,8 @@ from pp_agent.extensions.hooks import LifecycleSubscriber
 from pp_agent.extensions.index import extension_search_roots
 from pp_agent.llm.models import ModelConfig, ProviderConfig
 from pp_agent.llm.registry import create_llm_client
+from pp_agent.learning import LearningRuntime, LearningStore
+from pp_agent.learning.context import ProjectMemoryContextHook
 from pp_agent.memory import HistoryIndexer, NoopMemoryProvider, SQLiteHistoryStore, SQLiteMemoryProvider
 from pp_agent.memory.auto_index import AsyncMemoryIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.embedding import DashScopeEmbeddingProvider, NoopEmbeddingProvider
@@ -532,6 +534,34 @@ def memory_retrieval_hook_for(workspace: Path, *, session_id: str | None = None)
     )
 
 
+def learning_store_for(workspace: Path) -> LearningStore:
+    settings = load_settings(workspace)
+    return LearningStore(settings.project_dir / "learning")
+
+
+def learning_runtime_for(workspace: Path, llm_client) -> LearningRuntime | None:
+    settings = load_settings(workspace)
+    if not settings.learning.enable:
+        return None
+    return LearningRuntime(
+        workspace=workspace,
+        llm_client=llm_client,
+        settings=settings.learning,
+        store=LearningStore(settings.project_dir / "learning"),
+    )
+
+
+def project_memory_context_hook_for(workspace: Path) -> ProjectMemoryContextHook | None:
+    settings = load_settings(workspace)
+    if not settings.learning.enable or not settings.learning.project_memory_enable:
+        return None
+    return ProjectMemoryContextHook(
+        workspace=workspace,
+        settings=settings.learning,
+        store=LearningStore(settings.project_dir / "learning"),
+    )
+
+
 def checkpoint_store_for(workspace: Path) -> CheckpointStore:
     """
     根据工作空间获取检查点存储实例
@@ -817,11 +847,12 @@ def create_runtime_from_record(
         current_session_id=record.id,
     )
     runtime_hooks = RuntimeHooks()
+    llm_client = create_llm_client(
+        provider=provider_config_for_llm(settings.provider),
+        model=model_config_for_llm(record.model),
+    )
     agent = AgentRuntime(
-        llm_client=create_llm_client(
-            provider=provider_config_for_llm(settings.provider),
-            model=model_config_for_llm(record.model),
-        ),
+        llm_client=llm_client,
         tool_registry=tool_registry,
         session_store=session_store,
         session_id=record.id,
@@ -836,6 +867,7 @@ def create_runtime_from_record(
         timeline_store=timeline_store_for(workspace),
         memory_provider=memory_provider_for(workspace),
         auto_index_scheduler=auto_index_scheduler_for(workspace),
+        learning_runtime=learning_runtime_for(workspace, llm_client),
     )
     # 安装自动检查点钩子
     _install_auto_checkpoint_hook(
@@ -862,6 +894,9 @@ def create_runtime_from_record(
         search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
     # 注册上下文转换钩子
+    project_memory_hook = project_memory_context_hook_for(workspace)
+    if project_memory_hook is not None:
+        agent.runtime_hooks.transform_context_hooks.append(project_memory_hook.transform_context)
     retrieval_hook = memory_retrieval_hook_for(workspace, session_id=record.id)
     agent.runtime_hooks.transform_context_hooks.append(retrieval_hook.transform_context)
     agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
@@ -932,6 +967,10 @@ def reload_runtime_extensions(
         config=settings.capabilities.skills,
         search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
+    agent.learning_runtime = learning_runtime_for(workspace, agent.llm_client)
+    project_memory_hook = project_memory_context_hook_for(workspace)
+    if project_memory_hook is not None:
+        agent.runtime_hooks.transform_context_hooks.append(project_memory_hook.transform_context)
     retrieval_hook = memory_retrieval_hook_for(workspace, session_id=agent.session_id)
     agent.runtime_hooks.transform_context_hooks.append(retrieval_hook.transform_context)
     agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)

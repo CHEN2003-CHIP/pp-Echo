@@ -31,6 +31,8 @@ from pp_agent.runtime.lifecycle import (
     COMPACTION,
     CONTEXT_BUILT,
     ERROR,
+    LEARNING_CANDIDATES_CREATED,
+    LEARNING_EXTRACTION_FAILED,
     MESSAGE_DELTA,
     PLANNER_END,
     PLANNER_GATE_APPROVED,
@@ -111,6 +113,7 @@ class AgentRuntime:
         timeline_store: Optional[TimelineStore] = None,
         memory_provider: Optional[MemoryProvider] = None,
         auto_index_scheduler: Optional[AutoIndexScheduler] = None,
+        learning_runtime: Optional[object] = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -155,6 +158,7 @@ class AgentRuntime:
         self._wire_lifecycle()
         self.memory_provider = memory_provider or NoopMemoryProvider()
         self.auto_index_scheduler = auto_index_scheduler or NoopAutoIndexScheduler()
+        self.learning_runtime = learning_runtime
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -1101,6 +1105,38 @@ class AgentRuntime:
                             self.session_id,
                             dual_write_turn_id,
                         )
+        if dual_write_turn_id and new_messages is not None and self.learning_runtime is not None:
+            try:
+                candidates = self.learning_runtime.on_turn_persisted(
+                    session_id=self.session_id,
+                    turn_id=dual_write_turn_id,
+                    new_messages=new_messages,
+                )
+            except Exception as exc:  # noqa: BLE001
+                list(
+                    self._emit(
+                        self._event(
+                            LEARNING_EXTRACTION_FAILED,
+                            message=str(exc),
+                            is_error=True,
+                            details={"turn_id": dual_write_turn_id},
+                        )
+                    )
+                )
+            else:
+                if candidates:
+                    list(
+                        self._emit(
+                            self._event(
+                                LEARNING_CANDIDATES_CREATED,
+                                details={
+                                    "turn_id": dual_write_turn_id,
+                                    "candidate_count": len(candidates),
+                                    "candidate_ids": [candidate.id for candidate in candidates],
+                                },
+                            )
+                        )
+                    )
 
     def _session_exists(self) -> bool:
         try:
