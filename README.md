@@ -99,6 +99,7 @@ Before you start:
 
 - Set `PP_AGENT_API_KEY` in your environment.
 - Use `start-agent.bat` for the fastest first run.
+- Use `start-web.bat` for the browser Web UI.
 - If you run from source, set `PYTHONPATH=src`.
 
 ### Fastest Windows path
@@ -109,6 +110,15 @@ set PP_AGENT_API_KEY=your_api_key
 ```
 
 This is the shortest path from clone to first conversation.
+
+### Web UI on Windows
+
+```powershell
+set PP_AGENT_API_KEY=your_api_key
+.\start-web.bat
+```
+
+This opens `http://127.0.0.1:8765` automatically, installs missing Web dependencies when needed, and builds the browser UI the first time.
 
 ### TUI on Windows
 

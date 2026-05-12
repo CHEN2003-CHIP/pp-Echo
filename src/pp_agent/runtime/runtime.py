@@ -65,6 +65,7 @@ from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.effects import is_protected_path
+from pp_agent.tools.base import ToolExecutionResult
 from pp_agent.tools.registry import ToolRegistry
 
 
@@ -448,6 +449,7 @@ class AgentRuntime:
                         发 TOOL_END
                     """
                     result.tool_call_id = call.id
+                    self._attach_session_to_pending_action(result)
                     self.state.messages.append(result.as_chat_message())
                     plan_steps[index].status = "completed"
                     result_event = self._event(TOOL_RESULT, tool_name=call.name, message=result.content, details={**tool_details, "success": True, "preview": result.content[:120]})
@@ -1171,6 +1173,22 @@ class AgentRuntime:
     def _pending_action_store(self) -> PendingActionStore:
         root = self.tool_registry.workspace / ".pp-agent" / "pending-edits"
         return PendingActionStore(root)
+
+    def _attach_session_to_pending_action(self, result: ToolExecutionResult) -> None:
+        token = result.details.get("token") if isinstance(result.details, dict) else None
+        if not isinstance(token, str) or not token:
+            return
+        store = self._pending_action_store()
+        try:
+            payload = store.load(token)
+        except FileNotFoundError:
+            return
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        details.setdefault("session_id", self.session_id)
+        details.setdefault("tool_name", result.tool_name)
+        details.setdefault("tool_call_id", result.tool_call_id)
+        payload["details"] = details
+        store.save(token, payload)
 
     def _dequeue_next_message(self, delivery: Optional[str] = None) -> Optional[QueuedMessage]:
         """带线程锁、支持优先级调度的消息队列出队方法，优先取出引导消息，保证 Agent 按正确顺序处理排队消息"""

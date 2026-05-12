@@ -24,6 +24,10 @@ dev = [
 tui = [
   "textual>=0.61,<1",
 ]
+web = [
+  "fastapi>=0.111,<1",
+  "uvicorn[standard]>=0.30,<1",
+]
 
 [project.scripts]
 pp-agent = "pp_agent.cli.main:main"

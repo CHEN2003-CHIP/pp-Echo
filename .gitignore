@@ -54,4 +54,5 @@ Thumbs.db
 # Local MCP tooling
 .mcp-tools/
 .npm-cache/
+node_modules/
 

@@ -72,6 +72,16 @@ if app:
 
         tui_main(workspace, session_id)
 
+    @app.command()
+    def web(
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+        host: str = typer.Option("127.0.0.1", "--host"),
+        port: int = typer.Option(8765, "--port"),
+    ) -> None:
+        from pp_agent.cli.commands.web import web_main
+
+        web_main(workspace, host=host, port=port)
+
     @app.command("claw-tui")
     def claw_tui(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
         from pp_agent.cli.commands.claw_tui import claw_tui_main
@@ -430,6 +440,10 @@ def main() -> None:
     tui_parser = subparsers.add_parser("tui")
     tui_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     tui_parser.add_argument("--session", default=None)
+    web_parser = subparsers.add_parser("web")
+    web_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    web_parser.add_argument("--host", default="127.0.0.1")
+    web_parser.add_argument("--port", type=int, default=8765)
     claw_tui_parser = subparsers.add_parser("claw-tui")
     claw_tui_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     run_parser = subparsers.add_parser("run")
@@ -568,6 +582,10 @@ def main() -> None:
         from pp_agent.tui.main import tui_main
 
         tui_main(Path(args.workspace), args.session)
+    elif command == "web":
+        from pp_agent.cli.commands.web import web_main
+
+        web_main(Path(args.workspace), host=args.host, port=args.port)
     elif command == "claw-tui":
         from pp_agent.cli.commands.claw_tui import claw_tui_main
 
