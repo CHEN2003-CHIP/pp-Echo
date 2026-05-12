@@ -91,6 +91,54 @@ The honest description is: `subagent support exists, but it is currently an MVP 
 - How one backend can drive both a CLI chat experience and a richer TUI.
 - How to structure a project so it is usable as both product and learning material.
 
+## Evaluated Agent Behavior
+
+pp-Echo is evaluated as an engineering agent, not only as a chatbot demo. The evaluation stack separates live model behavior from deterministic runtime checks, so failures can be understood as either behavior regressions or infrastructure issues.
+
+<p align="center">
+  <img alt="Live Eval" src="https://img.shields.io/badge/Live_eval-12%2F12_passed-22C55E?style=for-the-badge&logo=checkmarx&logoColor=white">
+  <img alt="Main Suite" src="https://img.shields.io/badge/Main_suite-60_cases-2563EB?style=for-the-badge&logo=pytest&logoColor=white">
+  <img alt="Runtime Benchmark" src="https://img.shields.io/badge/Runtime_benchmark-15_tasks-7C3AED?style=for-the-badge&logo=speedtest&logoColor=white">
+  <img alt="Stress Suite" src="https://img.shields.io/badge/Stress_suite-10_cases-F97316?style=for-the-badge&logo=target&logoColor=white">
+</p>
+
+| Evaluation layer | Size | What it proves | How to run |
+| --- | ---: | --- | --- |
+| Live interview demo | 12 cases | Direct answers, repo awareness, tool use, Git awareness, safety, approvals, and explicit subagent handoff | `python -m pp_agent.cli.main eval run example-interview-eval-cases.json --workspace . --preflight` |
+| Main agent eval | 60 cases | Broader evidence across tool restraint, code search, safety, collaboration, memory, and Chinese technical expression | `python -m pp_agent.cli.main eval run evals/datasets/agent-core-60.json --workspace . --preflight` |
+| Deterministic runtime benchmark | 15 tasks | Planner approval, safe rewind, session branching, lazy MCP activation, and context compaction without model randomness | `python -m pytest tests/benchmarks/test_runner.py` |
+| Optional stress suite | 10 cases | Longer context, multi-module search, secret-dump pressure, shell approval, and subagent delegation | `python -m pp_agent.cli.main eval run evals/datasets/agent-stress-10.json --workspace . --preflight` |
+
+Latest local live demo result:
+
+| Run | Cases | Pass rate | Tool calls | Approval gates | Expected policy blocks |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `20260512-234612-6fb26ca4` | 12 | 100% | 14 | 2 | 1 |
+
+The expected policy block is the protected `.env` safety case: the tool layer refuses to expose secrets, and the evaluator counts that as a correct safety outcome. The two approval gates come from write-file and shell-execution scenarios.
+
+```mermaid
+flowchart LR
+  A["Agent evaluation"] --> B["Live eval<br/>12 cases"]
+  A --> C["Main suite<br/>60 cases"]
+  A --> D["Runtime benchmark<br/>15 deterministic tasks"]
+  A --> E["Stress suite<br/>10 cases"]
+
+  B --> B1["100% pass<br/>14 tool calls<br/>2 approvals"]
+  C --> C1["7 capability groups<br/>fixed assertions"]
+  D --> D1["Fake LLM clients<br/>reproducible runtime checks"]
+  E --> E1["Longer and higher-risk scenarios"]
+```
+
+The benchmark report in [docs/benchmarks/latest.md](docs/benchmarks/latest.md) currently highlights:
+
+- Planner approval blocked risky mutations before execution in 100% of gating tasks.
+- Safe rewind recovered requested workspace and conversation state in 100% of rewind tasks.
+- Lazy MCP avoided unnecessary server initialization while still activating the matched fetch path.
+- Context compaction reduced normalized prompt size by about 44% in long-dialogue tasks.
+
+See [docs/evaluation-demo.md](docs/evaluation-demo.md) for the interview talk track and dataset methodology.
+
 ## Quick Start
 
 pp-Echo targets Python 3.9+ and is easiest to try on Windows first.

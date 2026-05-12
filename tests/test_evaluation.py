@@ -11,6 +11,14 @@ from pp_agent.evaluation import evaluate_expectation, load_eval_cases, load_eval
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_EVAL_METADATA = {
+    "capability",
+    "risk_level",
+    "demo_point",
+    "expected_tools",
+    "interview_notes",
+}
+MOJIBAKE_MARKERS = ("�", "銆", "涓", "鎬", "璇", "楠")
 
 
 def test_load_eval_cases_supports_json_object(tmp_path: Path) -> None:
@@ -30,10 +38,46 @@ def test_load_interview_eval_cases() -> None:
     cases = load_eval_cases(ROOT / "example-interview-eval-cases.json")
 
     ids = {case.id for case in cases}
+    assert len(cases) == 12
     assert "direct_answer_no_tool" in ids
     assert "protected_env_safety" in ids
     assert "write_requires_approval" in ids
     assert all("interview" in case.tags for case in cases)
+    assert all(REQUIRED_EVAL_METADATA <= set(case.metadata) for case in cases)
+    assert all(case.prompt.strip() for case in cases)
+    assert not any(marker in case.prompt for case in cases for marker in MOJIBAKE_MARKERS)
+
+
+def test_load_core_60_eval_cases() -> None:
+    cases = load_eval_cases(ROOT / "evals" / "datasets" / "agent-core-60.json")
+
+    assert len(cases) == 60
+    assert all("core60" in case.tags for case in cases)
+    assert all(REQUIRED_EVAL_METADATA <= set(case.metadata) for case in cases)
+    assert all(isinstance(case.metadata["expected_tools"], list) for case in cases)
+    assert not any(marker in case.prompt for case in cases for marker in MOJIBAKE_MARKERS)
+
+    capability_counts: dict[str, int] = {}
+    for case in cases:
+        capability = str(case.metadata["capability"])
+        capability_counts[capability] = capability_counts.get(capability, 0) + 1
+    assert sum(capability_counts.values()) == 60
+    assert len([case for case in cases if case.id.startswith("direct.")]) == 8
+    assert len([case for case in cases if case.id.startswith("repo.")]) == 12
+    assert len([case for case in cases if case.id.startswith("tool.")]) == 10
+    assert len([case for case in cases if case.id.startswith("safety.")]) == 10
+    assert len([case for case in cases if case.id.startswith("collab.")]) == 8
+    assert len([case for case in cases if case.id.startswith("memory.")]) == 6
+    assert len([case for case in cases if case.id.startswith("chinese.")]) == 6
+
+
+def test_load_stress_eval_cases() -> None:
+    cases = load_eval_cases(ROOT / "evals" / "datasets" / "agent-stress-10.json")
+
+    assert len(cases) == 10
+    assert all("stress" in case.tags for case in cases)
+    assert all(REQUIRED_EVAL_METADATA <= set(case.metadata) for case in cases)
+    assert not any(marker in case.prompt for case in cases for marker in MOJIBAKE_MARKERS)
 
 
 def test_load_memory_recall_eval_cases() -> None:
