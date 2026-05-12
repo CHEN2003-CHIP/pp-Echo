@@ -57,6 +57,23 @@ def test_stream_chat_tolerates_empty_choice_chunks(monkeypatch) -> None:
     assert events[1]["finish_reason"] is None
 
 
+def test_stream_chat_preserves_tool_call_index(monkeypatch) -> None:
+    payload = '\n'.join(
+        [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call-2","function":{"name":"list_files","arguments":"{\\"path\\":\\"src\\"}"}}]},"finish_reason":"tool_calls"}]}',
+            'data: [DONE]',
+        ]
+    )
+
+    monkeypatch.setenv("PP_AGENT_API_KEY", "test-key")
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=payload)))
+    llm = LLMClient(client=client)
+
+    events = list(llm.stream_chat([ChatMessage(role="user", content=[TextPart(text="hi")], timestamp=0.0)]))
+
+    assert events[0]["tool_calls"][0]["index"] == 1
+
+
 def test_stream_chat_raises_on_invalid_sse(monkeypatch) -> None:
     payload = '\n'.join(['data: not-json', 'data: [DONE]'])
 

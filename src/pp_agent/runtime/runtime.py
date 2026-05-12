@@ -561,7 +561,9 @@ class AgentRuntime:
                     list(self._emit(self._event(MESSAGE_DELTA, delta=event["text"])))
                 #收集工具调用信息，注意模型可能分多块返回同一个工具调用的信息，所以要按 index 聚合
                 for index, tool in enumerate(event["tool_calls"]):
-                    slot = partial_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    stable_index = tool.get("index")
+                    key = stable_index if stable_index is not None else tool.get("id") or index
+                    slot = partial_calls.setdefault(key, {"id": "", "name": "", "arguments": ""})
                     if tool.get("id"):
                         slot["id"] = tool["id"]
                     if tool.get("name"):

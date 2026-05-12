@@ -135,6 +135,7 @@ class LLMClient(BaseLLMClient):
             function = tool_call.get("function", {})
             normalized["tool_calls"].append(
                 {
+                    "index": tool_call.get("index"),
                     "id": tool_call.get("id"),
                     "name": function.get("name"),
                     "arguments_chunk": function.get("arguments", ""),

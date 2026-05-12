@@ -119,6 +119,7 @@ set PP_AGENT_API_KEY=your_api_key
 ```
 
 This opens `http://127.0.0.1:8765` automatically, installs missing Web dependencies when needed, and builds the browser UI the first time.
+You can also launch a specific project with `.\start-web.bat "E:\path\to\project"` and switch projects from the Web UI.
 
 ### TUI on Windows
 

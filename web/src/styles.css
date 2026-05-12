@@ -7,7 +7,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; overflow: hidden; }
-button, textarea { font: inherit; }
+button, textarea, input { font: inherit; }
 button { border: 0; color: inherit; cursor: pointer; }
 
 .shell {
@@ -38,11 +38,11 @@ button { border: 0; color: inherit; cursor: pointer; }
 .brand strong { display: block; font-size: 13px; }
 .brand span { display: block; color: #8c9692; font-size: 11px; max-width: 56vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title-actions { display: flex; gap: 6px; }
-.title-actions button, .section-title button, .composer button, .panel-page button, .split-actions button {
+.title-actions button, .section-title button, .composer button, .panel-page button, .projects-page button, .split-actions button {
   height: 30px; min-width: 30px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   background: #202425; color: #dce1df; border: 1px solid #303536;
 }
-.title-actions button:hover, .panel-page button:hover, .split-actions button:hover { background: #2a3030; }
+.title-actions button:hover, .panel-page button:hover, .projects-page button:hover, .split-actions button:hover { background: #2a3030; }
 
 .sidebar {
   grid-row: 2;
@@ -57,7 +57,10 @@ button { border: 0; color: inherit; cursor: pointer; }
 .workspace-card {
   display: flex; gap: 10px; align-items: center; padding: 10px;
   border: 1px solid #292e2f; background: #1a1e1f; border-radius: 8px;
+  color: inherit; text-align: left; width: 100%;
 }
+.workspace-card:hover { background: #202526; }
+.workspace-card > div:nth-child(2) { min-width: 0; flex: 1; }
 .workspace-card h1 { margin: 0; font-size: 14px; }
 .workspace-card p { margin: 2px 0 0; font-size: 12px; color: #8d9793; }
 
@@ -143,6 +146,35 @@ code { display: block; padding: 7px; border-radius: 6px; background: #111415; co
 .panel-page p { margin: 4px 0 0; color: #87928e; }
 .panel-page button { padding: 0 12px; }
 .panel-page pre { margin: 0; min-height: 60vh; padding: 16px; background: #151819; border: 1px solid #2a2f30; border-radius: 8px; overflow: auto; color: #cbd4d1; }
+
+.projects-page { grid-column: 1 / -1; padding: 22px; overflow: auto; }
+.projects-page header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.projects-page h2 { margin: 0; font-size: 20px; }
+.projects-page p { margin: 4px 0 0; color: #87928e; font-size: 12px; max-width: 66vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects-page header button, .workspace-open button, .confirm-workspace button { padding: 0 12px; }
+.workspace-open { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 14px; }
+.workspace-open input {
+  height: 36px; min-width: 0; border-radius: 7px; border: 1px solid #303637; outline: none;
+  background: #191d1e; color: #f4f7f6; padding: 0 11px;
+}
+.confirm-workspace {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
+  border: 1px solid #5b4d26; background: #241f15; border-radius: 8px; padding: 10px; margin-bottom: 14px;
+}
+.confirm-workspace svg { color: #e7c66d; }
+.confirm-workspace strong { display: block; font-size: 13px; color: #f2e6bd; }
+.confirm-workspace span { display: block; margin-top: 2px; font-size: 12px; color: #a89e82; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.project-tile {
+  min-height: 112px; align-items: flex-start; justify-content: flex-start; text-align: left; padding: 12px;
+  border-radius: 8px; border: 1px solid #2a3031; background: #181c1d; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px;
+}
+.project-tile.active { border-color: #3d8b79; background: #1b2825; }
+.project-tile .project-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; background: #20332f; color: #8fe8cc; }
+.project-tile small { display: block; color: #81908b; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.project-tile strong { display: block; margin-top: 5px; color: #f0f4f2; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-tile span { display: block; margin-top: 5px; color: #89938f; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-tile em { grid-column: 2; align-self: end; color: #82d9bf; font-style: normal; font-size: 11px; }
 
 @media (max-width: 980px) {
   .shell { grid-template-columns: 82px 1fr; }

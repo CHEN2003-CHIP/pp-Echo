@@ -111,6 +111,30 @@ class ToolThenEmptyLLMClient:
                 yield {"text": "", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
+class SplitMultiToolCallLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": "",
+                "tool_calls": [{"index": 0, "id": "call-1", "name": "list_files", "arguments_chunk": '{"path":"."}'}],
+                "finish_reason": None,
+                "raw": {},
+            }
+            yield {
+                "text": "",
+                "tool_calls": [{"index": 1, "id": "call-2", "name": "list_files", "arguments_chunk": '{"path":"src"}'}],
+                "finish_reason": "tool_calls",
+                "raw": {},
+            }
+        else:
+            yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
 class FailingToolLLMClient:
     def __init__(self) -> None:
         self.model = ModelConfig()
@@ -308,6 +332,17 @@ def test_agent_runtime_rejects_sensitive_tool_without_host_approval(tmp_path: Pa
 
     assert any(event.type == "tool_error" and "host-side approval" in (event.message or "") for event in events)
     assert (tmp_path / "a.txt").exists() is False
+
+
+def test_agent_runtime_keeps_split_multi_tool_calls_separate(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    agent = build_agent(tmp_path, SplitMultiToolCallLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("inspect directories")
+
+    list_calls = [event for event in events if event.type == "tool_call" and event.tool_name == "list_files"]
+    assert len(list_calls) == 2
+    assert [message.tool_name for message in agent.state.messages if message.role == "tool"][:2] == ["list_files", "list_files"]
 
 
 def test_agent_runtime_promotes_textual_tool_call_syntax_to_real_tool_call(tmp_path: Path) -> None:

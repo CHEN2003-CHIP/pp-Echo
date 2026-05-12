@@ -53,6 +53,26 @@ export type ApprovalsSummary = {
   items: PendingAction[];
 };
 
+export type WorkspaceEntry = {
+  path: string;
+  name: string;
+  exists: boolean;
+  is_dir: boolean;
+  has_agents?: boolean;
+  has_pp_agent?: boolean;
+  last_opened_at?: number;
+};
+
+export type WorkspacesState = {
+  active: WorkspaceEntry;
+  recent: WorkspaceEntry[];
+};
+
+export type OpenWorkspaceResponse = WorkspacesState & {
+  requires_confirmation: boolean;
+  candidate?: WorkspaceEntry | null;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
@@ -68,6 +88,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ ok: boolean; workspace: string }>("/api/health"),
   workspace: () => request<{ path: string; name: string }>("/api/workspace"),
+  workspaces: () => request<WorkspacesState>("/api/workspaces"),
+  openWorkspace: (path: string, confirmed = false) =>
+    request<OpenWorkspaceResponse>("/api/workspaces/open", {
+      method: "POST",
+      body: JSON.stringify({ path, confirmed })
+    }),
   sessions: () => request<{ sessions: SessionEntry[] }>("/api/sessions"),
   createSession: () => request<SessionSnapshot>("/api/sessions", { method: "POST" }),
   snapshot: (sessionId: string) => request<SessionSnapshot>(`/api/sessions/${sessionId}`),

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   Bot,
   Boxes,
   Check,
   ChevronRight,
   Clock3,
   Code2,
+  FolderOpen,
   GitBranch,
   LayoutDashboard,
   MessageSquare,
@@ -19,11 +21,11 @@ import {
   Square,
   X
 } from "lucide-react";
-import { api, ApprovalsSummary, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot } from "./api";
+import { api, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, WorkspaceEntry, WorkspacesState } from "./api";
 
 type Tab =
   | { id: string; type: "chat"; title: string; sessionId: string }
-  | { id: string; type: "agents" | "mcp" | "usage" | "settings" | "timeline"; title: string };
+  | { id: string; type: "projects" | "agents" | "mcp" | "usage" | "settings" | "timeline"; title: string };
 
 type TranscriptItem = {
   id: string;
@@ -44,6 +46,7 @@ type ActiveApproval = {
 };
 
 const navItems = [
+  { type: "projects" as const, label: "Projects", icon: FolderOpen },
   { type: "agents" as const, label: "Agents / Subagents", icon: Bot },
   { type: "mcp" as const, label: "MCP Manager", icon: Boxes },
   { type: "usage" as const, label: "Usage", icon: LayoutDashboard },
@@ -53,6 +56,7 @@ const navItems = [
 
 export function App() {
   const [workspace, setWorkspace] = useState({ name: "pp-Echo", path: "" });
+  const [workspaces, setWorkspaces] = useState<WorkspacesState>({ active: { name: "pp-Echo", path: "", exists: true, is_dir: true }, recent: [] });
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState("");
@@ -62,6 +66,8 @@ export function App() {
   const [status, setStatus] = useState("Ready");
   const [sideData, setSideData] = useState<Record<string, unknown>>({});
   const [approvalSummary, setApprovalSummary] = useState<ApprovalsSummary>({ count: 0, items: [] });
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
+  const [pendingWorkspace, setPendingWorkspace] = useState<OpenWorkspaceResponse | null>(null);
   const pollers = useRef<Record<string, number>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
 
@@ -92,8 +98,9 @@ export function App() {
   }, [transcript.length, transcript[transcript.length - 1]?.text]);
 
   async function refreshAll() {
-    const [workspaceInfo, sessionList, approvals] = await Promise.all([api.workspace(), api.sessions(), api.approvals()]);
-    setWorkspace(workspaceInfo);
+    const [workspaceState, sessionList, approvals] = await Promise.all([api.workspaces(), api.sessions(), api.approvals()]);
+    setWorkspaces(workspaceState);
+    setWorkspace(workspaceState.active);
     setSessions(sortSessionsByUpdatedAt(sessionList.sessions));
     setApprovalSummary(approvals);
     setStatus("Connected");
@@ -157,6 +164,7 @@ export function App() {
 
   async function loadPanel(type: string) {
     const loader =
+      type === "projects" ? api.workspaces :
       type === "agents" ? api.capabilities :
       type === "mcp" ? api.mcp :
       type === "settings" ? api.settings :
@@ -165,6 +173,54 @@ export function App() {
       async () => ({});
     const data = await loader().catch((error) => ({ error: String(error) }));
     setSideData((current) => ({ ...current, [type]: data }));
+  }
+
+  function stopPolling() {
+    Object.values(pollers.current).forEach((poller) => window.clearInterval(poller));
+    pollers.current = {};
+  }
+
+  function resetWorkspaceUi() {
+    stopPolling();
+    setTabs([]);
+    setActiveTabId("");
+    setSnapshots({});
+    setEvents({});
+    setPrompt("");
+    setSideData({});
+    setApprovalSummary({ count: 0, items: [] });
+  }
+
+  async function reloadWorkspaceAfterSwitch(workspaceState: WorkspacesState) {
+    resetWorkspaceUi();
+    setWorkspaces(workspaceState);
+    setWorkspace(workspaceState.active);
+    setStatus(`Workspace: ${workspaceState.active.name}`);
+    const [sessionList, approvals] = await Promise.all([api.sessions(), api.approvals()]);
+    const sorted = sortSessionsByUpdatedAt(sessionList.sessions);
+    setSessions(sorted);
+    setApprovalSummary(approvals);
+    if (sorted[0]) {
+      openSession(sorted[0].id);
+    }
+  }
+
+  async function openWorkspace(path: string, confirmed = false) {
+    const target = path.trim();
+    if (!target) return;
+    try {
+      const response = await api.openWorkspace(target, confirmed);
+      if (response.requires_confirmation) {
+        setPendingWorkspace(response);
+        setStatus("Workspace confirmation required");
+        return;
+      }
+      setPendingWorkspace(null);
+      setWorkspaceDraft("");
+      await reloadWorkspaceAfterSwitch(response);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function sendPrompt() {
@@ -244,13 +300,14 @@ export function App() {
       </header>
 
       <aside className="sidebar">
-        <section className="workspace-card">
+        <button className="workspace-card" onClick={() => openPanel("projects")}>
           <div className="workspace-icon"><Code2 size={20} /></div>
           <div>
             <h1>{workspace.name}</h1>
             <p>Local workspace</p>
           </div>
-        </section>
+          <ChevronRight size={14} />
+        </button>
 
         <nav className="nav-list">
           {navItems.map((item) => (
@@ -357,6 +414,17 @@ export function App() {
                 </button>
               </div>
             </>
+          ) : activeTab?.type === "projects" ? (
+            <ProjectsView
+              workspaceDraft={workspaceDraft}
+              workspaces={workspaces}
+              pendingWorkspace={pendingWorkspace}
+              onChangeDraft={setWorkspaceDraft}
+              onOpenWorkspace={(path) => openWorkspace(path)}
+              onConfirmWorkspace={() => pendingWorkspace?.candidate && openWorkspace(pendingWorkspace.candidate.path, true)}
+              onCancelConfirmation={() => setPendingWorkspace(null)}
+              onReload={() => api.workspaces().then((data) => { setWorkspaces(data); setSideData((current) => ({ ...current, projects: data })); })}
+            />
           ) : activeTab ? (
             <PanelView type={activeTab.type} data={sideData[activeTab.type]} onReload={() => loadPanel(activeTab.type)} />
           ) : (
@@ -365,6 +433,83 @@ export function App() {
         </div>
       </main>
     </div>
+  );
+}
+
+function ProjectsView({
+  workspaceDraft,
+  workspaces,
+  pendingWorkspace,
+  onChangeDraft,
+  onOpenWorkspace,
+  onConfirmWorkspace,
+  onCancelConfirmation,
+  onReload
+}: {
+  workspaceDraft: string;
+  workspaces: WorkspacesState;
+  pendingWorkspace: OpenWorkspaceResponse | null;
+  onChangeDraft: (value: string) => void;
+  onOpenWorkspace: (path: string) => void;
+  onConfirmWorkspace: () => void;
+  onCancelConfirmation: () => void;
+  onReload: () => void;
+}) {
+  return (
+    <section className="projects-page">
+      <header>
+        <div>
+          <h2>Projects</h2>
+          <p>{workspaces.active.path}</p>
+        </div>
+        <button onClick={onReload}><RefreshCw size={16} /> Reload</button>
+      </header>
+
+      <div className="workspace-open">
+        <input
+          value={workspaceDraft}
+          onChange={(event) => onChangeDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onOpenWorkspace(workspaceDraft);
+          }}
+          placeholder="E:\\Projects\\my-app"
+        />
+        <button onClick={() => onOpenWorkspace(workspaceDraft)}><FolderOpen size={16} /> Open</button>
+      </div>
+
+      {pendingWorkspace?.candidate && (
+        <div className="confirm-workspace">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>Open this workspace?</strong>
+            <span>{pendingWorkspace.candidate.path}</span>
+          </div>
+          <button onClick={onConfirmWorkspace}><Check size={15} /> Confirm</button>
+          <button onClick={onCancelConfirmation}><X size={15} /> Cancel</button>
+        </div>
+      )}
+
+      <div className="project-grid">
+        <WorkspaceTile label="Current" workspace={workspaces.active} active onOpen={onOpenWorkspace} />
+        {workspaces.recent
+          .filter((item) => item.path !== workspaces.active.path)
+          .map((item) => <WorkspaceTile key={item.path} label="Recent" workspace={item} onOpen={onOpenWorkspace} />)}
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceTile({ label, workspace, active = false, onOpen }: { label: string; workspace: WorkspaceEntry; active?: boolean; onOpen: (path: string) => void }) {
+  return (
+    <button className={active ? "project-tile active" : "project-tile"} onClick={() => onOpen(workspace.path)}>
+      <div className="project-icon"><FolderOpen size={18} /></div>
+      <div>
+        <small>{label}</small>
+        <strong>{workspace.name}</strong>
+        <span>{workspace.path}</span>
+      </div>
+      <em>{workspace.has_agents ? "AGENTS.md" : workspace.has_pp_agent ? ".pp-agent" : "folder"}</em>
+    </button>
   );
 }
 

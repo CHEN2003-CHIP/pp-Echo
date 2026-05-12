@@ -6,6 +6,8 @@ title pp-Echo Web UI
 set "WEB_HOST=127.0.0.1"
 set "WEB_PORT=8765"
 set "WEB_URL=http://%WEB_HOST%:%WEB_PORT%"
+set "WEB_WORKSPACE=%~1"
+if "%WEB_WORKSPACE%"=="" set "WEB_WORKSPACE=%CD%"
 
 where python >nul 2>nul
 if errorlevel 1 (
@@ -56,7 +58,7 @@ if "%BUILD_WEB%"=="1" (
   if errorlevel 1 (
     echo [ERROR] Web UI assets are not built, and npm was not found in PATH.
     echo Please install Node.js 20+ or run the API-only command:
-    echo   python -m pp_agent.cli.main web --workspace "%CD%"
+    echo   python -m pp_agent.cli.main web --workspace "%WEB_WORKSPACE%"
     pause
     exit /b 1
   )
@@ -90,7 +92,7 @@ echo.
 echo ============================================
 echo   pp-Echo Web UI
 echo ============================================
-echo Workspace: %CD%
+echo Workspace: %WEB_WORKSPACE%
 echo URL:       %WEB_URL%
 echo.
 echo The browser will open automatically.
@@ -99,7 +101,7 @@ echo Press Ctrl+C to stop the server.
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2; Start-Process '%WEB_URL%'" >nul 2>nul
-python -m pp_agent.cli.main web --workspace "%CD%" --host %WEB_HOST% --port %WEB_PORT%
+python -m pp_agent.cli.main web --workspace "%WEB_WORKSPACE%" --host %WEB_HOST% --port %WEB_PORT%
 set EXIT_CODE=%ERRORLEVEL%
 if not "%EXIT_CODE%"=="0" (
   echo.
