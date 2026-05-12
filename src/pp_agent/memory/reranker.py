@@ -5,6 +5,8 @@ import re
 from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol
 
+from pp_agent.memory.classification import classify_memory_text, is_error_or_fix, looks_like_path_or_command
+
 if TYPE_CHECKING:
     from pp_agent.memory.retrieval import RetrievedChunk
 
@@ -129,36 +131,31 @@ class LightweightReranker:
 
     @staticmethod
     def _file_path_weight(text: str) -> float:
-        return 1.0 if re.search(r"([a-z]:\\|/|src/|tests/|\.py\b|\.ts\b|\.json\b|pp_agent/)", text) else 0.0
+        return 1.0 if looks_like_path_or_command(text) else 0.0
 
     @staticmethod
     def _error_stack_weight(text: str) -> float:
-        keywords = ("traceback", "exception", "error", "failed", "failure", "stack", "报错", "错误", "失败", "异常")
-        return 1.0 if any(keyword in text for keyword in keywords) else 0.0
+        return 1.0 if is_error_or_fix(text) or "stack" in text else 0.0
 
     @staticmethod
     def _long_term_preference_weight(text: str, candidate: RetrievedChunk) -> float:
-        preference_keywords = (
-            "prefer",
-            "preference",
-            "avoid",
-            "always",
-            "must",
-            "keep",
-            "constraint",
-            "偏好",
-            "约束",
-            "尽量",
-            "不要",
-            "必须",
-            "保持",
+        metadata_category = str((candidate.metadata or {}).get("memory_category") or "").strip()
+        category = metadata_category or classify_memory_text(
+            f"{text} {candidate.message.text}",
+            role=candidate.role,
+            source_kind=candidate.source_kind,
         )
-        message_text = candidate.message.text.lower()
-        matches = any(keyword in text or keyword in message_text for keyword in preference_keywords)
-        return 1.0 if matches and candidate.source_kind == "user" else 0.6 if matches else 0.0
+        if category == "preference" and candidate.source_kind == "user":
+            return 1.0
+        return 0.6 if category == "preference" else 0.0
 
     @staticmethod
     def _command_or_path_bonus(query_text: str, text: str) -> float:
-        query_mentions_path = any(token in query_text for token in ("path", "file", "command", "error", "pytest", "traceback"))
-        text_has_command = bool(re.search(r"(\brun pytest\b|\bgit status\b|\bgit diff\b|\bpython [\w./-]+\b|\bnpm run\b|\buv run\b)", text))
+        query_mentions_path = any(
+            token in query_text
+            for token in ("path", "file", "command", "error", "pytest", "traceback", "路径", "文件", "命令", "错误")
+        )
+        text_has_command = bool(
+            re.search(r"(\brun pytest\b|\bpytest\b|\bgit status\b|\bgit diff\b|\bpython [\w./:-]+\b|\bnpm run\b|\buv run\b)", text)
+        )
         return 1.0 if query_mentions_path and text_has_command else 0.5 if text_has_command else 0.0

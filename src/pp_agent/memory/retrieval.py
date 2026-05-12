@@ -93,6 +93,7 @@ class HistoryRetriever:
         hybrid_keyword_limit: int = 12,
         hybrid_vector_limit: int = 12,
         reranker: Reranker | None = None,
+        max_per_session: int = 2,
     ) -> None:
         self.store = store
         self.embedding_provider = embedding_provider
@@ -103,6 +104,7 @@ class HistoryRetriever:
         self.hybrid_keyword_limit = max(1, hybrid_keyword_limit)
         self.hybrid_vector_limit = max(1, hybrid_vector_limit)
         self.reranker = reranker or NoopReranker()
+        self.max_per_session = max(1, max_per_session)
 
     def retrieve(
         self,
@@ -204,12 +206,14 @@ class HistoryRetriever:
             ),
         )
         if not self.reranker.is_enabled():
-            return ranked[:limit]
+            return self._diversify_by_session(ranked, limit=limit)
         try:
-            return self.reranker.rerank(query_text=clean_query, candidates=ranked, limit=limit)
+            rerank_limit = max(limit, limit * self.max_per_session)
+            reranked = self.reranker.rerank(query_text=clean_query, candidates=ranked, limit=rerank_limit)
+            return self._diversify_by_session(reranked, limit=limit)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Retrieval reranker failed; falling back to base ranking: %s", exc)
-            return ranked[:limit]
+            return self._diversify_by_session(ranked, limit=limit)
 
     def _collect_candidates(self, *, request: RetrievalRequest) -> dict[str, dict[str, object]]:
         candidates: dict[str, dict[str, object]] = {}
@@ -232,7 +236,8 @@ class HistoryRetriever:
             bucket["keyword_score"] = max(float(bucket["keyword_score"]), self._keyword_score(request.query_text, chunk.text))
             bucket["sources"].add("keyword")
         query_embedding = self.embedding_provider.embed_texts([request.query_text])[0]
-        vector_limit = max(request.limit, self.hybrid_vector_limit if self.hybrid_enable else request.limit)
+        candidate_limit = request.limit * self.max_per_session
+        vector_limit = max(request.limit, candidate_limit, self.hybrid_vector_limit if self.hybrid_enable else request.limit)
         raw_hits = self.vector_index.query(query_embedding=query_embedding, limit=vector_limit, where=None)
         for hit in raw_hits:
             if hit.chunk_id in request.recent_chunk_ids:
@@ -280,3 +285,16 @@ class HistoryRetriever:
         role = message.role if message is not None else str((chunk.metadata or {}).get("role") or chunk.source_kind)
         text = " ".join(chunk.text.split())
         return f"fp:{role}:{text[:200]}"
+
+    def _diversify_by_session(self, ranked: list[RetrievedChunk], *, limit: int) -> list[RetrievedChunk]:
+        selected: list[RetrievedChunk] = []
+        session_counts: dict[str, int] = {}
+        for chunk in ranked:
+            count = session_counts.get(chunk.session_id, 0)
+            if count >= self.max_per_session:
+                continue
+            selected.append(chunk)
+            session_counts[chunk.session_id] = count + 1
+            if len(selected) >= limit:
+                return selected
+        return selected

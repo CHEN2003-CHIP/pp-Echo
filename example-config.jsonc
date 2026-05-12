@@ -1,27 +1,75 @@
 {
-  // 使用的模型名称。
-  // 对应 .pp-agent/config.json 中的顶层字段。
+  // LLM 模型名称。会覆盖环境变量 PP_AGENT_MODEL。
   "model": "qwen3.5-plus",
 
-  // LLM 服务的 OpenAI 兼容接口地址。
-  // 例如阿里云百炼兼容接口。
+  // OpenAI-compatible API 地址。会覆盖环境变量 PP_AGENT_BASE_URL。
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
 
-  // 是否开启模型思考模式。
-  // true/false，具体效果取决于接入的模型提供方。
+  // 是否启用模型 thinking 参数。具体是否生效取决于模型提供方。
   "enable_thinking": false,
 
-  // Shell 命令的默认超时时间，单位秒。
+  // 兼容旧配置：shell 命令默认超时秒数。新配置建议放在 tool_policy.shell_timeout_seconds。
   "shell_timeout_seconds": 30,
 
+  // 工具安全策略。
+  "tool_policy": {
+    // shell 命令默认超时秒数。
+    "shell_timeout_seconds": 30,
+
+    // 权限模式：
+    // - read-only：只允许读类和安全 inspect。
+    // - workspace-write：默认模式，读类允许，写入/shell/高风险动态工具走审批。
+    // - prompt：除高置信读类外尽量询问。
+    // - danger-full-access：放宽审批，但仍拒绝敏感/外部路径。
+    "permission_mode": "workspace-write",
+
+    // 工具名 allowlist，使用 fnmatch 匹配真实工具名；优先级低于 denied_tools 和 ask_tools。
+    "allowed_tools": [
+      "read_file",
+      "list_files",
+      "grep_code",
+      "git_status",
+      "git_diff_worktree"
+    ],
+
+    // 工具名 asklist，匹配后强制走审批/询问；优先级高于 allowed_tools。
+    "ask_tools": [
+      "run_shell",
+      "write_file",
+      "edit_file"
+    ],
+
+    // 工具名 denylist，最高优先级；支持动态工具名，如 fetch.*。
+    "denied_tools": [
+      "*.dangerous",
+      "fetch.*"
+    ],
+
+    // 兼容旧确认开关；控制写文件、编辑、shell 和高风险计划是否需要确认。
+    "tool_confirmation": {
+      // write_file 是否需要确认。
+      "write_file": true,
+
+      // edit_file 是否需要确认。
+      "edit_file": true,
+
+      // run_shell 是否需要确认。
+      "run_shell": true,
+
+      // 高风险计划是否需要 planner approval。
+      "high_risk_plan": true
+    }
+  },
+
+  // 能力加载配置：内置工具、skills、extensions、MCP。
   "capabilities": {
     "builtin_tools": {
-      // 是否启用内置工具。
+      // 是否启用内置工具注册。
       "enable": true
     },
 
     "skills": {
-      // 是否加载当前项目内的 skills。
+      // 是否加载当前项目下的 skills。
       "enable_project": true,
 
       // 是否加载用户全局目录下的 skills。
@@ -30,29 +78,26 @@
       // 是否加载内置 skills。
       "enable_builtin": true,
 
-      // 额外自定义 skill 目录。
-      // 支持绝对路径，也支持相对工作区的相对路径。
+      // 额外 skill 目录；支持绝对路径和相对工作区路径。
       "custom_directories": [
         "C:/pp-agent/skills",
         "./.pp-agent/custom-skills"
       ],
 
-      // skill 黑名单，支持 fnmatch 通配符。
-      // 例如 draft-* 会屏蔽所有 draft- 开头的 skill。
+      // skill 黑名单，支持 fnmatch，如 draft-*。
       "ignored": [
         "draft-*",
         "test-*"
       ],
 
-      // skill 白名单，支持 fnmatch 通配符。
-      // 如果这里非空，则只有匹配到的 skill 会被加载。
+      // skill 白名单，支持 fnmatch；为空表示不过滤。
       "include": [
         "*"
       ]
     },
 
     "extensions": {
-      // 是否加载当前项目内的 extensions。
+      // 是否加载当前项目下的 extensions。
       "enable_project": true,
 
       // 是否加载用户全局目录下的 extensions。
@@ -61,169 +106,197 @@
       // 是否加载内置 extensions。
       "enable_builtin": false,
 
-      // 额外自定义 extension 目录。
+      // 额外 extension 目录；支持绝对路径和相对工作区路径。
       "custom_directories": [
         "C:/pp-agent/extensions",
         "./.pp-agent/custom-extensions"
       ],
 
-      // extension 黑名单，支持通配符。
+      // extension 黑名单，支持 fnmatch。
       "ignored": [
         "draft-*",
         "experimental-*"
       ],
 
-      // extension 白名单，支持通配符。
+      // extension 白名单，支持 fnmatch；为空表示不过滤。
       "include": [
         "*"
       ]
     },
 
     "mcp": {
-      // 是否启用 MCP 能力。
+      // 是否启用 MCP 能力发现和工具接入。
       "enable": true,
 
-      // MCP 配置文件路径列表。
-      // 如果留空，项目默认会尝试读取 .pp-agent/mcp.json。
+      // MCP 配置文件路径列表；为空时默认读取 .pp-agent/mcp.json。
       "config_paths": [
         "./.pp-agent/mcp.json",
         "C:/pp-agent/shared-mcp.json"
       ],
 
-      // 允许启用的 MCP server 名称过滤器。
-      // 留空表示不过滤；["*"] 表示全部允许。
+      // 允许启用的 MCP server 名称过滤器；为空表示不过滤。
       "server_filters": [
         "*"
       ]
     }
   },
 
+  // 旧版确认配置入口，仍兼容；新项目建议使用 tool_policy.tool_confirmation。
   "tool_confirmation": {
-    // 写新文件前是否要求确认。
+    // write_file 是否需要确认。
     "write_file": true,
 
-    // 编辑现有文件前是否要求确认。
+    // edit_file 是否需要确认。
     "edit_file": true,
 
-    // 执行 shell 前是否要求确认。
+    // run_shell 是否需要确认。
     "run_shell": true,
 
-    // 高风险计划是否要求确认。
+    // 高风险计划是否需要确认。
     "high_risk_plan": true
   },
 
+  // 运行时数据存储目录。
   "storage": {
-    // 会话数据目录。
+    // 会话元数据目录。
     "sessions_dir": "./.pp-agent/sessions",
 
-    // 时间线数据目录。
+    // 事件时间线目录。
     "timelines_dir": "./.pp-agent/timelines",
 
-    // 检查点数据目录。
+    // checkpoint 数据目录。
     "checkpoints_dir": "./.pp-agent/checkpoints"
   },
 
+  // 长期记忆、embedding、向量索引和检索增强配置。
   "memory": {
-    // 是否启用长期记忆能力。
+    // 是否启用长期记忆写入。
     "enable": false,
 
-    // 记忆后端类型，目前代码默认是 sqlite。
+    // 长期记忆后端，目前主要是 sqlite。
     "backend": "sqlite",
 
     // SQLite 历史库路径。
     "sqlite_path": "./.pp-agent/history.db",
 
-    // 文本分块目标 token 数。
+    // 切分历史消息时的目标 token 数。
     "chunk_target_tokens": 350,
 
-    // 单块最大 token 数。
+    // 单个 chunk 的最大 token 数。
     "chunk_max_tokens": 420,
 
     // SQLite busy timeout，单位毫秒。
     "sqlite_busy_timeout_ms": 5000,
 
-    // 是否启用 embedding。
+    // 是否启用 embedding 生成。
     "embedding_enable": false,
 
-    // embedding 提供方名称。
+    // embedding 提供方，目前默认 dashscope。
     "embedding_provider": "dashscope",
 
-    // embedding 模型名称。
+    // embedding 模型名。换模型会影响向量维度。
     "embedding_model": "multimodal-embedding-v1",
 
-    // embedding API Key 对应的环境变量名。
+    // DashScope API key 对应的环境变量名。
     "dashscope_api_key_env": "DASHSCOPE_API_KEY",
 
     // embedding 批处理大小。
     "embedding_batch_size": 16,
 
-    // 是否启用向量检索。
+    // 是否启用向量索引写入/查询。
     "vector_enable": false,
 
-    // 向量后端类型，目前默认 chroma。
+    // 向量后端，目前默认 chroma。
     "vector_backend": "chroma",
 
-    // Chroma 数据目录。
+    // Chroma 本地数据目录。
     "chroma_path": "./.pp-agent/chroma",
 
-    // Chroma 集合名称。
+    // Chroma 基础 collection 名。
     "chroma_collection": "pp_agent_history",
 
-    // 是否启用索引构建。
+    // 是否按 embedding provider/model 自动派生短 collection 名，避免换模型后维度冲突。
+    "chroma_collection_per_embedding": true,
+
+    // 是否启用异步索引，把未索引 memory chunk 写入向量库。
     "indexing_enable": false,
 
-    // 索引批量写入大小。
+    // 每次索引处理的 chunk 数量上限。
     "indexing_batch_size": 100,
 
-    // 是否启用记忆检索。
+    // 是否在每次 LLM 请求前检索历史记忆并注入上下文。
     "retrieval_enable": false,
 
-    // 单次检索返回上限。
+    // 单次检索候选 chunk 数量。
     "retrieval_limit": 6,
 
-    // 同会话内容的加权偏置，1.0 表示不额外偏置。
+    // 同会话记忆加权；1.0 表示不额外加权。
     "retrieval_same_session_bias": 1.0,
 
-    // 最多返回多少个片段。
+    // 最终注入上下文的记忆片段数量上限。
     "retrieval_max_snippets": 4,
 
-    // 检索片段总字符数上限。
+    // 最终注入上下文的记忆片段总字符数上限。
     "retrieval_max_chars": 1600,
 
-    // 是否启用混合检索。
+    // 是否启用 keyword + vector 的混合检索。
     "hybrid_enable": false,
 
-    // 混合检索时关键词候选上限。
+    // 混合检索时 keyword 候选数量。
     "hybrid_keyword_limit": 12,
 
-    // 混合检索时向量候选上限。
+    // 混合检索时 vector 候选数量。
     "hybrid_vector_limit": 12,
 
-    // 是否启用最近片段去重。
+    // 是否避免短时间内重复注入相同记忆片段。
     "recent_dedup_enable": true,
 
-    // 去重时是否使用 chunk metadata。
+    // 去重时是否读取消息 metadata 里的 recalled chunk id。
     "recent_dedup_use_chunk_metadata": true,
 
-    // 是否启用片段分类。
+    // 是否按类别组织检索片段。
     "snippet_categorize_enable": true,
 
-    // 是否启用 reranker 重排。
+    // 是否启用 reranker 对候选记忆重排。
     "reranker_enable": false,
 
-    // reranker 后端名称。
+    // reranker 后端，目前默认 lightweight。
     "reranker_backend": "lightweight",
 
-    // reranker 输入上限。
+    // 送入 reranker 的候选数量上限。
     "reranker_limit": 8,
 
-    // 是否优先长期偏好类片段。
+    // 是否优先展示长期偏好类记忆。
     "snippet_prioritize_long_term_preferences": true,
 
-    // 是否压缩错误堆栈类片段内容。
+    // 是否压缩错误堆栈类记忆，减少上下文占用。
     "snippet_compress_error_stacks": true,
 
-    // 文件路径命中时的额外权重提升。
+    // 当用户问题命中文件路径时，对相关片段的额外权重。
     "snippet_path_weight_boost": 1.0
+  },
+
+  // 自我学习配置：从已完成 turn 中提取候选经验，人工 review 后可写入项目记忆或 skill。
+  "learning": {
+    // 是否启用 learning 子系统。
+    "enable": true,
+
+    // 每轮结束后是否自动尝试提取学习候选。
+    "auto_extract": true,
+
+    // 是否启用 .pp-agent/learning/memory.md 项目记忆上下文。
+    "project_memory_enable": true,
+
+    // 注入项目记忆时的字符数上限。
+    "project_memory_char_limit": 4000,
+
+    // 每轮最多生成多少个学习候选。
+    "candidate_limit_per_turn": 3,
+
+    // 展示学习候选的最低置信度：low、medium、high。
+    "min_confidence_to_suggest": "medium",
+
+    // 是否使用 LLM 提取学习候选。
+    "llm_extractor_enable": true
   }
 }

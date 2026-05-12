@@ -871,6 +871,187 @@ def test_shell_inspect_outside_known_safe_subset_stays_ask(tmp_path: Path) -> No
     assert decision.details["known_safe_inspect"] is False
 
 
+def test_shell_redirection_promotes_inspect_to_workspace_mutation() -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="git status > status.txt",
+        timeout_seconds=30,
+    )
+
+    assert effect["analysis"]["risk_class"] == "workspace_mutation"
+    assert effect["analysis"]["writes_workspace_files"] is True
+    assert "redirection" in effect["analysis"]["flags"]
+    assert effect["analysis"]["known_safe_inspect"] is False
+
+
+def test_shell_multi_command_detects_destructive_later_segment() -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="git status; Remove-Item -Recurse -Force dist",
+        timeout_seconds=30,
+    )
+
+    assert effect["analysis"]["risk_class"] == "destructive"
+    assert effect["analysis"]["destructive_hint"] is True
+    assert "shell_operator" in effect["analysis"]["flags"]
+    assert "recursive" in effect["analysis"]["flags"]
+    assert "force" in effect["analysis"]["flags"]
+    assert "destructive_escalated" in effect["analysis"]["flags"]
+
+
+def test_shell_git_clean_and_reset_are_destructive() -> None:
+    clean = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="git clean -fd",
+        timeout_seconds=30,
+    )
+    reset = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="git reset --hard HEAD",
+        timeout_seconds=30,
+    )
+
+    assert clean["analysis"]["risk_class"] == "destructive"
+    assert reset["analysis"]["risk_class"] == "destructive"
+    assert "vcs_write" in clean["analysis"]["flags"]
+    assert "vcs_write" in reset["analysis"]["flags"]
+
+
+def test_shell_relative_parent_path_escape_is_external(tmp_path: Path) -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="Get-Content ..\\outside.txt",
+        timeout_seconds=30,
+        workspace=tmp_path,
+    )
+
+    assert effect["analysis"]["risk_class"] == "external_mutation"
+    assert effect["analysis"]["touches_external"] is True
+
+
+def test_shell_powershell_write_aliases_are_workspace_mutations() -> None:
+    for command in ("sc notes.txt alpha", "ni notes.txt", "cp a.txt b.txt", "mv a.txt b.txt"):
+        effect = build_shell_effect(
+            tool_name="run_shell",
+            permission_domain="bash",
+            command=command,
+            timeout_seconds=30,
+        )
+
+        assert effect["analysis"]["risk_class"] == "workspace_mutation"
+        assert effect["analysis"]["writes_workspace_files"] is True
+
+
+def test_shell_env_assignment_requires_approval() -> None:
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command="$env:FOO='bar'",
+        timeout_seconds=30,
+    )
+
+    assert effect["analysis"]["risk_class"] == "workspace_mutation"
+    assert "env_write" in effect["analysis"]["flags"]
+
+
+def test_shell_pipeline_inspect_is_not_known_safe_direct_allow(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    decision = registry.evaluate_call("run_shell", {"command": "rg TODO src | Select-String TODO"})
+
+    assert decision.action == "ask"
+    assert decision.details["risk_class"] == "inspect"
+    assert decision.details["known_safe_inspect"] is False
+    assert "shell_operator" in decision.details["flags"]
+
+
+def test_tool_name_policy_rules_take_priority(tmp_path: Path) -> None:
+    policy = ToolPolicyConfig(
+        permission_mode="read-only",
+        allowed_tools=["read_file", "write_file", "fetch.*"],
+        denied_tools=["fetch.*"],
+        ask_tools=["read_file"],
+    )
+    registry = ToolRegistry(tmp_path, policy=policy)
+
+    ask = registry.evaluate_call("read_file", {"path": "notes.txt"})
+    allowed = registry.evaluate_call("write_file", {"path": "notes.txt", "content": "alpha"})
+
+    assert ask.action == "ask"
+    assert allowed.action == "allow"
+    assert registry.execute("write_file", {"path": "notes.txt", "content": "alpha"}).details["staged"] is True
+
+
+def test_denied_tool_pattern_blocks_dynamic_tool_even_when_allowed(tmp_path: Path) -> None:
+    policy = ToolPolicyConfig(allowed_tools=["fetch.*"], denied_tools=["fetch.*"])
+    registry = ToolRegistry(tmp_path, policy=policy)
+    registry.register_function_tool(
+        name="fetch.readable",
+        description="Fetch webpage content from a URL",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        executor=lambda workspace, arguments: arguments.get("url", ""),
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        requests_network_hint=True,
+    )
+
+    decision = registry.evaluate_call("fetch.readable", {"url": "https://example.com"})
+
+    assert decision.action == "deny"
+    with pytest.raises(PermissionError, match="denied by tool policy"):
+        registry.execute("fetch.readable", {"url": "https://example.com"})
+
+
+def test_read_only_permission_mode_denies_mutating_and_network_tools(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, policy=ToolPolicyConfig(permission_mode="read-only"))
+    registry.register_function_tool(
+        name="fetch.readable",
+        description="Fetch webpage content from a URL",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        executor=lambda workspace, arguments: arguments.get("url", ""),
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        requests_network_hint=True,
+    )
+
+    read_decision = registry.evaluate_call("read_file", {"path": "notes.txt"})
+    write_decision = registry.evaluate_call("write_file", {"path": "notes.txt", "content": "alpha"})
+    shell_decision = registry.evaluate_call("run_shell", {"command": "Set-Content notes.txt alpha"})
+    network_decision = registry.evaluate_call("fetch.readable", {"url": "https://example.com"})
+
+    assert read_decision.action == "allow"
+    assert write_decision.action == "deny"
+    assert shell_decision.action == "deny"
+    assert network_decision.action == "deny"
+    with pytest.raises(PermissionError, match="Read-only permission mode denies"):
+        registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+
+
+def test_prompt_permission_mode_asks_for_non_high_confidence_inspect(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, policy=ToolPolicyConfig(permission_mode="prompt"))
+
+    safe = registry.evaluate_call("git_status", {})
+    inspect_needing_prompt = registry.evaluate_call("run_shell", {"command": "git log"})
+
+    assert safe.action == "allow"
+    assert inspect_needing_prompt.action == "ask"
+
+
+def test_danger_full_access_still_denies_protected_paths(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, policy=ToolPolicyConfig(permission_mode="danger-full-access"))
+
+    decision = registry.evaluate_call("read_file", {"path": ".env"})
+
+    assert decision.action == "deny"
+
+
 def test_file_shared_analysis_records_are_stable(tmp_path: Path) -> None:
     target = tmp_path / "src" / "app.py"
     target.parent.mkdir(parents=True)

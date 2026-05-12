@@ -35,6 +35,28 @@ def test_stream_chat_parses_sse(monkeypatch) -> None:
     assert "".join(event["text"] for event in events) == "Hello"
 
 
+def test_stream_chat_tolerates_empty_choice_chunks(monkeypatch) -> None:
+    payload = '\n'.join(
+        [
+            'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}',
+            'data: {"choices":[]}',
+            'data: {"usage":{"total_tokens":12},"choices":[]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            'data: [DONE]',
+        ]
+    )
+
+    monkeypatch.setenv("PP_AGENT_API_KEY", "test-key")
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=payload)))
+    llm = LLMClient(client=client)
+
+    events = list(llm.stream_chat([ChatMessage(role="user", content=[TextPart(text="hi")], timestamp=0.0)]))
+
+    assert "".join(event["text"] for event in events) == "Hi"
+    assert events[1]["tool_calls"] == []
+    assert events[1]["finish_reason"] is None
+
+
 def test_stream_chat_raises_on_invalid_sse(monkeypatch) -> None:
     payload = '\n'.join(['data: not-json', 'data: [DONE]'])
 
@@ -53,3 +75,19 @@ def test_stream_chat_raises_on_http_error(monkeypatch) -> None:
 
     with pytest.raises(LLMClientError):
         list(llm.stream_chat([ChatMessage(role="user", content=[TextPart(text="hi")], timestamp=0.0)]))
+
+
+def test_default_client_trusts_environment(monkeypatch) -> None:
+    monkeypatch.delenv("PP_AGENT_HTTP_TRUST_ENV", raising=False)
+
+    llm = LLMClient()
+
+    assert llm._client.trust_env is True
+
+
+def test_default_client_can_ignore_environment(monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HTTP_TRUST_ENV", "0")
+
+    llm = LLMClient()
+
+    assert llm._client.trust_env is False

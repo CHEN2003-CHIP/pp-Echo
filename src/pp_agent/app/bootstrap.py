@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -443,10 +445,32 @@ def vector_index_for(workspace: Path):
     if not memory_settings.vector_enable or memory_settings.vector_backend != "chroma":
         return NoopVectorIndex()
     try:
-        return ChromaVectorIndex(path=settings.chroma_dir_path(), collection_name=memory_settings.chroma_collection)
+        collection_name = _chroma_collection_name(memory_settings)
+        return ChromaVectorIndex(path=settings.chroma_dir_path(), collection_name=collection_name)
     except RuntimeError as exc:
         logger.warning("Vector index disabled because Chroma is unavailable: %s", exc)
         return NoopVectorIndex()
+
+
+def _chroma_collection_name(memory_settings) -> str:
+    base = memory_settings.chroma_collection
+    if not memory_settings.chroma_collection_per_embedding:
+        return base
+    suffix_source = f"{memory_settings.embedding_provider}:{memory_settings.embedding_model}"
+    suffix = hashlib.sha256(suffix_source.encode("utf-8")).hexdigest()[:12]
+    safe_base = _safe_chroma_collection_segment(base)
+    max_base_len = 63 - len(suffix) - 1
+    safe_base = safe_base[:max_base_len].rstrip("_-") or "ppagent"
+    return f"{safe_base}_{suffix}"
+
+
+def _safe_chroma_collection_segment(value: str) -> str:
+    segment = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_-").lower()
+    if not segment:
+        return "ppagent"
+    if len(segment) < 3:
+        segment = f"{segment}_collection"
+    return segment
 
 
 def memory_index_pipeline_for(workspace: Path) -> MemoryIndexPipeline:
@@ -493,6 +517,7 @@ def history_retriever_for(workspace: Path, *, session_id: str | None = None) -> 
         hybrid_keyword_limit=settings.memory.hybrid_keyword_limit,
         hybrid_vector_limit=settings.memory.hybrid_vector_limit,
         reranker=reranker_for(workspace),
+        max_per_session=settings.memory.retrieval_max_per_session,
     )
 
 

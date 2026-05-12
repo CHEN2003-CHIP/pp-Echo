@@ -4,6 +4,7 @@ import fnmatch
 import json
 import os
 from pathlib import Path
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,9 @@ Use tools when needed, prefer reading before editing, and explain actions clearl
 For file changes, prefer staging a diff preview first and only applying it after confirmation.
 For high-risk plans, pause at the planner layer and wait for approval before executing them."""
 
+PERMISSION_MODES = {"read-only", "workspace-write", "danger-full-access", "prompt"}
+PermissionModeName = Literal["read-only", "workspace-write", "danger-full-access", "prompt"]
+
 
 class ToolPolicyConfig(BaseModel):
     """
@@ -25,6 +29,10 @@ class ToolPolicyConfig(BaseModel):
     所有确认项默认开启，遵循「最小权限、安全优先」原则
     """
     shell_timeout_seconds: int = 30
+    permission_mode: PermissionModeName = "workspace-write"
+    allowed_tools: list[str] = Field(default_factory=list)
+    denied_tools: list[str] = Field(default_factory=list)
+    ask_tools: list[str] = Field(default_factory=list)
     confirm_write_file: bool = True
     confirm_edit_file: bool = True
     confirm_run_shell: bool = True
@@ -255,6 +263,9 @@ class Settings(BaseModel):
             self.model.enable_thinking = bool(data["enable_thinking"])
         if "shell_timeout_seconds" in data:
             self.tool_policy.shell_timeout_seconds = int(data["shell_timeout_seconds"])
+        tool_policy = data.get("tool_policy", {})
+        if tool_policy:
+            self._apply_tool_policy_config(tool_policy)
         tool_confirm = data.get("tool_confirmation", {})
         if "write_file" in tool_confirm:
             self.tool_policy.confirm_write_file = bool(tool_confirm["write_file"])
@@ -277,6 +288,30 @@ class Settings(BaseModel):
         learning_config = data.get("learning", {})
         if learning_config:
             self._apply_learning_config(learning_config)
+
+    def _apply_tool_policy_config(self, tool_policy: dict) -> None:
+        if "shell_timeout_seconds" in tool_policy:
+            self.tool_policy.shell_timeout_seconds = int(tool_policy["shell_timeout_seconds"])
+        if "permission_mode" in tool_policy:
+            permission_mode = str(tool_policy["permission_mode"])
+            if permission_mode not in PERMISSION_MODES:
+                raise ValueError(f"Invalid tool_policy.permission_mode: {permission_mode}")
+            self.tool_policy.permission_mode = cast(PermissionModeName, permission_mode)
+        if "allowed_tools" in tool_policy:
+            self.tool_policy.allowed_tools = [str(value) for value in tool_policy["allowed_tools"]]
+        if "denied_tools" in tool_policy:
+            self.tool_policy.denied_tools = [str(value) for value in tool_policy["denied_tools"]]
+        if "ask_tools" in tool_policy:
+            self.tool_policy.ask_tools = [str(value) for value in tool_policy["ask_tools"]]
+        tool_confirm = tool_policy.get("tool_confirmation", {})
+        if "write_file" in tool_confirm:
+            self.tool_policy.confirm_write_file = bool(tool_confirm["write_file"])
+        if "edit_file" in tool_confirm:
+            self.tool_policy.confirm_edit_file = bool(tool_confirm["edit_file"])
+        if "run_shell" in tool_confirm:
+            self.tool_policy.confirm_run_shell = bool(tool_confirm["run_shell"])
+        if "high_risk_plan" in tool_confirm:
+            self.tool_policy.confirm_high_risk_plan = bool(tool_confirm["high_risk_plan"])
 
     def _apply_storage_config(self, storage_config: dict) -> None:
         if "sessions_dir" in storage_config:
@@ -367,6 +402,8 @@ class Settings(BaseModel):
             self.memory.chroma_path = str(memory_config["chroma_path"])
         if "chroma_collection" in memory_config:
             self.memory.chroma_collection = str(memory_config["chroma_collection"])
+        if "chroma_collection_per_embedding" in memory_config:
+            self.memory.chroma_collection_per_embedding = bool(memory_config["chroma_collection_per_embedding"])
         if "indexing_enable" in memory_config:
             self.memory.indexing_enable = bool(memory_config["indexing_enable"])
         if "indexing_batch_size" in memory_config:
@@ -377,6 +414,8 @@ class Settings(BaseModel):
             self.memory.retrieval_limit = int(memory_config["retrieval_limit"])
         if "retrieval_same_session_bias" in memory_config:
             self.memory.retrieval_same_session_bias = float(memory_config["retrieval_same_session_bias"])
+        if "retrieval_max_per_session" in memory_config:
+            self.memory.retrieval_max_per_session = int(memory_config["retrieval_max_per_session"])
         if "retrieval_max_snippets" in memory_config:
             self.memory.retrieval_max_snippets = int(memory_config["retrieval_max_snippets"])
         if "retrieval_max_chars" in memory_config:

@@ -8,7 +8,7 @@ def _chunk(index: int, text: str, *, source_kind: str = "assistant") -> Retrieve
         message_id=f"message-{index}",
         session_id="session-1",
         turn_id=f"turn-{index}",
-        role="assistant",
+        role=source_kind,
         source_kind=source_kind,
         text=text,
         created_at=float(index),
@@ -24,7 +24,7 @@ def _chunk(index: int, text: str, *, source_kind: str = "assistant") -> Retrieve
             message_id=f"message-{index}",
             session_id="session-1",
             turn_id=f"turn-{index}",
-            role="assistant",
+            role=source_kind,
             text=text,
             created_at=float(index),
         ),
@@ -47,10 +47,10 @@ def test_recall_builder_outputs_categorized_sections() -> None:
     )
 
     assert snippet.startswith("[History Recall]")
-    assert "偏好 / 约束:" in snippet
-    assert "决策 / 结论:" in snippet
-    assert "错误 / 修复:" in snippet
-    assert "路径 / 文件 / 命令:" in snippet
+    assert "Preferences / Constraints:" in snippet
+    assert "Decisions / Conclusions:" in snippet
+    assert "Errors / Fixes:" in snippet
+    assert "Paths / Files / Commands:" in snippet
 
 
 def test_recall_builder_respects_length_budget() -> None:

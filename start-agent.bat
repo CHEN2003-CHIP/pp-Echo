@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+title pp-Echo Agent
 
 
 where python >nul 2>nul
@@ -12,6 +13,9 @@ if errorlevel 1 (
 )
 
 set "PYTHONPATH=%CD%\src"
+if "%PP_AGENT_HTTP_TRUST_ENV%"=="" (
+  set "PP_AGENT_HTTP_TRUST_ENV=0"
+)
 if "%PP_AGENT_API_KEY%"=="" (
   echo [WARN] PP_AGENT_API_KEY is not set.
   echo You can still open the CLI, but model requests will fail until you set it.
@@ -63,6 +67,8 @@ echo                                                           \/____/          
 echo.
 
 echo Starting pp-agent chat...
+echo Workspace: %CD%
+echo PP_AGENT_HTTP_TRUST_ENV=%PP_AGENT_HTTP_TRUST_ENV%
 python -m agent_cli.main chat
 set EXIT_CODE=%ERRORLEVEL%
 if not "%EXIT_CODE%"=="0" (

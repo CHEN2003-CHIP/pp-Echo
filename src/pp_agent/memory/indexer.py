@@ -4,6 +4,7 @@ import math
 import re
 from typing import Any
 
+from pp_agent.memory.classification import classify_memory_text
 from pp_agent.memory.types import HistoryChunkInput, SourceKind
 
 
@@ -74,11 +75,26 @@ class HistoryIndexer:
                 text=value,
                 token_estimate=self._estimate_tokens(value),
                 source_kind=source_kind,
-                metadata=dict(base_metadata),
+                metadata=self._chunk_metadata(base_metadata, text=value, role=role, source_kind=source_kind),
             )
             for index, value in enumerate(chunks)
             if value.strip()
         ]
+
+    @staticmethod
+    def _chunk_metadata(
+        base_metadata: dict[str, Any],
+        *,
+        text: str,
+        role: str,
+        source_kind: SourceKind,
+    ) -> dict[str, Any]:
+        metadata = dict(base_metadata)
+        metadata.setdefault(
+            "memory_category",
+            classify_memory_text(text, role=role, source_kind=source_kind),
+        )
+        return metadata
 
     def _split_paragraph(self, paragraph: str) -> list[str]:
         if self._estimate_tokens(paragraph) <= self.chunk_max_tokens:

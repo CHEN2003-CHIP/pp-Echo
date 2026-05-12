@@ -121,3 +121,30 @@ def test_retriever_applies_recency_and_source_kind_ranking(tmp_path: Path) -> No
     assert results[0].chunk_id == new_user_chunk_id
     assert results[0].recency_score >= results[1].recency_score
     assert results[0].source_kind_weight >= results[1].source_kind_weight
+
+
+def test_retriever_limits_results_per_session_for_diversity(tmp_path: Path) -> None:
+    store = SQLiteHistoryStore(tmp_path / "history.db")
+    first_ids = [
+        _seed_message(store, session_id="session-a", role="assistant", text=f"pytest preference repeated {index}", turn_id=f"a-{index}")
+        for index in range(4)
+    ]
+    other_ids = [
+        _seed_message(store, session_id="session-b", role="assistant", text=f"pytest decision other {index}", turn_id=f"b-{index}")
+        for index in range(2)
+    ]
+    vector_index = _VectorIndex(
+        [VectorQueryResult(chunk_id=chunk_id, score=0.1, text="pytest") for chunk_id in [*first_ids, *other_ids]]
+    )
+    retriever = HistoryRetriever(
+        store=store,
+        embedding_provider=_EmbeddingProvider(),
+        vector_index=vector_index,
+        max_per_session=2,
+    )
+
+    results = retriever.retrieve(query_text="pytest", session_id=None, limit=4)
+
+    assert len(results) == 4
+    assert sum(1 for chunk in results if chunk.session_id == "session-a") == 2
+    assert sum(1 for chunk in results if chunk.session_id == "session-b") == 2

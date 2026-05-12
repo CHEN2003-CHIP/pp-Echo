@@ -1,100 +1,298 @@
 {
+  "_comment_model": "LLM 模型名称。会覆盖环境变量 PP_AGENT_MODEL。",
   "model": "qwen3.5-plus",
+
+  "_comment_base_url": "OpenAI-compatible API 地址。会覆盖环境变量 PP_AGENT_BASE_URL。",
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+
+  "_comment_enable_thinking": "是否启用模型 thinking 参数。具体是否生效取决于模型提供方。",
   "enable_thinking": false,
+
+  "_comment_shell_timeout_seconds": "兼容旧配置：shell 命令默认超时秒数。新配置建议放在 tool_policy.shell_timeout_seconds。",
   "shell_timeout_seconds": 30,
+
+  "_comment_tool_policy": "工具安全策略。unknown comment keys 会被 pp-agent 忽略，真实配置可以保留或删除这些 _comment_* 字段。",
+  "tool_policy": {
+    "_comment_shell_timeout_seconds": "shell 命令默认超时秒数。",
+    "shell_timeout_seconds": 30,
+
+    "_comment_permission_mode": "权限模式：read-only 只读；workspace-write 默认工作区写入；prompt 尽量询问；danger-full-access 放宽审批但仍拒绝敏感/外部路径。",
+    "permission_mode": "workspace-write",
+
+    "_comment_allowed_tools": "工具名 allowlist，使用 fnmatch 匹配真实工具名；优先级低于 denied_tools 和 ask_tools。",
+    "allowed_tools": [
+      "read_file",
+      "list_files",
+      "grep_code",
+      "git_status",
+      "git_diff_worktree"
+    ],
+
+    "_comment_ask_tools": "工具名 asklist，匹配后强制走审批/询问；优先级高于 allowed_tools。",
+    "ask_tools": [
+      "run_shell",
+      "write_file",
+      "edit_file"
+    ],
+
+    "_comment_denied_tools": "工具名 denylist，最高优先级；支持动态工具名，如 fetch.*。",
+    "denied_tools": [
+      "*.dangerous",
+      "fetch.*"
+    ],
+
+    "_comment_tool_confirmation": "兼容旧确认开关；控制写文件、编辑、shell 和高风险计划是否需要确认。",
+    "tool_confirmation": {
+      "_comment_write_file": "write_file 是否需要确认。",
+      "write_file": true,
+
+      "_comment_edit_file": "edit_file 是否需要确认。",
+      "edit_file": true,
+
+      "_comment_run_shell": "run_shell 是否需要确认。",
+      "run_shell": true,
+
+      "_comment_high_risk_plan": "高风险计划是否需要 planner approval。",
+      "high_risk_plan": true
+    }
+  },
+
+  "_comment_capabilities": "能力加载配置：内置工具、skills、extensions、MCP。",
   "capabilities": {
     "builtin_tools": {
+      "_comment_enable": "是否启用内置工具注册。",
       "enable": true
     },
+
     "skills": {
+      "_comment_enable_project": "是否加载当前项目下的 skills。",
       "enable_project": true,
+
+      "_comment_enable_user": "是否加载用户全局目录下的 skills。",
       "enable_user": true,
+
+      "_comment_enable_builtin": "是否加载内置 skills。",
       "enable_builtin": true,
+
+      "_comment_custom_directories": "额外 skill 目录；支持绝对路径和相对工作区路径。",
       "custom_directories": [
         "C:/pp-agent/skills",
         "./.pp-agent/custom-skills"
       ],
+
+      "_comment_ignored": "skill 黑名单，支持 fnmatch，如 draft-*。",
       "ignored": [
         "draft-*",
         "test-*"
       ],
+
+      "_comment_include": "skill 白名单，支持 fnmatch；为空表示不过滤。",
       "include": [
         "*"
       ]
     },
+
     "extensions": {
+      "_comment_enable_project": "是否加载当前项目下的 extensions。",
       "enable_project": true,
+
+      "_comment_enable_user": "是否加载用户全局目录下的 extensions。",
       "enable_user": true,
+
+      "_comment_enable_builtin": "是否加载内置 extensions。",
       "enable_builtin": false,
+
+      "_comment_custom_directories": "额外 extension 目录；支持绝对路径和相对工作区路径。",
       "custom_directories": [
         "C:/pp-agent/extensions",
         "./.pp-agent/custom-extensions"
       ],
+
+      "_comment_ignored": "extension 黑名单，支持 fnmatch。",
       "ignored": [
         "draft-*",
         "experimental-*"
       ],
+
+      "_comment_include": "extension 白名单，支持 fnmatch；为空表示不过滤。",
       "include": [
         "*"
       ]
     },
+
     "mcp": {
+      "_comment_enable": "是否启用 MCP 能力发现和工具接入。",
       "enable": true,
+
+      "_comment_config_paths": "MCP 配置文件路径列表；为空时默认读取 .pp-agent/mcp.json。",
       "config_paths": [
         "./.pp-agent/mcp.json",
         "C:/pp-agent/shared-mcp.json"
       ],
+
+      "_comment_server_filters": "允许启用的 MCP server 名称过滤器；为空表示不过滤。",
       "server_filters": [
         "*"
       ]
     }
   },
+
+  "_comment_tool_confirmation": "旧版确认配置入口，仍兼容；新项目建议使用 tool_policy.tool_confirmation。",
   "tool_confirmation": {
+    "_comment_write_file": "write_file 是否需要确认。",
     "write_file": true,
+
+    "_comment_edit_file": "edit_file 是否需要确认。",
     "edit_file": true,
+
+    "_comment_run_shell": "run_shell 是否需要确认。",
     "run_shell": true,
+
+    "_comment_high_risk_plan": "高风险计划是否需要确认。",
     "high_risk_plan": true
   },
+
+  "_comment_storage": "运行时数据存储目录。",
   "storage": {
+    "_comment_sessions_dir": "会话元数据目录。",
     "sessions_dir": "./.pp-agent/sessions",
+
+    "_comment_timelines_dir": "事件时间线目录。",
     "timelines_dir": "./.pp-agent/timelines",
+
+    "_comment_checkpoints_dir": "checkpoint 数据目录。",
     "checkpoints_dir": "./.pp-agent/checkpoints"
   },
+
+  "_comment_memory": "长期记忆、embedding、向量索引和检索增强配置。",
   "memory": {
+    "_comment_enable": "是否启用长期记忆写入。",
     "enable": false,
+
+    "_comment_backend": "长期记忆后端，目前主要是 sqlite。",
     "backend": "sqlite",
+
+    "_comment_sqlite_path": "SQLite 历史库路径。",
     "sqlite_path": "./.pp-agent/history.db",
+
+    "_comment_chunk_target_tokens": "切分历史消息时的目标 token 数。",
     "chunk_target_tokens": 350,
+
+    "_comment_chunk_max_tokens": "单个 chunk 的最大 token 数。",
     "chunk_max_tokens": 420,
+
+    "_comment_sqlite_busy_timeout_ms": "SQLite busy timeout，单位毫秒。",
     "sqlite_busy_timeout_ms": 5000,
+
+    "_comment_embedding_enable": "是否启用 embedding 生成。",
     "embedding_enable": false,
+
+    "_comment_embedding_provider": "embedding 提供方，目前默认 dashscope。",
     "embedding_provider": "dashscope",
+
+    "_comment_embedding_model": "embedding 模型名。换模型会影响向量维度。",
     "embedding_model": "multimodal-embedding-v1",
+
+    "_comment_dashscope_api_key_env": "DashScope API key 对应的环境变量名。",
     "dashscope_api_key_env": "DASHSCOPE_API_KEY",
+
+    "_comment_embedding_batch_size": "embedding 批处理大小。",
     "embedding_batch_size": 16,
+
+    "_comment_vector_enable": "是否启用向量索引写入/查询。",
     "vector_enable": false,
+
+    "_comment_vector_backend": "向量后端，目前默认 chroma。",
     "vector_backend": "chroma",
+
+    "_comment_chroma_path": "Chroma 本地数据目录。",
     "chroma_path": "./.pp-agent/chroma",
+
+    "_comment_chroma_collection": "Chroma 基础 collection 名。",
     "chroma_collection": "pp_agent_history",
+
+    "_comment_chroma_collection_per_embedding": "是否按 embedding provider/model 自动派生短 collection 名，避免换模型后维度冲突。",
+    "chroma_collection_per_embedding": true,
+
+    "_comment_indexing_enable": "是否启用异步索引，把未索引 memory chunk 写入向量库。",
     "indexing_enable": false,
+
+    "_comment_indexing_batch_size": "每次索引处理的 chunk 数量上限。",
     "indexing_batch_size": 100,
+
+    "_comment_retrieval_enable": "是否在每次 LLM 请求前检索历史记忆并注入上下文。",
     "retrieval_enable": false,
+
+    "_comment_retrieval_limit": "单次检索候选 chunk 数量。",
     "retrieval_limit": 6,
+
+    "_comment_retrieval_same_session_bias": "同会话记忆加权；1.0 表示不额外加权。",
     "retrieval_same_session_bias": 1.0,
+
+    "_comment_retrieval_max_snippets": "最终注入上下文的记忆片段数量上限。",
     "retrieval_max_snippets": 4,
+
+    "_comment_retrieval_max_chars": "最终注入上下文的记忆片段总字符数上限。",
     "retrieval_max_chars": 1600,
+
+    "_comment_hybrid_enable": "是否启用 keyword + vector 的混合检索。",
     "hybrid_enable": false,
+
+    "_comment_hybrid_keyword_limit": "混合检索时 keyword 候选数量。",
     "hybrid_keyword_limit": 12,
+
+    "_comment_hybrid_vector_limit": "混合检索时 vector 候选数量。",
     "hybrid_vector_limit": 12,
+
+    "_comment_recent_dedup_enable": "是否避免短时间内重复注入相同记忆片段。",
     "recent_dedup_enable": true,
+
+    "_comment_recent_dedup_use_chunk_metadata": "去重时是否读取消息 metadata 里的 recalled chunk id。",
     "recent_dedup_use_chunk_metadata": true,
+
+    "_comment_snippet_categorize_enable": "是否按类别组织检索片段。",
     "snippet_categorize_enable": true,
+
+    "_comment_reranker_enable": "是否启用 reranker 对候选记忆重排。",
     "reranker_enable": false,
+
+    "_comment_reranker_backend": "reranker 后端，目前默认 lightweight。",
     "reranker_backend": "lightweight",
+
+    "_comment_reranker_limit": "送入 reranker 的候选数量上限。",
     "reranker_limit": 8,
+
+    "_comment_snippet_prioritize_long_term_preferences": "是否优先展示长期偏好类记忆。",
     "snippet_prioritize_long_term_preferences": true,
+
+    "_comment_snippet_compress_error_stacks": "是否压缩错误堆栈类记忆，减少上下文占用。",
     "snippet_compress_error_stacks": true,
+
+    "_comment_snippet_path_weight_boost": "当用户问题命中文件路径时，对相关片段的额外权重。",
     "snippet_path_weight_boost": 1.0
+  },
+
+  "_comment_learning": "自我学习配置：从已完成 turn 中提取候选经验，人工 review 后可写入项目记忆或 skill。",
+  "learning": {
+    "_comment_enable": "是否启用 learning 子系统。",
+    "enable": true,
+
+    "_comment_auto_extract": "每轮结束后是否自动尝试提取学习候选。",
+    "auto_extract": true,
+
+    "_comment_project_memory_enable": "是否启用 .pp-agent/learning/memory.md 项目记忆上下文。",
+    "project_memory_enable": true,
+
+    "_comment_project_memory_char_limit": "注入项目记忆时的字符数上限。",
+    "project_memory_char_limit": 4000,
+
+    "_comment_candidate_limit_per_turn": "每轮最多生成多少个学习候选。",
+    "candidate_limit_per_turn": 3,
+
+    "_comment_min_confidence_to_suggest": "展示学习候选的最低置信度：low、medium、high。",
+    "min_confidence_to_suggest": "medium",
+
+    "_comment_llm_extractor_enable": "是否使用 LLM 提取学习候选。",
+    "llm_extractor_enable": true
   }
 }
