@@ -45,7 +45,7 @@ if app:
 
     @app.command()
     def run(
-        prompt: str = typer.Argument(..., help="Prompt to send to the agent."),
+        prompt: Optional[str] = typer.Argument(None, help="Prompt to send to the agent."),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
         session_id: Optional[str] = typer.Option(None, "--session"),
         json_mode: bool = typer.Option(False, "--json"),
@@ -72,6 +72,12 @@ if app:
 
         tui_main(workspace, session_id)
 
+    @app.command("claw-tui")
+    def claw_tui(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        from pp_agent.cli.commands.claw_tui import claw_tui_main
+
+        raise typer.Exit(claw_tui_main(workspace))
+
     # 注册二级子命令应用，分类管理不同功能模块
     sessions_app = typer.Typer(help="Manage stored sessions.")
     approvals_app = typer.Typer(help="Manage staged approvals.")
@@ -81,6 +87,7 @@ if app:
     checkpoint_app = typer.Typer(help="Manage git-backed checkpoints.")
     capabilities_app = typer.Typer(help="Inspect and reload discoverable capabilities.")
     skills_app = typer.Typer(help="Inspect discovered skills.")
+    eval_app = typer.Typer(help="Run and report agent evaluations.")
 
     # 将子命令组挂载到主应用
     app.add_typer(sessions_app, name="sessions")
@@ -91,6 +98,7 @@ if app:
     app.add_typer(checkpoint_app, name="checkpoint")
     app.add_typer(capabilities_app, name="capabilities")
     app.add_typer(skills_app, name="skills")
+    app.add_typer(eval_app, name="eval")
 
     @sessions_app.command("list")
     def sessions_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
@@ -344,6 +352,43 @@ if app:
         skills_show_main(workspace, name)
 
 
+    @eval_app.command("run")
+    def eval_run(
+        dataset: Path = typer.Argument(..., help="Path to eval dataset JSON/JSONL."),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+        run_id: Optional[str] = typer.Option(None, "--run-id"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
+        reuse_session: bool = typer.Option(False, "--reuse-session"),
+        stop_on_failure: bool = typer.Option(False, "--stop-on-failure"),
+        preflight: bool = typer.Option(False, "--preflight"),
+        json_mode: bool = typer.Option(False, "--json"),
+    ) -> None:
+        from pp_agent.cli.commands.eval import eval_run_main
+
+        eval_run_main(
+            dataset,
+            workspace,
+            run_id=run_id,
+            output_dir=output_dir,
+            reuse_session=reuse_session,
+            stop_on_failure=stop_on_failure,
+            preflight=preflight,
+            json_mode=json_mode,
+        )
+
+
+    @eval_app.command("report")
+    def eval_report(
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+        run_id: Optional[str] = typer.Option(None, "--run-id"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
+        json_mode: bool = typer.Option(False, "--json"),
+    ) -> None:
+        from pp_agent.cli.commands.eval import eval_report_main
+
+        eval_report_main(workspace, run_id=run_id, output_dir=output_dir, json_mode=json_mode)
+
+
     @app.command("rewind-safe")
     def rewind_safe(
         session_id: str = typer.Option(..., "--session"),
@@ -385,8 +430,10 @@ def main() -> None:
     tui_parser = subparsers.add_parser("tui")
     tui_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     tui_parser.add_argument("--session", default=None)
+    claw_tui_parser = subparsers.add_parser("claw-tui")
+    claw_tui_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("prompt")
+    run_parser.add_argument("prompt", nargs="?")
     run_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     run_parser.add_argument("--session", default=None)
     run_parser.add_argument("--json", action="store_true")
@@ -486,6 +533,22 @@ def main() -> None:
     skills_show_parser = skills_subparsers.add_parser("show")
     skills_show_parser.add_argument("name")
     skills_show_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    eval_parser = subparsers.add_parser("eval")
+    eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
+    eval_run_parser = eval_subparsers.add_parser("run")
+    eval_run_parser.add_argument("dataset")
+    eval_run_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    eval_run_parser.add_argument("--run-id", default=None)
+    eval_run_parser.add_argument("--output-dir", default=None)
+    eval_run_parser.add_argument("--reuse-session", action="store_true")
+    eval_run_parser.add_argument("--stop-on-failure", action="store_true")
+    eval_run_parser.add_argument("--preflight", action="store_true")
+    eval_run_parser.add_argument("--json", action="store_true")
+    eval_report_parser = eval_subparsers.add_parser("report")
+    eval_report_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    eval_report_parser.add_argument("--run-id", default=None)
+    eval_report_parser.add_argument("--output-dir", default=None)
+    eval_report_parser.add_argument("--json", action="store_true")
     rewind_safe_parser = subparsers.add_parser("rewind-safe")
     rewind_safe_parser.add_argument("--session", required=True)
     rewind_safe_parser.add_argument("--checkpoint", default=None)
@@ -505,6 +568,10 @@ def main() -> None:
         from pp_agent.tui.main import tui_main
 
         tui_main(Path(args.workspace), args.session)
+    elif command == "claw-tui":
+        from pp_agent.cli.commands.claw_tui import claw_tui_main
+
+        raise SystemExit(claw_tui_main(Path(args.workspace)))
     elif command == "run":
         from pp_agent.cli.commands.run import run_main
 
@@ -617,6 +684,28 @@ def main() -> None:
         from pp_agent.cli.commands.skills import skills_show_main
 
         skills_show_main(Path(args.workspace), args.name)
+    elif command == "eval" and args.eval_command == "run":
+        from pp_agent.cli.commands.eval import eval_run_main
+
+        eval_run_main(
+            Path(args.dataset),
+            Path(args.workspace),
+            run_id=args.run_id,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            reuse_session=args.reuse_session,
+            stop_on_failure=args.stop_on_failure,
+            preflight=args.preflight,
+            json_mode=args.json,
+        )
+    elif command == "eval" and args.eval_command == "report":
+        from pp_agent.cli.commands.eval import eval_report_main
+
+        eval_report_main(
+            Path(args.workspace),
+            run_id=args.run_id,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            json_mode=args.json,
+        )
     elif command == "rewind-safe":
         from pp_agent.cli.commands.checkpoint import rewind_safe_main
 

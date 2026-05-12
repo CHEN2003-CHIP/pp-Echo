@@ -12,6 +12,13 @@ from pp_agent.llm.models import ModelConfig, ProviderConfig
 from pp_agent.llm.provider.base import BaseLLMClient, LLMClientError
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
 class LLMClient(BaseLLMClient):
     """"""
     def __init__(
@@ -24,7 +31,10 @@ class LLMClient(BaseLLMClient):
             provider=provider or ProviderConfig(base_url=os.getenv("PP_AGENT_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")),
             model=model or ModelConfig(model=os.getenv("PP_AGENT_MODEL", "qwen3.5-plus")),
         )
-        self._client = client or httpx.Client(timeout=httpx.Timeout(60.0, connect=20.0))
+        self._client = client or httpx.Client(
+            timeout=httpx.Timeout(60.0, connect=20.0),
+            trust_env=_env_bool("PP_AGENT_HTTP_TRUST_ENV", True),
+        )
 
     def stream_chat(
         self,
@@ -112,7 +122,8 @@ class LLMClient(BaseLLMClient):
     @staticmethod
     def _normalize_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
         """大模型流式响应标准化工具方法"""
-        choice = chunk.get("choices", [{}])[0]
+        choices = chunk.get("choices") or []
+        choice = choices[0] if choices else {}
         delta = choice.get("delta", {})
         normalized: dict[str, Any] = {
             "text": delta.get("content", ""),

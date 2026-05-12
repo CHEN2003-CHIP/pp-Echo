@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agent_core.types import ChatMessage, ModelConfig, TextPart
+from agent_core.types import ChatMessage, ModelConfig, TextPart, ToolCallPart
 from pp_agent.runtime.lifecycle import SESSION_BEFORE_COMPACT, SESSION_COMPACTED
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.tools.registry import ToolRegistry
@@ -80,3 +80,46 @@ def test_compaction_uses_short_spawn_subagent_summary(tmp_path: Path) -> None:
     assert "spawn_subagent:failed/invalid_summary" in line
     assert "No reliable summary was produced." in line
     assert "inspected=2" in line
+
+
+def test_compaction_keeps_tool_call_pair_together() -> None:
+    from pp_agent.runtime.compaction import ConversationCompactor
+    from pp_agent.domain import CompactionState
+
+    messages = [
+        ChatMessage(role="user", content=[TextPart(text="older request")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="older answer")], timestamp=2.0),
+        ChatMessage(
+            role="assistant",
+            content=[ToolCallPart(id="call-1", name="grep_code", arguments={"query": "AgentRuntime"})],
+            timestamp=3.0,
+        ),
+        ChatMessage(role="tool", tool_call_id="call-1", tool_name="grep_code", content=[TextPart(text="src/pp_agent/runtime/runtime.py")], timestamp=4.0),
+        ChatMessage(role="user", content=[TextPart(text="continue with the runtime change")], timestamp=5.0),
+    ]
+
+    state = ConversationCompactor(keep_recent_messages=2).compact(messages, CompactionState())
+
+    assert state.summarized_message_count == 2
+    assert "Tools mentioned:" in state.summary
+    assert "grep_code" in state.summary
+
+
+def test_compaction_summary_has_stable_sections() -> None:
+    from pp_agent.runtime.compaction import ConversationCompactor
+    from pp_agent.domain import CompactionState
+
+    messages = [
+        ChatMessage(role="user", content=[TextPart(text="todo: update tests/test_memory_retrieval.py next")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="Edited src/pp_agent/memory/retrieval.py")], timestamp=2.0),
+        ChatMessage(role="user", content=[TextPart(text="current work is memory recall")], timestamp=3.0),
+    ]
+
+    state = ConversationCompactor(keep_recent_messages=1, max_summary_chars=800).compact(messages, CompactionState(summary="Old summary line"))
+
+    assert "Previously compacted context:" in state.summary
+    assert "Newly compacted context:" in state.summary
+    assert "Current work:" in state.summary
+    assert "Pending work:" in state.summary
+    assert "Key files referenced:" in state.summary
+    assert "Tools mentioned:" in state.summary

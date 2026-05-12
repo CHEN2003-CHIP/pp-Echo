@@ -17,7 +17,7 @@ _DEFAULT_BUILD_AGENT = build_agent
 
 
 def run_main(
-    prompt: str,
+    prompt: Optional[str],
     workspace: Path,
     session_id: Optional[str] = None,
     json_mode: bool = False,
@@ -26,6 +26,8 @@ def run_main(
     if mode == "rpc":
         run_stdio_rpc(workspace)
         return {"mode": "rpc"}
+    if prompt is None:
+        raise ValueError("Prompt is required unless --mode rpc is used.")
 
     if build_agent is not _DEFAULT_BUILD_AGENT:
         agent = build_agent(workspace, session_id=session_id)

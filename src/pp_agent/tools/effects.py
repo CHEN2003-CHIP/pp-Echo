@@ -18,6 +18,7 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r'''"[^"]*"|'[^']*'|\S+''')
 _WINDOWS_ABS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _UNC_PATH_RE = re.compile(r"^\\\\")
+_SHELL_OPERATOR_RE = re.compile(r"(\|\||&&|[|;<>])")
 _NETWORK_KEYWORDS = ("fetch", "web", "url", "network", "remote", "http", "https", "curl", "wget", "article", "webpage")
 _RISK_ORDER = {
     "inspect": 0,
@@ -244,18 +245,87 @@ def _looks_like_absolute_path(token: str) -> bool:
     return token.startswith("/") or bool(_WINDOWS_ABS_PATH_RE.match(token) or _UNC_PATH_RE.match(token))
 
 
-def _is_outside_workspace(token: str, workspace: Path | None) -> bool:
-    if workspace is None:
-        return _looks_like_absolute_path(token)
-    candidate = _unquote(token)
-    if not _looks_like_absolute_path(candidate):
+def _looks_like_relative_path(token: str) -> bool:
+    candidate = _unquote(token).strip()
+    if not candidate or candidate.startswith("-"):
         return False
+    if "://" in candidate:
+        return False
+    return (
+        candidate in {".", ".."}
+        or candidate.startswith("../")
+        or candidate.startswith("..\\")
+        or candidate.startswith("./")
+        or candidate.startswith(".\\")
+        or "/" in candidate
+        or "\\" in candidate
+    )
+
+
+def _is_outside_workspace(token: str, workspace: Path | None) -> bool:
+    candidate = _unquote(token)
+    if workspace is None:
+        return _looks_like_absolute_path(candidate)
+    if not _looks_like_absolute_path(candidate) and not _looks_like_relative_path(candidate):
+        return False
+    candidate_path = Path(candidate)
+    if not candidate_path.is_absolute():
+        candidate_path = workspace / candidate_path
     try:
-        resolved = Path(candidate).resolve()
+        resolved = candidate_path.resolve()
     except OSError:
         return True
     workspace = workspace.resolve()
     return resolved != workspace and workspace not in resolved.parents
+
+
+def _split_shell_segments(normalized_command: str) -> list[list[str]]:
+    segments: list[list[str]] = []
+    current: list[str] = []
+    spaced_command = _SHELL_OPERATOR_RE.sub(r" \1 ", normalized_command)
+    for token in tokenize_shell_command(spaced_command):
+        if token in {"|", ";", "&&", "||"}:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(token)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _segment_head(segment: list[str]) -> tuple[str, str]:
+    lowered = [_unquote(token).lower() for token in segment]
+    head = lowered[0] if lowered else ""
+    second = lowered[1] if len(lowered) > 1 else ""
+    return head, second
+
+
+def _has_redirection(normalized_command: str) -> bool:
+    return any(operator in normalized_command for operator in (">", ">>", "1>", "2>"))
+
+
+def _has_shell_operators(normalized_command: str) -> bool:
+    return bool(_SHELL_OPERATOR_RE.search(normalized_command))
+
+
+def _contains_env_write(normalized_command: str, lower_tokens: list[str]) -> bool:
+    lowered = normalized_command.lower()
+    return "$env:" in lowered or any(token.startswith("env:") for token in lower_tokens)
+
+
+def _contains_powershell_force(lower_tokens: list[str]) -> bool:
+    return "-force" in lower_tokens or "/f" in lower_tokens
+
+
+def _contains_recursive_flag(lower_tokens: list[str]) -> bool:
+    return any(token in {"-r", "-rf", "-fr", "-recurse", "-recursive", "/s"} for token in lower_tokens)
+
+
+def _contains_dangerous_target(lower_tokens: list[str]) -> bool:
+    dangerous = {"/", "\\", ".", "..", "$home", "~", "%userprofile%"}
+    return any(token in dangerous for token in lower_tokens)
 
 
 def _analysis(
@@ -332,14 +402,16 @@ def classify_shell_effect(command: str, *, workspace: Path | None = None) -> dic
     requests_network = False
     destructive_hint = False
     touches_external_paths = any(_is_outside_workspace(token, workspace) for token in tokens)
+    has_shell_operators = _has_shell_operators(normalized_command)
+    has_redirection = _has_redirection(normalized_command)
 
     inspect_heads = {"rg", "grep", "ls", "dir", "get-childitem"}
     vcs_read_pairs = {("git", "status"), ("git", "diff"), ("git", "show"), ("git", "log")}
-    destructive_heads = {"rm", "del", "erase", "remove-item", "rmdir"}
+    destructive_heads = {"rm", "del", "erase", "remove-item", "ri", "rmdir", "rd"}
     fetch_heads = {"curl", "wget", "invoke-webrequest", "irm", "invoke-restmethod", "iwr"}
     formatter_heads = {"black", "isort", "prettier", "clang-format"}
     test_heads = {"pytest", "tox", "nox"}
-    package_manager_heads = {"pip", "pip3", "python", "python3", "uv", "npm", "pnpm", "yarn", "poetry"}
+    package_manager_heads = {"pip", "pip3", "python", "python3", "py", "uv", "npm", "pnpm", "yarn", "poetry"}
     workspace_mutation_heads = {
         "pytest",
         "tox",
@@ -356,49 +428,72 @@ def classify_shell_effect(command: str, *, workspace: Path | None = None) -> dic
         "cmake",
         "msbuild",
         "dotnet",
+        "tee",
+        "tee-object",
+        "start-process",
     }
     write_heads = {
         "set-content",
+        "sc",
         "add-content",
         "out-file",
         "copy-item",
+        "copy",
+        "cp",
         "move-item",
+        "move",
+        "mv",
         "new-item",
+        "ni",
         "set-itemproperty",
+        "set-location",
     }
 
-    if (command_head, second) in vcs_read_pairs:
-        flags.append("vcs_read")
-    if command_head == "git" and second in {"add", "commit", "push", "pull", "checkout", "switch", "restore", "reset", "clean"}:
-        flags.append("vcs_write")
-    if command_head in formatter_heads or (command_head == "ruff" and second == "format"):
-        flags.append("formatter")
-    if command_head in test_heads or (command_head in {"python", "python3"} and second == "-m" and len(lower_tokens) > 2 and lower_tokens[2] == "pytest"):
-        flags.append("test_runner")
-    if command_head in package_manager_heads:
-        if (command_head in {"pip", "pip3"} and second in {"install", "uninstall"}) or (
-            command_head in {"python", "python3"} and second == "-m" and len(lower_tokens) > 3 and lower_tokens[2] == "pip" and lower_tokens[3] == "install"
-        ) or (command_head in {"uv", "poetry"} and second in {"add", "remove", "install", "update"}) or (
-            command_head in {"npm", "pnpm", "yarn"} and second in {"install", "add", "update", "upgrade", "remove"}
-        ):
-            flags.append("package_manager")
-            requests_network = True
-
-    if command_head in fetch_heads:
-        requests_network = True
-
-    if command_head in destructive_heads:
-        destructive_hint = True
-    if command_head == "git" and second in {"clean", "reset"}:
-        destructive_hint = True
-
     writes_workspace_files = False
-    if command_head in workspace_mutation_heads or command_head in write_heads:
+    for segment in _split_shell_segments(normalized_command) or [tokens]:
+        segment_head, segment_second = _segment_head(segment)
+        segment_lower = [_unquote(token).lower() for token in segment]
+        if (segment_head, segment_second) in vcs_read_pairs:
+            flags.append("vcs_read")
+        if segment_head == "git" and segment_second in {"add", "commit", "push", "pull", "checkout", "switch", "restore", "reset", "clean", "apply", "merge", "rebase"}:
+            flags.append("vcs_write")
+            writes_workspace_files = True
+        if segment_head == "git" and segment_second in {"clean", "reset"}:
+            destructive_hint = True
+        if segment_head in formatter_heads or (segment_head == "ruff" and segment_second == "format"):
+            flags.append("formatter")
+        if segment_head in test_heads or (segment_head in {"python", "python3", "py"} and segment_second == "-m" and len(segment_lower) > 2 and segment_lower[2] == "pytest"):
+            flags.append("test_runner")
+        if segment_head in package_manager_heads:
+            if (segment_head in {"pip", "pip3"} and segment_second in {"install", "uninstall"}) or (
+                segment_head in {"python", "python3", "py"} and segment_second == "-m" and len(segment_lower) > 3 and segment_lower[2] == "pip" and segment_lower[3] in {"install", "uninstall"}
+            ) or (segment_head in {"uv", "poetry"} and segment_second in {"add", "remove", "install", "update"}) or (
+                segment_head in {"npm", "pnpm", "yarn"} and segment_second in {"install", "add", "update", "upgrade", "remove"}
+            ):
+                flags.append("package_manager")
+                requests_network = True
+                writes_workspace_files = True
+        if segment_head in fetch_heads:
+            requests_network = True
+        if segment_head in destructive_heads:
+            destructive_hint = True
+        if segment_head in workspace_mutation_heads or segment_head in write_heads:
+            writes_workspace_files = True
+
+    if has_redirection:
+        flags.append("redirection")
         writes_workspace_files = True
-    if "test_runner" in flags or "formatter" in flags or "package_manager" in flags:
+    if has_shell_operators:
+        flags.append("shell_operator")
+    if _contains_env_write(normalized_command, lower_tokens):
+        flags.append("env_write")
         writes_workspace_files = True
-    if ">" in normalized_command:
-        writes_workspace_files = True
+    if _contains_powershell_force(lower_tokens):
+        flags.append("force")
+    if _contains_recursive_flag(lower_tokens):
+        flags.append("recursive")
+    if destructive_hint and (_contains_recursive_flag(lower_tokens) or _contains_powershell_force(lower_tokens) or _contains_dangerous_target(lower_tokens)):
+        flags.append("destructive_escalated")
     if command_head == "git" and second in {"apply", "checkout", "restore", "clean", "reset"}:
         writes_workspace_files = True
 
@@ -408,17 +503,17 @@ def classify_shell_effect(command: str, *, workspace: Path | None = None) -> dic
         risk_class = "destructive"
     elif requests_network:
         risk_class = "networked"
-    elif command_head in inspect_heads or (command_head, second) in vcs_read_pairs:
-        risk_class = "inspect"
     elif writes_workspace_files:
         risk_class = "workspace_mutation"
+    elif command_head in inspect_heads or (command_head, second) in vcs_read_pairs:
+        risk_class = "inspect"
     else:
         risk_class = "workspace_mutation"
 
-    has_shell_operators = any(operator in normalized_command for operator in ("|", ";", ">", "<", "&&", "||"))
     known_safe_inspect = (
         risk_class == "inspect"
         and not has_shell_operators
+        and not has_redirection
         and not requests_network
         and not destructive_hint
         and not touches_external_paths

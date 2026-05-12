@@ -13,6 +13,7 @@ class _RecordingRetriever:
     def retrieve(self, *, query_text, session_id, recent_chunk_ids=None, limit=6, recent_fallback_keys=None):
         self.calls.append(
             {
+                "query_text": query_text,
                 "recent_chunk_ids": set(recent_chunk_ids or set()),
                 "recent_fallback_keys": set(recent_fallback_keys or set()),
             }
@@ -71,6 +72,9 @@ def test_recall_metadata_carries_chunk_ids() -> None:
     assert payload["recalled_chunk_ids"] == ["chunk-1"]
     assert payload["source_session_ids"] == ["session-1"]
     assert payload["source_turn_ids"] == ["turn-1"]
+    assert payload["categories"] == ["path_command"]
+    assert payload["final_scores"] == [0.87]
+    assert payload["snippet_chars"] > 0
     assert payload["retrieval_version"] == "v2_rerank_metadata"
 
 
@@ -109,3 +113,23 @@ def test_recent_dedup_falls_back_to_text_fingerprint() -> None:
     assert retriever.calls[1]["recent_chunk_ids"] == {"chunk-1"}
     assert any(key.startswith("fp:") for key in retriever.calls[1]["recent_fallback_keys"])
     assert second == messages
+
+
+def test_query_includes_recent_tool_path_hints() -> None:
+    state = _state()
+    retriever = _RecordingRetriever([_chunk("chunk-1", "Run pytest after editing src/pp_agent/runtime/runtime.py.")])
+    hook = MemoryRetrievalHook(
+        retriever=retriever,
+        builder=RecallSnippetBuilder(),
+        session_id="session-1",
+        enabled=True,
+    )
+    messages = [
+        ChatMessage(role="tool", tool_name="grep_code", content=[TextPart(text="src/pp_agent/runtime/runtime.py: AgentRuntime")], timestamp=1.0),
+        ChatMessage(role="user", content=[TextPart(text="what should I do next?")], timestamp=2.0),
+    ]
+
+    hook.transform_context(state, messages)
+
+    assert "what should I do next?" in retriever.calls[0]["query_text"]
+    assert "src/pp_agent/runtime/runtime.py" in retriever.calls[0]["query_text"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -31,19 +32,37 @@ class PolicyDecision:
 
 
 class ToolPolicyEvaluator:
-    def __init__(self, workspace: Path) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        permission_mode: str = "workspace-write",
+        allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
+        ask_tools: list[str] | None = None,
+    ) -> None:
         self.workspace = workspace.resolve()
+        self.permission_mode = permission_mode
+        self.allowed_tools = list(allowed_tools or [])
+        self.denied_tools = list(denied_tools or [])
+        self.ask_tools = list(ask_tools or [])
 
     def evaluate(
         self,
         *,
         permission_domain: str,
+        tool_name: Optional[str] = None,
+        tool_family: Optional[str] = None,
         target_path: Optional[Path] = None,
         command: Optional[str] = None,
         analysis: Optional[dict[str, Any]] = None,
     ) -> PolicyDecision:
         target = str(target_path) if target_path is not None else command or None
         details = self._details(permission_domain=permission_domain, analysis=analysis)
+        if tool_name is not None:
+            details["tool_name"] = tool_name
+        if tool_family is not None:
+            details["tool_family"] = tool_family
 
         if permission_domain == PermissionDomain.EXTERNAL_DIRECTORY:
             return PolicyDecision(
@@ -71,6 +90,24 @@ class ToolPolicyEvaluator:
                 target=target,
                 details=details,
             )
+
+        if tool_name is not None:
+            rule_decision = self._evaluate_tool_name_rules(
+                tool_name=tool_name,
+                permission_domain=permission_domain,
+                target=target,
+                details=details,
+            )
+            if rule_decision is not None:
+                return rule_decision
+
+        mode_decision = self._evaluate_permission_mode(
+            permission_domain=permission_domain,
+            target=target,
+            details=details,
+        )
+        if mode_decision is not None:
+            return mode_decision
 
         if permission_domain == PermissionDomain.EDIT:
             return PolicyDecision(
@@ -197,6 +234,115 @@ class ToolPolicyEvaluator:
 
         return None
 
+    def _evaluate_tool_name_rules(
+        self,
+        *,
+        tool_name: str,
+        permission_domain: str,
+        target: str | None,
+        details: dict[str, Any],
+    ) -> PolicyDecision | None:
+        if self._matches_any(tool_name, self.denied_tools):
+            return PolicyDecision(
+                action=DENY,
+                permission_domain=permission_domain,
+                reason=f"Tool '{tool_name}' is denied by tool policy.",
+                target=target,
+                details=details,
+            )
+        if self._matches_any(tool_name, self.ask_tools):
+            return PolicyDecision(
+                action=ASK,
+                permission_domain=permission_domain,
+                reason=f"Tool '{tool_name}' requires host-side approval by tool policy.",
+                target=target,
+                details=details,
+            )
+        if self._matches_any(tool_name, self.allowed_tools):
+            return PolicyDecision(
+                action=ALLOW,
+                permission_domain=permission_domain,
+                reason=f"Tool '{tool_name}' is allowed by tool policy.",
+                target=target,
+                details=details,
+            )
+        return None
+
+    def _evaluate_permission_mode(
+        self,
+        *,
+        permission_domain: str,
+        target: str | None,
+        details: dict[str, Any],
+    ) -> PolicyDecision | None:
+        mode = self.permission_mode
+        if mode == "workspace-write":
+            return None
+        if mode == "danger-full-access":
+            return PolicyDecision(
+                action=ALLOW,
+                permission_domain=permission_domain,
+                reason="Allowed by danger-full-access permission mode.",
+                target=target,
+                details=details,
+            )
+        if mode == "prompt":
+            if self._is_high_confidence_inspect(permission_domain=permission_domain, details=details):
+                return PolicyDecision(
+                    action=ALLOW,
+                    permission_domain=permission_domain,
+                    reason="High-confidence inspect call allowed by prompt permission mode.",
+                    target=target,
+                    details=details,
+                )
+            return PolicyDecision(
+                action=ASK,
+                permission_domain=permission_domain,
+                reason="Tool call requires host-side approval by prompt permission mode.",
+                target=target,
+                details=details,
+            )
+        if mode == "read-only":
+            if self._is_read_only_allowed(permission_domain=permission_domain, details=details):
+                return PolicyDecision(
+                    action=ALLOW,
+                    permission_domain=permission_domain,
+                    reason="Read-only permission mode allows this inspect call.",
+                    target=target,
+                    details=details,
+                )
+            return PolicyDecision(
+                action=DENY,
+                permission_domain=permission_domain,
+                reason="Read-only permission mode denies this tool call.",
+                target=target,
+                details=details,
+            )
+        return None
+
+    @staticmethod
+    def _matches_any(tool_name: str, patterns: list[str]) -> bool:
+        return any(fnmatch.fnmatch(tool_name, pattern) for pattern in patterns)
+
+    @staticmethod
+    def _is_high_confidence_inspect(*, permission_domain: str, details: dict[str, Any]) -> bool:
+        return (
+            permission_domain in {PermissionDomain.READ, PermissionDomain.REPO}
+            and details.get("risk_class") == "inspect"
+            and details.get("confidence_band") == CONFIDENCE_HIGH
+            and not details.get("requests_network")
+            and not details.get("destructive_hint")
+            and not details.get("touches_external")
+        )
+
+    def _is_read_only_allowed(self, *, permission_domain: str, details: dict[str, Any]) -> bool:
+        if details.get("requests_network") or details.get("destructive_hint") or details.get("touches_external"):
+            return False
+        if permission_domain == PermissionDomain.READ:
+            risk_class = details.get("risk_class")
+            return risk_class in {None, "inspect"}
+        return self._is_high_confidence_inspect(permission_domain=permission_domain, details=details)
+
     def _details(self, *, permission_domain: str, analysis: dict[str, Any] | None) -> dict[str, Any]:
         if not analysis:
             return {"family": None, "risk_class": None, "confidence_band": CONFIDENCE_UNKNOWN}
@@ -213,6 +359,8 @@ class ToolPolicyEvaluator:
             "protected_path_hint": analysis.get("protected_path_hint", False),
             "known_safe_inspect": analysis.get("known_safe_inspect", False),
             "non_side_effectful": analysis.get("non_side_effectful", False),
+            "flags": analysis.get("flags", []),
+            "writes_workspace_files": analysis.get("writes_workspace_files", False),
             "summary": analysis.get("summary"),
         }
 

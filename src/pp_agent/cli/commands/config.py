@@ -22,6 +22,7 @@ def config_show_main(workspace: Path) -> None:
         "model": settings.model.model,
         "enable_thinking": settings.model.enable_thinking,
         "shell_timeout_seconds": settings.tool_policy.shell_timeout_seconds,
+        "tool_policy": settings.tool_policy.model_dump(mode="json"),
         "tool_confirmation": {
             "write_file": settings.tool_policy.confirm_write_file,
             "edit_file": settings.tool_policy.confirm_edit_file,
@@ -35,6 +36,8 @@ def config_show_main(workspace: Path) -> None:
             "extensions": settings.capabilities.extensions.model_dump(mode="json"),
         },
         "storage": settings.storage.model_dump(mode="json"),
+        "memory": settings.memory.model_dump(mode="json"),
+        "learning": settings.learning.model_dump(mode="json"),
     }
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 

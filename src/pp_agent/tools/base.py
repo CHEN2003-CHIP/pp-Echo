@@ -53,7 +53,12 @@ class BaseTool(ABC):
             permission_domain=permission_domain,
             target_path=resolved,
         )
-        decision = self.policy_evaluator.evaluate(permission_domain=permission_domain, target_path=resolved, analysis=analysis)
+        decision = self.policy_evaluator.evaluate(
+            permission_domain=permission_domain,
+            tool_name=self.spec.name,
+            target_path=resolved,
+            analysis=analysis,
+        )
         if decision.action != ALLOW and permission_domain == "read":
             raise PermissionError(decision.reason)
         if decision.action == "deny":
@@ -68,7 +73,12 @@ class BaseTool(ABC):
             timeout_seconds=30,
             workspace=self.workspace,
         )
-        decision = self.policy_evaluator.evaluate(permission_domain=permission_domain, command=command, analysis=shell_effect["analysis"])
+        decision = self.policy_evaluator.evaluate(
+            permission_domain=permission_domain,
+            tool_name=self.spec.name,
+            command=command,
+            analysis=shell_effect["analysis"],
+        )
         if decision.action == "deny":
             raise PermissionError(decision.reason)
 

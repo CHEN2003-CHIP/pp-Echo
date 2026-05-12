@@ -60,10 +60,10 @@ def _runtime_with_hook(tmp_path: Path, hook: MemoryRetrievalHook) -> tuple[Agent
     return agent, llm
 
 
-def _chunk(text: str) -> RetrievedChunk:
+def _chunk(text: str, *, chunk_id: str = "chunk-1") -> RetrievedChunk:
     return RetrievedChunk(
-        chunk_id="chunk-1",
-        message_id="message-1",
+        chunk_id=chunk_id,
+        message_id=f"{chunk_id}-message",
         session_id="session-1",
         turn_id="turn-1",
         role="assistant",
@@ -79,7 +79,7 @@ def _chunk(text: str) -> RetrievedChunk:
         final_score=0.87,
         retrieval_sources=("vector",),
         message=RetrievedMessage(
-            message_id="message-1",
+            message_id=f"{chunk_id}-message",
             session_id="session-1",
             turn_id="turn-1",
             role="assistant",
@@ -120,7 +120,7 @@ def test_runtime_retrieval_hook_injects_single_context_block(tmp_path: Path) -> 
         retriever=_Retriever(
             chunks=[
                 _chunk("Remember that the repo uses pytest and keep responses concise."),
-                _chunk("The key runtime file is src/pp_agent/runtime/runtime.py."),
+                _chunk("The key runtime file is src/pp_agent/runtime/runtime.py.", chunk_id="chunk-2"),
             ]
         ),
         builder=RecallSnippetBuilder(),
@@ -132,8 +132,12 @@ def test_runtime_retrieval_hook_injects_single_context_block(tmp_path: Path) -> 
     )
     agent, llm = _runtime_with_hook(tmp_path, hook)
 
-    agent.prompt("what did we decide?")
+    events = agent.prompt("what did we decide?")
 
     recall_messages = [message for message in llm.seen_messages[0] if message.role == "system" and "[History Recall]" in message.content[0].text]
     assert len(recall_messages) == 1
     assert "Remember that the repo uses pytest" in recall_messages[0].content[0].text
+    context_events = [event for event in events if event.type == "context_built"]
+    assert context_events
+    assert context_events[0].details["memory_recall"]["recalled_chunk_ids"] == ["chunk-1", "chunk-2"]
+    assert context_events[0].details["memory_recall"]["snippet_chars"] > 0

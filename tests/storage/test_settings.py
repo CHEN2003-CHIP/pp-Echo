@@ -39,6 +39,32 @@ def test_project_config_overrides_defaults(tmp_path: Path) -> None:
     assert settings.tool_policy.confirm_write_file is False
 
 
+def test_tool_policy_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True)
+    (project_dir / "config.json").write_text(
+        (
+            '{"tool_policy":{"permission_mode":"prompt","shell_timeout_seconds":17,'
+            '"allowed_tools":["read_file","git_*"],"ask_tools":["run_shell"],"denied_tools":["fetch.*"],'
+            '"tool_confirmation":{"write_file":false,"edit_file":true,"run_shell":false,"high_risk_plan":false}},'
+            '"tool_confirmation":{"write_file":true}}'
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.tool_policy.permission_mode == "prompt"
+    assert settings.tool_policy.shell_timeout_seconds == 17
+    assert settings.tool_policy.allowed_tools == ["read_file", "git_*"]
+    assert settings.tool_policy.ask_tools == ["run_shell"]
+    assert settings.tool_policy.denied_tools == ["fetch.*"]
+    assert settings.tool_policy.confirm_write_file is True
+    assert settings.tool_policy.confirm_edit_file is True
+    assert settings.tool_policy.confirm_run_shell is False
+    assert settings.tool_policy.confirm_high_risk_plan is False
+
+
 def test_capability_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)
@@ -67,7 +93,7 @@ def test_memory_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)
     (project_dir / "config.json").write_text(
-        '{"memory":{"enable":true,"backend":"sqlite","sqlite_path":"C:/history.db","chunk_target_tokens":222,"chunk_max_tokens":333,"sqlite_busy_timeout_ms":4444,"embedding_enable":true,"embedding_provider":"dashscope","embedding_model":"multimodal-embedding-v1","dashscope_api_key_env":"CUSTOM_KEY","embedding_batch_size":8,"vector_enable":true,"vector_backend":"chroma","chroma_path":"C:/chroma","chroma_collection":"hist","indexing_enable":true,"indexing_batch_size":64,"retrieval_enable":true,"retrieval_limit":9,"retrieval_same_session_bias":1.25,"retrieval_max_snippets":3,"retrieval_max_chars":1200,"hybrid_enable":true,"hybrid_keyword_limit":14,"hybrid_vector_limit":15,"recent_dedup_enable":false,"recent_dedup_use_chunk_metadata":false,"snippet_categorize_enable":false,"reranker_enable":true,"reranker_backend":"lightweight","reranker_limit":5,"snippet_prioritize_long_term_preferences":false,"snippet_compress_error_stacks":false,"snippet_path_weight_boost":1.5}}',
+        '{"memory":{"enable":true,"backend":"sqlite","sqlite_path":"C:/history.db","chunk_target_tokens":222,"chunk_max_tokens":333,"sqlite_busy_timeout_ms":4444,"embedding_enable":true,"embedding_provider":"dashscope","embedding_model":"multimodal-embedding-v1","dashscope_api_key_env":"CUSTOM_KEY","embedding_batch_size":8,"vector_enable":true,"vector_backend":"chroma","chroma_path":"C:/chroma","chroma_collection":"hist","chroma_collection_per_embedding":false,"indexing_enable":true,"indexing_batch_size":64,"retrieval_enable":true,"retrieval_limit":9,"retrieval_same_session_bias":1.25,"retrieval_max_per_session":3,"retrieval_max_snippets":3,"retrieval_max_chars":1200,"hybrid_enable":true,"hybrid_keyword_limit":14,"hybrid_vector_limit":15,"recent_dedup_enable":false,"recent_dedup_use_chunk_metadata":false,"snippet_categorize_enable":false,"reranker_enable":true,"reranker_backend":"lightweight","reranker_limit":5,"snippet_prioritize_long_term_preferences":false,"snippet_compress_error_stacks":false,"snippet_path_weight_boost":1.5}}',
         encoding="utf-8",
     )
 
@@ -88,11 +114,13 @@ def test_memory_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
     assert settings.memory.vector_backend == "chroma"
     assert settings.memory.chroma_path == "C:/chroma"
     assert settings.memory.chroma_collection == "hist"
+    assert settings.memory.chroma_collection_per_embedding is False
     assert settings.memory.indexing_enable is True
     assert settings.memory.indexing_batch_size == 64
     assert settings.memory.retrieval_enable is True
     assert settings.memory.retrieval_limit == 9
     assert settings.memory.retrieval_same_session_bias == 1.25
+    assert settings.memory.retrieval_max_per_session == 3
     assert settings.memory.retrieval_max_snippets == 3
     assert settings.memory.retrieval_max_chars == 1200
     assert settings.memory.hybrid_enable is True

@@ -521,6 +521,7 @@ class AgentRuntime:
 
     def _collect_assistant_message(self) -> tuple[str, list[ToolCall]]:
         """Agent → LLM 的请求发送 + 响应解析全流程封装"""
+        self._ensure_provider_context_budget()
         messages = self._messages_for_model()
         tools = self.tool_registry.openapi_specs()
         #构建模型请求事件
@@ -655,6 +656,25 @@ class AgentRuntime:
             list(self._emit(provider_error_event))
             raise ValueError(message)
         return assistant_text, resolved_tool_calls
+
+    def _ensure_provider_context_budget(self) -> None:
+        estimated_chars = self._estimate_uncompacted_context_chars()
+        threshold = max(8000, self.max_context_messages * 2000)
+        if estimated_chars <= threshold:
+            return
+        list(self._emit_compaction_if_needed())
+
+    def _estimate_uncompacted_context_chars(self) -> int:
+        messages = self.state.messages[self.state.compaction.summarized_message_count :]
+        total = 0
+        for message in messages:
+            for part in message.content:
+                text = getattr(part, "text", None)
+                if isinstance(text, str):
+                    total += len(text)
+                else:
+                    total += len(str(getattr(part, "arguments", "")))
+        return total
 
     @staticmethod
     def _tool_result_fallback(messages: list[ChatMessage]) -> str:
@@ -883,6 +903,9 @@ class AgentRuntime:
         context_decision = self.lifecycle.emit_context_built(context_event, self.state, messages)
         # 9. 更新事件细节、发射事件用于监测
         context_event.details.update(context_decision.details)
+        recall_metadata = self.state.memory_context.get("memory_recall")
+        if isinstance(recall_metadata, dict):
+            context_event.details["memory_recall"] = recall_metadata
         list(self._emit(context_event))
         return context_decision.messages or messages
 

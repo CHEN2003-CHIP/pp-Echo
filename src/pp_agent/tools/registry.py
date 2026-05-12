@@ -65,7 +65,13 @@ class ToolRegistry:
         """
         self.workspace = workspace.resolve()
         self.policy = policy or ToolPolicyConfig()
-        self.policy_evaluator = ToolPolicyEvaluator(self.workspace)
+        self.policy_evaluator = ToolPolicyEvaluator(
+            self.workspace,
+            permission_mode=self.policy.permission_mode,
+            allowed_tools=self.policy.allowed_tools,
+            denied_tools=self.policy.denied_tools,
+            ask_tools=self.policy.ask_tools,
+        )
         self.current_session_id = current_session_id
         self._instances: dict[str, BaseTool] = {}
         self._confirmation_overrides = {
@@ -308,6 +314,7 @@ class ToolRegistry:
         spec = self.get_spec(name)
         metadata = self._registrations[name].metadata
         permission_domain = spec.permission_domain
+        tool_family = metadata.tool_family or ("mcp" if metadata.category == "mcp" else "extension" if metadata.category == "extension" else None)
         if permission_domain == PermissionDomain.BASH:
             timeout = int(arguments.get("timeout_seconds", self.policy.shell_timeout_seconds))
             shell_effect = build_shell_effect(
@@ -319,21 +326,33 @@ class ToolRegistry:
             )
             return self.policy_evaluator.evaluate(
                 permission_domain=permission_domain,
+                tool_name=name,
+                tool_family=tool_family,
                 command=str(arguments.get("command", "")),
                 analysis=shell_effect["analysis"],
             )
-        tool_family = metadata.tool_family or ("mcp" if metadata.category == "mcp" else "extension" if metadata.category == "extension" else None)
         if tool_family in {"extension", "mcp"}:
             decision, _analysis = self._evaluate_dynamic_call(name, arguments)
             return decision
         raw_path = arguments.get("path")
         if raw_path is None:
-            return self.policy_evaluator.evaluate(permission_domain=permission_domain)
+            return self.policy_evaluator.evaluate(
+                permission_domain=permission_domain,
+                tool_name=name,
+                tool_family=tool_family,
+                analysis=self._analysis_for_non_path_builtin(name=name, permission_domain=permission_domain),
+            )
         path = Path(raw_path)
         if not path.is_absolute():
             path = self.workspace / path
         analysis = analyze_file_call(workspace=self.workspace, tool_name=name, permission_domain=permission_domain, target_path=path)
-        return self.policy_evaluator.evaluate(permission_domain=permission_domain, target_path=path, analysis=analysis)
+        return self.policy_evaluator.evaluate(
+            permission_domain=permission_domain,
+            tool_name=name,
+            tool_family=tool_family,
+            target_path=path,
+            analysis=analysis,
+        )
 
     def host_execute(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
         result = self._get_tool(name).execute(arguments)
@@ -359,6 +378,9 @@ class ToolRegistry:
         registration = self._registrations[name]
         if not registration.metadata.model_callable:
             raise PermissionError(f"Tool '{name}' is host-only and not model-callable")
+        decision = self.evaluate_call(name, arguments)
+        if decision.action == "deny":
+            raise PermissionError(decision.reason)
         result = self._get_tool(name).execute(arguments)
         result.tool_name = name
         return result
@@ -463,8 +485,33 @@ class ToolRegistry:
         )
         analysis["declaration_strength"] = metadata.declaration_strength
         analysis["uses_legacy_analysis_hints"] = metadata.uses_legacy_analysis_hints
-        decision = self.policy_evaluator.evaluate(permission_domain=spec.permission_domain, analysis=analysis)
+        decision = self.policy_evaluator.evaluate(
+            permission_domain=spec.permission_domain,
+            tool_name=name,
+            tool_family=metadata.tool_family,
+            analysis=analysis,
+        )
         return decision, analysis
+
+    @staticmethod
+    def _analysis_for_non_path_builtin(*, name: str, permission_domain: str) -> dict[str, Any] | None:
+        if permission_domain == PermissionDomain.REPO:
+            return {
+                "family": "repo",
+                "permission_domain": permission_domain,
+                "tool_name": name,
+                "risk_class": "inspect",
+                "summary": f"Inspect repository with {name}",
+                "confidence_band": "high",
+                "confidence_score": 0.98,
+                "touches_workspace": True,
+                "touches_external": False,
+                "requests_network": False,
+                "destructive_hint": False,
+                "protected_path_hint": False,
+                "known_safe_inspect": True,
+            }
+        return None
 
     def _dynamic_analysis(
         self,

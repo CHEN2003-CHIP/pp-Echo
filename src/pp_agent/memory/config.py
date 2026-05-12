@@ -19,11 +19,13 @@ class MemorySettings(BaseModel):
     vector_backend: str = "chroma"
     chroma_path: str = ""
     chroma_collection: str = "pp_agent_history"
+    chroma_collection_per_embedding: bool = True
     indexing_enable: bool = False
     indexing_batch_size: int = 100
     retrieval_enable: bool = False
     retrieval_limit: int = 6
     retrieval_same_session_bias: float = 1.0
+    retrieval_max_per_session: int = 2
     retrieval_max_snippets: int = 4
     retrieval_max_chars: int = 1600
     hybrid_enable: bool = False
