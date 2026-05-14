@@ -88,7 +88,8 @@ export function App() {
     () => buildActiveApproval(activeSnapshot, activeEvents, approvalSummary),
     [activeSnapshot, activeEvents, approvalSummary]
   );
-  const busy = Boolean(activeSnapshot?.busy || isTurnInFlight(activeEvents));
+  const busy = runtimeIsBusy(activeSnapshot, activeEvents);
+  const displayStatus = runtimeDisplayStatus(status, activeSnapshot, activeEvents);
 
   useEffect(() => {
     const target = transcriptRef.current;
@@ -232,6 +233,18 @@ export function App() {
     refreshSessionState(activeSessionId);
   }
 
+  async function cancelActiveSession() {
+    if (!activeSessionId || !busy) return;
+    appendEvent(activeSessionId, {
+      type: "cancel_requested",
+      session_id: activeSessionId,
+      message: "Cancel requested for the running turn.",
+      details: { cancel_requested: true }
+    });
+    await api.cancel(activeSessionId);
+    refreshSessionState(activeSessionId);
+  }
+
   async function approve() {
     if (!activeApproval) return;
     if (activeApproval.kind === "planner" && activeSessionId) {
@@ -295,7 +308,7 @@ export function App() {
         <div className="title-actions">
           <button title="Refresh" onClick={refreshAll}><RefreshCw size={16} /></button>
           <button title="New session" onClick={createSession}><Plus size={16} /></button>
-          <button title="Stop"><Square size={15} /></button>
+          <button title="Stop" disabled={!activeSessionId || !busy} onClick={cancelActiveSession}><Square size={15} /></button>
         </div>
       </header>
 
@@ -372,10 +385,10 @@ export function App() {
                 <div className="panel-card">
                   <h3><Activity size={16} /> Runtime</h3>
                   <dl>
-                    <dt>Status</dt><dd>{status}</dd>
+                    <dt>Status</dt><dd>{displayStatus}</dd>
                     <dt>Session</dt><dd>{shortId(activeSessionId)}</dd>
                     <dt>Queue</dt><dd>{activeSnapshot?.queued_message_count || 0}</dd>
-                    <dt>Mode</dt><dd>{busy ? "Working" : "Idle"}</dd>
+                    <dt>Mode</dt><dd>{activeSnapshot?.cancel_requested ? "Canceling" : busy ? "Working" : "Idle"}</dd>
                   </dl>
                 </div>
                 <div className="panel-card">
@@ -614,7 +627,23 @@ function shouldShowThinking(items: TranscriptItem[], events: RuntimeEvent[]) {
   return !items.slice(latestUserIndex + 1).some((item) => item.role === "assistant" && item.text.trim() && item.id !== "thinking");
 }
 
-function isTurnInFlight(events: RuntimeEvent[]) {
+export function runtimeIsBusy(snapshot: SessionSnapshot | undefined, events: RuntimeEvent[]) {
+  if (snapshot) return Boolean(snapshot.busy);
+  return isTurnInFlight(events);
+}
+
+export function runtimeDisplayStatus(currentStatus: string, snapshot: SessionSnapshot | undefined, events: RuntimeEvent[]) {
+  if (snapshot?.cancel_requested) return "Canceling";
+  if (snapshot?.busy) return currentStatus;
+  const terminal = latestTerminalEvent(events);
+  if (hasErrorSinceLatestStart(events)) return "Failed";
+  const phase = snapshot?.turn?.phase;
+  if (phase === "idle") return terminal ? "Completed" : "Idle";
+  if (terminal) return "Completed";
+  return currentStatus === "tool_start" ? "Idle" : currentStatus;
+}
+
+export function isTurnInFlight(events: RuntimeEvent[]) {
   let inFlight = false;
   for (const event of events) {
     if (event.type === "local_user_prompt" || event.type === "agent_start" || event.type === "turn_start") {
@@ -627,23 +656,95 @@ function isTurnInFlight(events: RuntimeEvent[]) {
   return inFlight;
 }
 
-function buildActivityItems(events: RuntimeEvent[]) {
-  return events
-    .filter((event) => event.type.includes("tool") || event.type.includes("planner") || event.type.includes("checkpoint"))
-    .map((event) => ({
-      label: event.tool_name || event.type.replace(/_/g, " "),
-      detail: summarizeEvent(event)
-    }));
+function latestTerminalEvent(events: RuntimeEvent[]) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === "turn_end" || event.type === "agent_end" || event.type === "error" || event.is_error) {
+      return event;
+    }
+  }
+  return undefined;
 }
 
-function summarizeEvent(event: RuntimeEvent) {
+function hasErrorSinceLatestStart(events: RuntimeEvent[]) {
+  const latestStart = findLastIndex(
+    events,
+    (event) => event.type === "local_user_prompt" || event.type === "agent_start" || event.type === "turn_start"
+  );
+  return events.slice(Math.max(0, latestStart)).some((event) => event.type === "error" || event.is_error);
+}
+
+export function buildActivityItems(events: RuntimeEvent[]) {
+  const toolStarts = new Map<string, RuntimeEvent>();
+  return events
+    .filter((event) =>
+      event.type.includes("tool") ||
+      event.type.includes("planner") ||
+      event.type.includes("checkpoint") ||
+      event.type.includes("subagent") ||
+      event.type === "cancel_requested"
+    )
+    .map((event) => {
+      const key = toolEventKey(event);
+      if (event.type === "tool_start" && key) toolStarts.set(key, event);
+      return {
+        label: event.tool_name || eventLabel(event),
+        detail: summarizeEvent(event, key ? toolStarts.get(key) : undefined)
+      };
+    });
+}
+
+function eventLabel(event: RuntimeEvent) {
+  const specName = event.details?.spec_name;
+  if (typeof specName === "string" && specName.trim()) return specName;
+  return event.type.replace(/_/g, " ");
+}
+
+function summarizeEvent(event: RuntimeEvent, toolStart?: RuntimeEvent) {
+  const duration = toolDuration(event, toolStart);
+  const durationSuffix = duration ? ` (${duration})` : "";
   if (event.plan_step?.title) return event.plan_step.title;
-  if (event.message) return truncate(event.message, 92);
+  if (event.message) return `${truncate(event.message, 92)}${durationSuffix}`;
   const preview = event.details?.preview;
-  if (typeof preview === "string" && preview.trim()) return truncate(preview, 92);
+  if (typeof preview === "string" && preview.trim()) return `${truncate(preview, 92)}${durationSuffix}`;
   const summary = event.details?.summary;
-  if (typeof summary === "string" && summary.trim()) return truncate(summary, 92);
+  if (typeof summary === "string" && summary.trim()) return `${truncate(summary, 92)}${durationSuffix}`;
+  const childSession = event.details?.child_session_id || event.details?.session_id;
+  const status = event.details?.status;
+  if (typeof childSession === "string" && childSession.trim()) {
+    const prefix = typeof status === "string" && status.trim() ? `${status}: ` : "";
+    return `${prefix}child ${childSession.slice(0, 8)}${durationSuffix}`;
+  }
+  const completed = event.details?.completed;
+  const total = event.details?.total;
+  if (typeof completed === "number" && typeof total === "number") return `${completed}/${total}${durationSuffix}`;
+  if (event.type === "tool_start") return "Started";
+  if (event.type === "subagent_start") return "Started";
+  if (event.type === "subagent_progress") return "Running";
+  if (event.type === "subagent_end") return "Completed";
+  if (event.type === "cancel_requested") return "Cancel requested";
   return event.is_error ? "Failed" : "Updated";
+}
+
+function toolEventKey(event: RuntimeEvent) {
+  const callId = event.details?.tool_call_id;
+  if (typeof callId === "string" && callId.trim()) return callId;
+  return event.tool_name || "";
+}
+
+function toolDuration(event: RuntimeEvent, toolStart?: RuntimeEvent) {
+  if (event.type !== "tool_end" && event.type !== "tool_result" && event.type !== "tool_error") return "";
+  if (!toolStart?.timestamp || !event.timestamp) return "";
+  const elapsedMs = Math.max(0, (event.timestamp - toolStart.timestamp) * 1000);
+  if (elapsedMs < 1000) return "";
+  return formatDuration(elapsedMs);
+}
+
+function formatDuration(elapsedMs: number) {
+  const totalSeconds = Math.max(1, Math.round(elapsedMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function truncate(value: string, limit: number) {

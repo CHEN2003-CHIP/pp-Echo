@@ -14,7 +14,7 @@ class SubAgentSpec(BaseModel):
     tool_allowlist: list[str] = Field(default_factory=list)
     model_override: Optional[str] = None
     require_plan_approval: bool = False
-    max_turns: int = 2
+    max_turns: int = 4
     return_format: str = "summary"
 
 
@@ -195,8 +195,11 @@ def _clean_bullets(lines: list[str]) -> list[str]:
 
 
 def _normalize_section_heading(line: str) -> str:
-    normalized = line.rstrip(":").strip().lower()
+    normalized = line.strip()
+    normalized = re.sub(r"^#{1,6}\s+", "", normalized)
+    normalized = normalized.strip().strip("*_`").strip()
     normalized = re.sub(r"^\d+[\.)]\s+", "", normalized)
+    normalized = normalized.rstrip(":：").strip().strip("*_`").strip().lower()
     return normalized
 
 
@@ -247,7 +250,7 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
             ),
             tool_allowlist=["read_file", "list_files", "search_text", "grep_code"],
             require_plan_approval=False,
-            max_turns=2,
+            max_turns=4,
             return_format="summary",
         ),
         "change-reviewer": SubAgentSpec(
@@ -260,7 +263,7 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
             ),
             tool_allowlist=["read_file", "search_text", "grep_code", "git_status", "git_diff_worktree"],
             require_plan_approval=False,
-            max_turns=2,
+            max_turns=4,
             return_format="summary",
         ),
         "test-investigator": SubAgentSpec(
@@ -273,7 +276,7 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
             ),
             tool_allowlist=["read_file", "search_text", "grep_code", "list_files"],
             require_plan_approval=False,
-            max_turns=2,
+            max_turns=4,
             return_format="summary",
         ),
         "api-scout": SubAgentSpec(
@@ -286,7 +289,47 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
             ),
             tool_allowlist=["read_file", "list_files", "search_text", "grep_code"],
             require_plan_approval=False,
-            max_turns=2,
+            max_turns=4,
+            return_format="summary",
+        ),
+        "memory-scout": SubAgentSpec(
+            name="memory-scout",
+            description="Search long-term file memory for prior decisions, bugs, and preferences relevant to a task.",
+            system_prompt=(
+                "You are memory-scout, a focused long-term memory subagent. "
+                "Use memory_search and memory_get to find prior decisions, user preferences, bug notes, or project history. "
+                "Return only concise findings grounded in retrieved memory. Do not edit files or expand scope."
+            ),
+            tool_allowlist=["memory_search", "memory_get", "read_file", "grep_code"],
+            require_plan_approval=False,
+            max_turns=3,
+            return_format="summary",
+        ),
+        "implementation-planner": SubAgentSpec(
+            name="implementation-planner",
+            description="Turn research findings into a low-risk implementation plan and write-scope split.",
+            system_prompt=(
+                "You are implementation-planner, a focused planning subagent. "
+                "Use read-only repository tools to propose a minimal implementation sequence, write scopes, risks, and tests. "
+                "Do not edit files. Do not ask follow-up questions."
+            ),
+            tool_allowlist=["read_file", "list_files", "search_text", "grep_code", "git_diff_worktree"],
+            require_plan_approval=False,
+            max_turns=4,
+            return_format="summary",
+        ),
+        "code-worker": SubAgentSpec(
+            name="code-worker",
+            description="Prepare scoped code edits for a single write scope; edits are staged for parent approval.",
+            system_prompt=(
+                "You are code-worker, a scoped coding subagent. "
+                "Only work inside the write_scope named in your task. "
+                "When edit tools are available, stage minimal edits and report the pending action tokens. "
+                "Never approve pending actions, never call spawn_subagent, and do not touch paths outside write_scope."
+            ),
+            tool_allowlist=["read_file", "list_files", "search_text", "grep_code", "git_diff_worktree"],
+            require_plan_approval=False,
+            max_turns=4,
             return_format="summary",
         ),
     }

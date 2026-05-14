@@ -51,6 +51,14 @@ class SubAgentRuntimeAdapter:
 
     def set_tool_registry(self, registry: Any) -> None:
         self._runtime.tool_registry = registry
+        attach = getattr(self._runtime, "_attach_runtime_context_to_tool_registry", None)
+        if callable(attach):
+            attach()
+
+    def set_cancellation_token(self, token: Any) -> None:
+        setter = getattr(self._runtime, "set_cancellation_token", None)
+        if callable(setter):
+            setter(token)
 
     def set_model_override(self, model_name: Optional[str]) -> None:
         if not model_name:

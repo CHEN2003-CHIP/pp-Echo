@@ -16,6 +16,7 @@ Implement minimal, low-risk changes that fit the existing pp-Echo architecture.
 - Run focused tests first
 - Add unit tests for new subagent modules
 - Avoid broad unrelated changes
+- readiness 以 doctor/report 为准
 
 ## Style
 - Follow existing naming and module patterns

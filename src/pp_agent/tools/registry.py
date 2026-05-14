@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import threading
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 from pp_agent.domain import ToolCall, ToolSpec
+from pp_agent.runtime.cancellation import CancellationToken
+from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.settings import ToolPolicyConfig
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.file_tools import (
@@ -73,6 +76,9 @@ class ToolRegistry:
             ask_tools=self.policy.ask_tools,
         )
         self.current_session_id = current_session_id
+        self._runtime_event_emitter: Optional[Callable[[AgentEvent], None]] = None
+        self._runtime_event_lock = threading.RLock()
+        self._cancellation_token: CancellationToken = CancellationToken()
         self._instances: dict[str, BaseTool] = {}
         self._confirmation_overrides = {
             "write_file": self.policy.confirm_write_file,
@@ -293,6 +299,45 @@ class ToolRegistry:
             for name, registration in self._registrations.items()
         }
 
+    def set_runtime_event_emitter(self, emitter: Callable[[AgentEvent], None]) -> None:
+        self._runtime_event_emitter = emitter
+
+    def emit_runtime_event(
+        self,
+        event_type: str,
+        *,
+        message: Optional[str] = None,
+        details: Optional[dict[str, Any]] = None,
+        tool_name: Optional[str] = None,
+        is_error: bool = False,
+    ) -> None:
+        if self._runtime_event_emitter is None:
+            return
+        with self._runtime_event_lock:
+            self._runtime_event_emitter(
+                AgentEvent(
+                    type=event_type,
+                    session_id=self.current_session_id or "",
+                    message=message,
+                    details=details or {},
+                    tool_name=tool_name,
+                    is_error=is_error,
+                )
+            )
+
+    def set_cancellation_token(self, token: CancellationToken) -> None:
+        self._cancellation_token = token
+
+    @property
+    def cancellation_token(self) -> CancellationToken:
+        return self._cancellation_token
+
+    def cancellation_requested(self) -> bool:
+        return self._cancellation_token.cancelled
+
+    def raise_if_cancelled(self) -> None:
+        self._cancellation_token.raise_if_cancelled()
+
     def clone_selected(self, names: list[str], *, current_session_id: Optional[str] = None) -> "ToolRegistry":
         cloned = ToolRegistry(
             self.workspace,
@@ -308,6 +353,9 @@ class ToolRegistry:
             name for name in cloned._registrations if name in self._builtin_registration_names
         }
         cloned._instances = {}
+        cloned._runtime_event_emitter = self._runtime_event_emitter
+        cloned._runtime_event_lock = self._runtime_event_lock
+        cloned._cancellation_token = self._cancellation_token
         return cloned
 
     def evaluate_call(self, name: str, arguments: dict[str, Any]):
@@ -355,16 +403,20 @@ class ToolRegistry:
         )
 
     def host_execute(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
+        self.raise_if_cancelled()
         result = self._get_tool(name).execute(arguments)
+        self.raise_if_cancelled()
         result.tool_name = name
         return result
 
     def host_execute_dynamic_approved(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
+        self.raise_if_cancelled()
         tool = self._get_tool(name)
         execute_host_approved = getattr(tool, "execute_host_approved", None)
         if execute_host_approved is None:
             raise ValueError(f"Tool '{name}' does not support host-approved dynamic execution")
         result = execute_host_approved(arguments)
+        self.raise_if_cancelled()
         result.tool_name = name
         return result
 
@@ -375,6 +427,7 @@ class ToolRegistry:
         :param arguments: 参数字典
         :return: 标准化执行结果
         """
+        self.raise_if_cancelled()
         registration = self._registrations[name]
         if not registration.metadata.model_callable:
             raise PermissionError(f"Tool '{name}' is host-only and not model-callable")
@@ -382,6 +435,7 @@ class ToolRegistry:
         if decision.action == "deny":
             raise PermissionError(decision.reason)
         result = self._get_tool(name).execute(arguments)
+        self.raise_if_cancelled()
         result.tool_name = name
         return result
 

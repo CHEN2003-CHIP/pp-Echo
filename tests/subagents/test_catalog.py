@@ -15,6 +15,17 @@ def test_subagent_catalog_lists_builtin_specs() -> None:
     assert "change-reviewer" in names
     assert "test-investigator" in names
     assert "api-scout" in names
+    assert "memory-scout" in names
+    assert "implementation-planner" in names
+    assert "code-worker" in names
+
+
+def test_research_subagents_have_enough_turn_budget_for_multifile_readonly_tasks() -> None:
+    specs = {spec.name: spec for spec in SubAgentCatalog().list()}
+
+    assert specs["repo-researcher"].max_turns >= 4
+    assert specs["api-scout"].max_turns >= 4
+    assert specs["test-investigator"].max_turns >= 4
 
 
 def test_subagent_catalog_registers_and_gets_copy() -> None:

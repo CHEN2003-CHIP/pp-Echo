@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 
 from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.learning.bootstrap_memory import BootstrapMemoryManager
+from pp_agent.learning.file_memory_writer import FileMemoryWriter
 from pp_agent.learning import LearningCurator, LearningStore
 from pp_agent.runtime.lifecycle import LEARNING_ITEM_APPLIED
 from pp_agent.storage.settings import Settings
@@ -61,9 +63,11 @@ def apply_learning_candidate(agent, workspace: Path, candidate_id: str, target: 
         return {"ok": False, "error": f"Learning candidate already applied: {candidate_id}"}
     curator = LearningCurator(workspace=workspace, settings=settings.learning)
     if target == "memory":
-        entry = curator.memory_entry(candidate)
-        store.append_project_memory(entry)
-        path = str(store.memory_path)
+        memory_candidate = candidate
+        if candidate.suggested_target in {"ignore", "skill"}:
+            memory_candidate = candidate.model_copy(update={"suggested_target": "memory"})
+        result = FileMemoryWriter(workspace=workspace, settings=settings.learning, store=store).apply_candidate(memory_candidate)
+        path = str(store.memory_path if result.action == "bootstrap_memory" else result.path)
     elif target == "skill":
         path_obj = curator.skill_path_for(candidate)
         path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -72,10 +76,14 @@ def apply_learning_candidate(agent, workspace: Path, candidate_id: str, target: 
         path = str(path_obj)
     else:
         return {"ok": False, "error": "Usage: /learn apply <id> memory|skill"}
-    updated = candidate.mark_applied()
-    store.update(updated)
+    if target != "memory":
+        updated = candidate.mark_applied()
+        store.update(updated)
     _emit_applied_event(agent, candidate_id=candidate_id, target=target, path=path)
-    return {"ok": True, "id": candidate_id, "target": target, "path": path}
+    payload = {"ok": True, "id": candidate_id, "target": target, "path": path}
+    if target == "memory":
+        payload["bootstrap_path"] = str(workspace / "MEMORY.md")
+    return payload
 
 
 def consolidate_project_memory(agent, workspace: Path) -> dict[str, object]:
@@ -86,8 +94,16 @@ def consolidate_project_memory(agent, workspace: Path) -> dict[str, object]:
     consolidated = _llm_consolidated_memory(agent, current, settings.learning.project_memory_char_limit)
     if consolidated is None:
         consolidated = curator.consolidated_memory(current, [])
+    consolidated = _fit_memory_for_store(consolidated, settings.learning.project_memory_char_limit)
     store.replace_project_memory(consolidated)
-    return {"ok": True, "path": str(store.memory_path), "chars": len(consolidated)}
+    bootstrap = BootstrapMemoryManager(workspace=workspace, settings=settings.learning).sync(consolidated)
+    return {
+        "ok": True,
+        "path": str(store.memory_path),
+        "bootstrap_path": str(bootstrap.path),
+        "chars": len(consolidated),
+        "bootstrap_chars": bootstrap.chars,
+    }
 
 
 def dumps_payload(payload: object) -> str:
@@ -133,3 +149,10 @@ def _llm_consolidated_memory(agent, current: str, limit: int) -> str | None:
     if not text:
         return None
     return text[:limit].strip()
+
+
+def _fit_memory_for_store(content: str, limit: int) -> str:
+    text = content.strip()
+    if len(text) + 1 <= limit:
+        return text
+    return text[-max(0, limit - 1) :].strip()

@@ -137,6 +137,23 @@
     }
   },
 
+  "_comment_subagents": "Subagent orchestration tuning. default_max_turns applies to every child agent unless max_turns overrides a specific name.",
+  "subagents": {
+    "_comment_default_max_turns": "Fallback maximum model turns per child subagent. Keep this modest to avoid runaway analysis.",
+    "default_max_turns": 4,
+
+    "_comment_max_turns": "Per-subagent max turn overrides.",
+    "max_turns": {
+      "memory-scout": 3,
+      "repo-researcher": 4,
+      "api-scout": 4,
+      "test-investigator": 4,
+      "change-reviewer": 4,
+      "implementation-planner": 4,
+      "code-worker": 4
+    }
+  },
+
   "_comment_tool_confirmation": "旧版确认配置入口，仍兼容；新项目建议使用 tool_policy.tool_confirmation。",
   "tool_confirmation": {
     "_comment_write_file": "write_file 是否需要确认。",

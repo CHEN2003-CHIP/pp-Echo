@@ -158,6 +158,13 @@ def create_app(
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/sessions/{session_id}/cancel")
+    def cancel(session_id: str) -> dict:
+        try:
+            return session_manager().get_handle(session_id).cancel()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/sessions/{session_id}/fork")
     def fork(session_id: str, head_id: Optional[str] = None) -> dict:
         try:

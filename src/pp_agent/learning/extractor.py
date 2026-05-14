@@ -127,8 +127,12 @@ class LearningExtractor:
             "Return only a JSON array. Each item must have kind, title, content, evidence, "
             "confidence, and suggested_target. kind must be one of project_convention, lesson, "
             "workflow, user_preference, skill_candidate. confidence must be low, medium, or high. "
-            "suggested_target must be memory, skill, or ignore. Only include reusable facts grounded "
-            "in the turn. Do not include secrets, temporary logs, or one-off details. "
+            "suggested_target must be bootstrap_memory, detailed_memory, skill, or ignore. Use "
+            "bootstrap_memory for short summaries, user preferences, project conventions, and key "
+            "decisions that should fit in MEMORY.md. Use detailed_memory for bug details, architecture "
+            "decisions, debugging experience, and reusable workflow details that belong in memory/*.md. "
+            "Use skill only for reusable procedures that should become an explicit skill. "
+            "Only include reusable facts grounded in the turn. Do not include secrets, temporary logs, or one-off details. "
             f"Return at most {self.settings.candidate_limit_per_turn} items."
         )
 

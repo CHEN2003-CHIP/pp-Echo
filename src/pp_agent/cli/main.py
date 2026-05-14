@@ -98,6 +98,7 @@ if app:
     capabilities_app = typer.Typer(help="Inspect and reload discoverable capabilities.")
     skills_app = typer.Typer(help="Inspect discovered skills.")
     eval_app = typer.Typer(help="Run and report agent evaluations.")
+    memory_app = typer.Typer(help="Inspect and query Markdown file memory.")
 
     # 将子命令组挂载到主应用
     app.add_typer(sessions_app, name="sessions")
@@ -109,6 +110,7 @@ if app:
     app.add_typer(capabilities_app, name="capabilities")
     app.add_typer(skills_app, name="skills")
     app.add_typer(eval_app, name="eval")
+    app.add_typer(memory_app, name="memory")
 
     @sessions_app.command("list")
     def sessions_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
@@ -398,6 +400,53 @@ if app:
 
         eval_report_main(workspace, run_id=run_id, output_dir=output_dir, json_mode=json_mode)
 
+    @memory_app.command("sync")
+    def memory_sync(
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+        json_mode: bool = typer.Option(False, "--json"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_sync_main
+
+        memory_sync_main(workspace, json_mode=json_mode)
+
+    @memory_app.command("search")
+    def memory_search(
+        query: str = typer.Argument(...),
+        top_k: int = typer.Option(5, "--top-k"),
+        mode: str = typer.Option("auto", "--mode"),
+        include_debug: bool = typer.Option(False, "--include-debug"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_search_main
+
+        memory_search_main(
+            workspace,
+            query,
+            top_k=top_k,
+            mode=mode,
+            include_debug=include_debug,
+            json_mode=json_mode,
+        )
+
+    @memory_app.command("get")
+    def memory_get(
+        path: str = typer.Argument(...),
+        start_line: Optional[int] = typer.Option(None, "--start-line"),
+        line_count: Optional[int] = typer.Option(None, "--line-count"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_get_main
+
+        memory_get_main(
+            workspace,
+            path,
+            start_line=start_line,
+            line_count=line_count,
+            json_mode=json_mode,
+        )
+
 
     @app.command("rewind-safe")
     def rewind_safe(
@@ -563,6 +612,24 @@ def main() -> None:
     eval_report_parser.add_argument("--run-id", default=None)
     eval_report_parser.add_argument("--output-dir", default=None)
     eval_report_parser.add_argument("--json", action="store_true")
+    memory_parser = subparsers.add_parser("memory")
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command", required=True)
+    memory_sync_parser = memory_subparsers.add_parser("sync")
+    memory_sync_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_sync_parser.add_argument("--json", action="store_true")
+    memory_search_parser = memory_subparsers.add_parser("search")
+    memory_search_parser.add_argument("query")
+    memory_search_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_search_parser.add_argument("--top-k", type=int, default=5)
+    memory_search_parser.add_argument("--mode", default="auto")
+    memory_search_parser.add_argument("--include-debug", action="store_true")
+    memory_search_parser.add_argument("--json", action="store_true")
+    memory_get_parser = memory_subparsers.add_parser("get")
+    memory_get_parser.add_argument("path")
+    memory_get_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_get_parser.add_argument("--start-line", type=int, default=None)
+    memory_get_parser.add_argument("--line-count", type=int, default=None)
+    memory_get_parser.add_argument("--json", action="store_true")
     rewind_safe_parser = subparsers.add_parser("rewind-safe")
     rewind_safe_parser.add_argument("--session", required=True)
     rewind_safe_parser.add_argument("--checkpoint", default=None)
@@ -722,6 +789,31 @@ def main() -> None:
             Path(args.workspace),
             run_id=args.run_id,
             output_dir=Path(args.output_dir) if args.output_dir else None,
+            json_mode=args.json,
+        )
+    elif command == "memory" and args.memory_command == "sync":
+        from pp_agent.cli.commands.memory import memory_sync_main
+
+        memory_sync_main(Path(args.workspace), json_mode=args.json)
+    elif command == "memory" and args.memory_command == "search":
+        from pp_agent.cli.commands.memory import memory_search_main
+
+        memory_search_main(
+            Path(args.workspace),
+            args.query,
+            top_k=args.top_k,
+            mode=args.mode,
+            include_debug=args.include_debug,
+            json_mode=args.json,
+        )
+    elif command == "memory" and args.memory_command == "get":
+        from pp_agent.cli.commands.memory import memory_get_main
+
+        memory_get_main(
+            Path(args.workspace),
+            args.path,
+            start_line=args.start_line,
+            line_count=args.line_count,
             json_mode=args.json,
         )
     elif command == "rewind-safe":

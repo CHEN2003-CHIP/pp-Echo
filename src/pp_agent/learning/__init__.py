@@ -7,6 +7,8 @@ __all__ = [
     "LearningRuntime",
     "LearningSettings",
     "LearningStore",
+    "BootstrapMemoryManager",
+    "FileMemoryWriter",
 ]
 
 
@@ -25,5 +27,11 @@ def __getattr__(name: str):
         return getattr(module, name)
     if name == "LearningStore":
         module = import_module("pp_agent.learning.store")
+        return getattr(module, name)
+    if name == "BootstrapMemoryManager":
+        module = import_module("pp_agent.learning.bootstrap_memory")
+        return getattr(module, name)
+    if name == "FileMemoryWriter":
+        module = import_module("pp_agent.learning.file_memory_writer")
         return getattr(module, name)
     raise AttributeError(name)

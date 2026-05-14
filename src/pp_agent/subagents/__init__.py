@@ -1,5 +1,6 @@
 from pp_agent.subagents.catalog import SubAgentCatalog
 from pp_agent.subagents.manager import SubAgentManager, build_subagent_tool_registry
+from pp_agent.subagents.orchestrator import SubAgentOrchestrationResult, SubAgentOrchestrator
 from pp_agent.subagents.runtime_adapter import SubAgentRuntimeAdapter, SubAgentTurnLimitReached
 from pp_agent.subagents.specs import (
     SubAgentRunResult,
@@ -11,6 +12,8 @@ from pp_agent.subagents.specs import (
 __all__ = [
     "SubAgentCatalog",
     "SubAgentManager",
+    "SubAgentOrchestrationResult",
+    "SubAgentOrchestrator",
     "SubAgentRunResult",
     "SubAgentSpec",
     "SubAgentRuntimeAdapter",

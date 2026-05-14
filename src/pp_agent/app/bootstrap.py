@@ -36,6 +36,7 @@ from pp_agent.memory.recall_builder import RecallSnippetBuilder
 from pp_agent.memory.reranker import LightweightReranker, NoopReranker
 from pp_agent.memory.retrieval import HistoryRetriever
 from pp_agent.memory.retrieval_hook import MemoryRetrievalHook
+from pp_agent.memory.file_memory_tools import register_file_memory_tools
 from pp_agent.memory.vector_index import ChromaVectorIndex, NoopVectorIndex
 from pp_agent.mcp import MCPManager
 from pp_agent.mcp.config import load_mcp_server_configs
@@ -54,8 +55,9 @@ from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.legacy_hints_readiness import build_legacy_hint_readiness_report, scan_workspace_for_legacy_analysis_hints
 from pp_agent.tools.metadata import ToolMetadata
 from pp_agent.tools.registry import ToolRegistration, ToolRegistry
-from pp_agent.tools.subagent_tool import SpawnSubagentTool
+from pp_agent.tools.subagent_tool import OrchestrateAgentsTool, SpawnSubagentTool
 from pp_agent.subagents.catalog import SubAgentCatalog
+from pp_agent.subagents.specs import SubAgentSpec
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +372,16 @@ def load_settings(workspace: Path) -> Settings:
     return Settings.load(workspace)
 
 
+def configured_subagent_specs(settings: Settings) -> dict[str, SubAgentSpec]:
+    specs = {spec.name: spec for spec in SubAgentCatalog().list()}
+    for name, spec in list(specs.items()):
+        specs[name] = spec.model_copy(
+            update={"max_turns": settings.subagents.max_turns_for(name, spec.max_turns)},
+            deep=True,
+        )
+    return specs
+
+
 def create_session_store(settings: Settings) -> SessionStore:
     """
     创建会话存储实例，兼容全局/项目目录，处理权限异常
@@ -613,6 +625,7 @@ def create_tool_registry(
     """
     settings = load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    register_file_memory_tools(registry, settings=settings)
     if include_dynamic_extensions:
         runtime_hooks = RuntimeHooks()
         extension_runtime = load_executable_extensions(
@@ -681,6 +694,7 @@ def inspect_legacy_hint_readiness(
 ) -> dict[str, object]:
     settings = load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    register_file_memory_tools(registry, settings=settings)
     runtime_hooks = RuntimeHooks()
     load_executable_extensions(
         workspace,
@@ -717,6 +731,7 @@ def create_capability_providers(
     """
     settings = settings or load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    register_file_memory_tools(registry, settings=settings)
     extension_registry = ExtensionRegistry()
     skill_roots = _skill_roots_for(workspace.resolve(), settings)
     extension_roots = _extension_roots_for(workspace.resolve(), settings)
@@ -815,6 +830,7 @@ def _register_spawn_subagent_tool(
     session_store: SessionStore,
     tool_registry: ToolRegistry,
     current_session_id: str,
+    subagent_specs: Optional[dict[str, SubAgentSpec]] = None,
 ) -> None:
     # Register subagent delegation as a normal model-callable tool. The tool
     # factory resolves a fresh SessionHost when materialized, but registration
@@ -826,6 +842,7 @@ def _register_spawn_subagent_tool(
             session_store=session_store,
             parent_registry=tool_registry,
             current_session_id=current_session_id,
+            subagent_specs=subagent_specs,
         )
 
     spec = _tool_factory().spec
@@ -849,6 +866,37 @@ def _register_spawn_subagent_tool(
         replace=True,
     )
 
+    def _orchestrator_tool_factory() -> OrchestrateAgentsTool:
+        return OrchestrateAgentsTool(
+            workspace,
+            session_host=create_session_host(workspace),
+            session_store=session_store,
+            parent_registry=tool_registry,
+            current_session_id=current_session_id,
+            subagent_specs=subagent_specs,
+        )
+
+    orchestrator_spec = _orchestrator_tool_factory().spec
+    tool_registry.register(
+        ToolRegistration(
+            name=orchestrator_spec.name,
+            category="subagent",
+            spec_factory=lambda: orchestrator_spec.model_copy(deep=True),
+            tool_factory=_orchestrator_tool_factory,
+            metadata=ToolMetadata(
+                name=orchestrator_spec.name,
+                category="subagent",
+                requires_confirmation=orchestrator_spec.requires_confirmation,
+                permission_domain=orchestrator_spec.permission_domain,
+                sensitive=orchestrator_spec.sensitive,
+                model_callable=orchestrator_spec.model_callable,
+                tool_family="subagent",
+                exact_effect_mode="none",
+            ),
+        ),
+        replace=True,
+    )
+
 
 def create_runtime_from_record(
     workspace: Path,
@@ -865,11 +913,13 @@ def create_runtime_from_record(
     settings = load_settings(workspace)
     session_store = session_store_for(workspace)
     tool_registry = ToolRegistry(workspace, policy=settings.tool_policy, current_session_id=record.id)
+    register_file_memory_tools(tool_registry, settings=settings)
     _register_spawn_subagent_tool(
         workspace=workspace,
         session_store=session_store,
         tool_registry=tool_registry,
         current_session_id=record.id,
+        subagent_specs=configured_subagent_specs(settings),
     )
     runtime_hooks = RuntimeHooks()
     llm_client = create_llm_client(
@@ -963,6 +1013,7 @@ def reload_runtime_extensions(
     if previous_runtime is not None:
         previous_runtime.close()
     agent.tool_registry.reset_dynamic_registrations()
+    register_file_memory_tools(agent.tool_registry, settings=settings)
     extension_commands = getattr(agent, "extension_commands", None)
     if extension_commands is not None:
         extension_commands.clear()

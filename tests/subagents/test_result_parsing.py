@@ -47,6 +47,27 @@ def test_parse_subagent_output_accepts_numbered_section_headings() -> None:
     assert parsed["confidence"] == "high"
 
 
+def test_parse_subagent_output_accepts_markdown_section_headings() -> None:
+    parsed = parse_subagent_output(
+        "### 0. Summary\n"
+        "- Quick repo scan\n\n"
+        "### 1. Findings\n"
+        "- Found runtime hook path\n\n"
+        "## 2. Recommended next action\n"
+        "- Update manager validation\n\n"
+        "**3. Files/paths inspected**\n"
+        "- src/pp_agent/runtime/runtime.py\n\n"
+        "**Confidence**\n"
+        "- high\n"
+    )
+
+    assert parsed["summary"] == "Quick repo scan"
+    assert parsed["findings"] == ["Found runtime hook path"]
+    assert parsed["recommended_next_action"] == "Update manager validation"
+    assert parsed["inspected_paths"] == ["src/pp_agent/runtime/runtime.py"]
+    assert parsed["confidence"] == "high"
+
+
 def test_subagent_run_result_renders_final_text_from_structured_fields() -> None:
     result = SubAgentRunResult(
         spec_name="repo-researcher",

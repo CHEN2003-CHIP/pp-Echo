@@ -189,3 +189,59 @@ def test_subagent_manager_rejects_overlong_or_missing_sections_as_invalid_summar
 
     assert result.success is False
     assert result.failure_kind == "invalid_summary"
+
+
+def test_subagent_manager_accepts_markdown_heading_summary(tmp_path: Path) -> None:
+    host = _host(tmp_path)
+    parent_runtime = host.create_session(tmp_path)
+    session_store = SessionStore(tmp_path / "sessions")
+
+    class MarkdownSummaryRuntime(MinimalRuntime):
+        def prompt(self, prompt_text: str):
+            _ = prompt_text
+            self.state.messages = [
+                SimpleNamespace(
+                    role="assistant",
+                    content=[
+                        SimpleNamespace(
+                            text=(
+                                "### 0. Summary\n"
+                                "- Quick repo scan\n\n"
+                                "### 1. Findings\n"
+                                "- Found runtime hook path\n\n"
+                                "### 2. Recommended next action\n"
+                                "- Continue with the parent report\n\n"
+                                "### 3. Files/paths inspected\n"
+                                "- src/pp_agent/runtime/runtime.py\n\n"
+                                "### 4. Confidence\n"
+                                "- high\n"
+                            )
+                        )
+                    ],
+                )
+            ]
+            return [SimpleNamespace(type="tool_call", tool_name="read_file", details={})]
+
+    def runtime_factory(workspace: Path, record, lifecycle_subscribers=None):
+        _ = workspace, lifecycle_subscribers
+        return MarkdownSummaryRuntime(session_store, record.id)
+
+    manager = SubAgentManager(
+        workspace=tmp_path,
+        session_host=host,
+        parent_registry=ToolRegistry(tmp_path, current_session_id=parent_runtime.session_id),
+        session_store=session_store,
+        runtime_factory=runtime_factory,
+    )
+
+    result = manager.run_sync(
+        parent_session_id=parent_runtime.session_id,
+        parent_head_id=None,
+        spec_name="repo-researcher",
+        task="Summarize README.md",
+    )
+
+    assert result.success is True
+    assert result.failure_kind is None
+    assert result.summary == "Quick repo scan"
+    assert result.findings == ["Found runtime hook path"]

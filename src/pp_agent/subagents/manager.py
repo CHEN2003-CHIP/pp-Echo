@@ -4,7 +4,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from pp_agent.runtime.lifecycle import SUBAGENT_END, SUBAGENT_FAIL, SUBAGENT_START
+from pp_agent.runtime.cancellation import CancellationToken, OperationCancelled
+from pp_agent.runtime.lifecycle import SUBAGENT_END, SUBAGENT_FAIL, SUBAGENT_PROGRESS, SUBAGENT_START
 from pp_agent.subagents.catalog import SubAgentCatalog
 from pp_agent.subagents.runtime_adapter import SubAgentRuntimeAdapter, SubAgentTurnLimitReached
 from pp_agent.subagents.specs import (
@@ -52,6 +53,8 @@ class SubAgentManager:
         runtime_factory: Optional[RuntimeFactory] = None,
         specs: Optional[dict[str, SubAgentSpec]] = None,
         catalog: Optional[SubAgentCatalog] = None,
+        event_sink: Optional[Callable[..., None]] = None,
+        cancellation_token: Optional[CancellationToken] = None,
     ) -> None:
         self.workspace = workspace.resolve()
         self.session_host = session_host
@@ -59,6 +62,8 @@ class SubAgentManager:
         self.session_store = session_store
         self.runtime_factory = runtime_factory or self._default_runtime_factory()
         self.catalog = catalog or SubAgentCatalog(specs)
+        self.event_sink = event_sink
+        self.cancellation_token = cancellation_token
 
     def list_specs(self) -> list[SubAgentSpec]:
         return self.catalog.list()
@@ -73,8 +78,20 @@ class SubAgentManager:
         parent_head_id: Optional[str],
         spec_name: str,
         task: str,
+        cancellation_token: Optional[CancellationToken] = None,
     ) -> SubAgentRunResult:
         started_at = self._now()
+        token = cancellation_token or self.cancellation_token
+        if token is not None and token.cancelled:
+            return failure_result(
+                spec_name=spec_name,
+                session_id="",
+                active_head_id=None,
+                message=token.reason,
+                failure_kind="canceled",
+                started_at=started_at,
+                finished_at=self._now(),
+            )
         spec = self.get_spec(spec_name)
         if spec is None:
             return failure_result(
@@ -115,10 +132,25 @@ class SubAgentManager:
         )
         child_session_id = forked.session_id
         child_head_id = forked.active_head_id
+        self._emit_parent_event(
+            SUBAGENT_START,
+            message=f"Subagent {spec.name} started.",
+            details={
+                "parent_session_id": parent_session_id,
+                "spec_name": spec.name,
+                "child_session_id": child_session_id,
+                "session_id": child_session_id,
+                "max_turns": spec.max_turns,
+            },
+        )
         try:
+            if token is not None:
+                token.raise_if_cancelled()
             child_record = self.session_store.load(child_session_id)
             child_runtime = self.runtime_factory(self.workspace, child_record, None)
             child = SubAgentRuntimeAdapter(child_runtime)
+            if token is not None:
+                child.set_cancellation_token(token)
             child.restore_session_record(child_record, emit_event=False)
             child.set_system_prompt(spec.system_prompt)
             child.set_require_plan_approval(spec.require_plan_approval)
@@ -139,7 +171,20 @@ class SubAgentManager:
                     "max_turns": spec.max_turns,
                 },
             )
+            self._emit_parent_event(
+                SUBAGENT_PROGRESS,
+                message=f"Subagent {spec.name} is running.",
+                details={
+                    "parent_session_id": parent_session_id,
+                    "spec_name": spec.name,
+                    "child_session_id": child_session_id,
+                    "session_id": child_session_id,
+                    "status": "running",
+                },
+            )
             events = child.prompt(self._build_subagent_prompt(spec, task), max_turns=spec.max_turns)
+            if token is not None:
+                token.raise_if_cancelled()
             final_text = child.extract_final_text()
             tool_calls_used = self._tool_calls_used(events)
             active_head_id = child_runtime.session_store.load(child_session_id).active_head_id
@@ -150,6 +195,12 @@ class SubAgentManager:
                     SUBAGENT_FAIL,
                     message=message,
                     details={"spec_name": spec.name, "failure_kind": "invalid_summary"},
+                    is_error=True,
+                )
+                self._emit_parent_event(
+                    SUBAGENT_FAIL,
+                    message=message,
+                    details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "invalid_summary", "parse_error": True},
                     is_error=True,
                 )
                 return failure_result(
@@ -171,6 +222,12 @@ class SubAgentManager:
                     details={"spec_name": spec.name, "failure_kind": "empty_result"},
                     is_error=True,
                 )
+                self._emit_parent_event(
+                    SUBAGENT_FAIL,
+                    message=message,
+                    details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "empty_result"},
+                    is_error=True,
+                )
                 return failure_result(
                     spec_name=spec.name,
                     session_id=child_session_id,
@@ -189,6 +246,12 @@ class SubAgentManager:
                     SUBAGENT_FAIL,
                     message=validation_error,
                     details={"spec_name": spec.name, "failure_kind": "invalid_summary"},
+                    is_error=True,
+                )
+                self._emit_parent_event(
+                    SUBAGENT_FAIL,
+                    message=validation_error,
+                    details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "invalid_summary", "parse_error": True},
                     is_error=True,
                 )
                 return failure_result(
@@ -228,9 +291,46 @@ class SubAgentManager:
                     "duration_ms": result.duration_ms,
                 },
             )
+            self._emit_parent_event(
+                SUBAGENT_END,
+                message=f"Subagent {spec.name} completed.",
+                details={
+                    "spec_name": spec.name,
+                    "child_session_id": child_session_id,
+                    "session_id": child_session_id,
+                    "tool_calls_used": tool_calls_used,
+                    "event_count": len(events),
+                    "duration_ms": result.duration_ms,
+                    "summary": result.summary,
+                },
+            )
             return result
+        except OperationCancelled as exc:
+            finished_at = self._now()
+            message = str(exc) or "cancel_requested"
+            self._emit_parent_event(
+                SUBAGENT_FAIL,
+                message=message,
+                details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "canceled"},
+                is_error=True,
+            )
+            return failure_result(
+                spec_name=spec.name,
+                session_id=child_session_id,
+                active_head_id=child_head_id,
+                message=message,
+                failure_kind="canceled",
+                started_at=started_at,
+                finished_at=finished_at,
+            )
         except SubAgentTurnLimitReached as exc:
             finished_at = self._now()
+            self._emit_parent_event(
+                SUBAGENT_FAIL,
+                message=self._safe_error_message(exc),
+                details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "turn_limit_reached"},
+                is_error=True,
+            )
             return failure_result(
                 spec_name=spec.name,
                 session_id=child_session_id,
@@ -252,6 +352,12 @@ class SubAgentManager:
                 )
             except Exception:
                 pass
+            self._emit_parent_event(
+                SUBAGENT_FAIL,
+                message=message,
+                details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "child_runtime_error"},
+                is_error=True,
+            )
             return failure_result(
                 spec_name=spec.name,
                 session_id=child_session_id,
@@ -274,6 +380,7 @@ class SubAgentManager:
             "- Never call `spawn_subagent`.\n"
             "- Return summary output only.\n\n"
             "Output format:\n"
+            "Use plain section headings exactly as shown; do not use Markdown heading markers, code fences, or raw file dumps.\n"
             "0. Summary\n"
             "1. Findings\n"
             "2. Recommended next action\n"
@@ -329,6 +436,18 @@ class SubAgentManager:
         if not confidence:
             return "Subagent summary did not include a confidence rating."
         return None
+
+    def _emit_parent_event(
+        self,
+        event_type: str,
+        *,
+        message: Optional[str] = None,
+        details: Optional[dict[str, object]] = None,
+        is_error: bool = False,
+    ) -> None:
+        if self.event_sink is None:
+            return
+        self.event_sink(event_type, message=message, details=details or {}, is_error=is_error)
 
     @staticmethod
     def _now() -> float:

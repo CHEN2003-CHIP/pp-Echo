@@ -4,7 +4,7 @@ import fnmatch
 import json
 import os
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, Optional, cast
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,18 @@ DEFAULT_SYSTEM_PROMPT = """You are a careful personal coding agent running on Wi
 Use tools when needed, prefer reading before editing, and explain actions clearly.
 For file changes, prefer staging a diff preview first and only applying it after confirmation.
 For high-risk plans, pause at the planner layer and wait for approval before executing them."""
+
+FILE_MEMORY_PROTOCOL_PROMPT = (
+    "Use memory_search before answering questions about prior user preferences, previous project decisions, "
+    "old bugs, long-running tasks, or remembered facts. Use memory_get when memory_search returns a relevant "
+    "path and line range that needs exact detail. Do not use memory_get to read arbitrary workspace files."
+)
+
+SUBAGENT_ORCHESTRATION_PROMPT = (
+    "Use orchestrate_agents for complex repository research, debugging, or implementation planning that benefits "
+    "from parallel specialized subagents. For simple questions, answer directly. Set allow_edits=true only when "
+    "the user explicitly allows subagents to stage file edits; staged edits still require normal approval."
+)
 
 PERMISSION_MODES = {"read-only", "workspace-write", "danger-full-access", "prompt"}
 PermissionModeName = Literal["read-only", "workspace-write", "danger-full-access", "prompt"]
@@ -157,6 +169,17 @@ class StorageSettings(BaseModel):
     checkpoints_dir: str = ""
 
 
+class SubAgentSettings(BaseModel):
+    default_max_turns: Optional[int] = None
+    max_turns: dict[str, int] = Field(default_factory=dict)
+
+    def max_turns_for(self, name: str, fallback: int) -> int:
+        configured = self.max_turns.get(name, self.default_max_turns)
+        if configured is None:
+            return fallback
+        return max(1, int(configured))
+
+
 class Settings(BaseModel):
     """
     【AI Agent 系统顶层总配置】
@@ -171,6 +194,7 @@ class Settings(BaseModel):
     tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
     capabilities: CapabilitySettings = Field(default_factory=CapabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    subagents: SubAgentSettings = Field(default_factory=SubAgentSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     learning: LearningSettings = Field(default_factory=LearningSettings)
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
@@ -200,6 +224,9 @@ class Settings(BaseModel):
         
         if agents_md.exists():
             settings.system_prompt += "\n\nWorkspace instructions:\n" + agents_md.read_text(encoding="utf-8")
+        if settings.memory.file_memory_enable and settings.memory.file_memory_search_enable:
+            settings.system_prompt += "\n\nFile memory protocol:\n" + FILE_MEMORY_PROTOCOL_PROMPT
+        settings.system_prompt += "\n\nSubagent orchestration protocol:\n" + SUBAGENT_ORCHESTRATION_PROMPT
         return settings
 
     @staticmethod
@@ -282,6 +309,9 @@ class Settings(BaseModel):
         storage_config = data.get("storage", {})
         if storage_config:
             self._apply_storage_config(storage_config)
+        subagent_config = data.get("subagents", {})
+        if subagent_config:
+            self._apply_subagent_config(subagent_config)
         memory_config = data.get("memory", {})
         if memory_config:
             self._apply_memory_config(memory_config)
@@ -320,6 +350,15 @@ class Settings(BaseModel):
             self.storage.timelines_dir = str(storage_config["timelines_dir"])
         if "checkpoints_dir" in storage_config:
             self.storage.checkpoints_dir = str(storage_config["checkpoints_dir"])
+
+    def _apply_subagent_config(self, subagent_config: dict) -> None:
+        if "default_max_turns" in subagent_config:
+            self.subagents.default_max_turns = max(1, int(subagent_config["default_max_turns"]))
+        if "max_turns" in subagent_config:
+            self.subagents.max_turns = {
+                str(name): max(1, int(value))
+                for name, value in dict(subagent_config["max_turns"]).items()
+            }
 
     def _apply_capability_config(self, capability_config: dict) -> None:
         """
@@ -444,16 +483,60 @@ class Settings(BaseModel):
             self.memory.snippet_compress_error_stacks = bool(memory_config["snippet_compress_error_stacks"])
         if "snippet_path_weight_boost" in memory_config:
             self.memory.snippet_path_weight_boost = float(memory_config["snippet_path_weight_boost"])
+        if "file_memory_enable" in memory_config:
+            self.memory.file_memory_enable = bool(memory_config["file_memory_enable"])
+        if "file_memory_search_enable" in memory_config:
+            self.memory.file_memory_search_enable = bool(memory_config["file_memory_search_enable"])
+        if "file_memory_root" in memory_config:
+            self.memory.file_memory_root = str(memory_config["file_memory_root"])
+        if "file_memory_extra_paths" in memory_config:
+            self.memory.file_memory_extra_paths = [str(value) for value in memory_config["file_memory_extra_paths"]]
+        if "file_memory_index_path" in memory_config:
+            self.memory.file_memory_index_path = str(memory_config["file_memory_index_path"])
+        if "file_memory_chroma_collection" in memory_config:
+            self.memory.file_memory_chroma_collection = str(memory_config["file_memory_chroma_collection"])
+        if "file_memory_chunk_target_chars" in memory_config:
+            self.memory.file_memory_chunk_target_chars = int(memory_config["file_memory_chunk_target_chars"])
+        if "file_memory_chunk_overlap_lines" in memory_config:
+            self.memory.file_memory_chunk_overlap_lines = int(memory_config["file_memory_chunk_overlap_lines"])
+        if "file_memory_top_k" in memory_config:
+            self.memory.file_memory_top_k = int(memory_config["file_memory_top_k"])
+        if "file_memory_candidate_multiplier" in memory_config:
+            self.memory.file_memory_candidate_multiplier = int(memory_config["file_memory_candidate_multiplier"])
+        if "file_memory_vector_weight" in memory_config:
+            self.memory.file_memory_vector_weight = float(memory_config["file_memory_vector_weight"])
+        if "file_memory_bm25_weight" in memory_config:
+            self.memory.file_memory_bm25_weight = float(memory_config["file_memory_bm25_weight"])
+        if "file_memory_max_per_file" in memory_config:
+            self.memory.file_memory_max_per_file = int(memory_config["file_memory_max_per_file"])
+        if "file_memory_snippet_chars" in memory_config:
+            self.memory.file_memory_snippet_chars = int(memory_config["file_memory_snippet_chars"])
+        if "file_memory_sync_on_search" in memory_config:
+            self.memory.file_memory_sync_on_search = bool(memory_config["file_memory_sync_on_search"])
+        if "file_memory_allow_remote_embedding" in memory_config:
+            self.memory.file_memory_allow_remote_embedding = bool(memory_config["file_memory_allow_remote_embedding"])
 
     def _apply_learning_config(self, learning_config: dict) -> None:
         if "enable" in learning_config:
             self.learning.enable = bool(learning_config["enable"])
         if "auto_extract" in learning_config:
             self.learning.auto_extract = bool(learning_config["auto_extract"])
+        if "auto_apply_memory" in learning_config:
+            self.learning.auto_apply_memory = bool(learning_config["auto_apply_memory"])
+        if "auto_apply_min_confidence" in learning_config:
+            self.learning.auto_apply_min_confidence = str(learning_config["auto_apply_min_confidence"])
         if "project_memory_enable" in learning_config:
             self.learning.project_memory_enable = bool(learning_config["project_memory_enable"])
         if "project_memory_char_limit" in learning_config:
             self.learning.project_memory_char_limit = int(learning_config["project_memory_char_limit"])
+        if "detailed_memory_enable" in learning_config:
+            self.learning.detailed_memory_enable = bool(learning_config["detailed_memory_enable"])
+        if "detailed_memory_char_limit" in learning_config:
+            self.learning.detailed_memory_char_limit = int(learning_config["detailed_memory_char_limit"])
+        if "detailed_memory_auto_consolidate" in learning_config:
+            self.learning.detailed_memory_auto_consolidate = bool(learning_config["detailed_memory_auto_consolidate"])
+        if "detailed_memory_sync_index_after_write" in learning_config:
+            self.learning.detailed_memory_sync_index_after_write = bool(learning_config["detailed_memory_sync_index_after_write"])
         if "candidate_limit_per_turn" in learning_config:
             self.learning.candidate_limit_per_turn = int(learning_config["candidate_limit_per_turn"])
         if "min_confidence_to_suggest" in learning_config:
@@ -495,6 +578,19 @@ class Settings(BaseModel):
             configured=self.memory.chroma_path,
             default=self.project_dir / "chroma",
         )
+
+    def file_memory_index_path(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_FILE_MEMORY_INDEX_PATH",
+            configured=self.memory.file_memory_index_path,
+            default=self.project_dir / "file-memory.db",
+        )
+
+    def file_memory_root_path(self) -> Path:
+        configured = self.memory.file_memory_root
+        if configured and configured.strip():
+            return self._resolve_configured_path(configured)
+        return self.workspace
 
     def _resolve_runtime_path(self, *, env_var: str, configured: str, default: Path) -> Path:
         raw_value = os.getenv(env_var)

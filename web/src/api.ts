@@ -30,9 +30,11 @@ export type RuntimeEvent = {
 export type SessionSnapshot = {
   session_id: string;
   busy: boolean;
+  cancel_requested?: boolean;
   pending_plan_token?: string | null;
   pending_tool_call_count: number;
   queued_message_count: number;
+  turn?: { phase?: string | null; reason?: string | null };
   messages: Array<{ role: string; content: Array<{ type: string; text?: string; name?: string }> }>;
 };
 
@@ -106,6 +108,7 @@ export const api = {
     }),
   approve: (sessionId: string) => request(`/api/sessions/${sessionId}/approve`, { method: "POST" }),
   reject: (sessionId: string) => request(`/api/sessions/${sessionId}/reject`, { method: "POST" }),
+  cancel: (sessionId: string) => request(`/api/sessions/${sessionId}/cancel`, { method: "POST" }),
   approvals: () => request<ApprovalsSummary>("/api/approvals"),
   approvePending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectPending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/reject`, { method: "POST" }),

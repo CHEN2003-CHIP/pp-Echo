@@ -20,7 +20,9 @@ def test_system_md_overrides_default_system_prompt(tmp_path: Path) -> None:
 
     settings = Settings.load(tmp_path)
 
-    assert settings.system_prompt == "repo system prompt"
+    assert settings.system_prompt.startswith("repo system prompt")
+    assert "File memory protocol:" in settings.system_prompt
+    assert "Subagent orchestration protocol:" in settings.system_prompt
 
 
 def test_project_config_overrides_defaults(tmp_path: Path) -> None:
@@ -37,6 +39,22 @@ def test_project_config_overrides_defaults(tmp_path: Path) -> None:
     assert settings.model.enable_thinking is False
     assert settings.tool_policy.shell_timeout_seconds == 42
     assert settings.tool_policy.confirm_write_file is False
+
+
+def test_subagent_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True)
+    (project_dir / "config.json").write_text(
+        '{"subagents":{"default_max_turns":5,"max_turns":{"memory-scout":2,"repo-researcher":6}}}',
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.subagents.default_max_turns == 5
+    assert settings.subagents.max_turns == {"memory-scout": 2, "repo-researcher": 6}
+    assert settings.subagents.max_turns_for("memory-scout", 4) == 2
+    assert settings.subagents.max_turns_for("api-scout", 4) == 5
 
 
 def test_tool_policy_settings_are_loaded_from_project_config(tmp_path: Path) -> None:

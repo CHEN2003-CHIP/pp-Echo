@@ -6,6 +6,7 @@ from typing import Any
 
 from pp_agent.domain import ChatMessage
 from pp_agent.learning.extractor import LearningExtractor
+from pp_agent.learning.file_memory_writer import FileMemoryWriter
 from pp_agent.learning.models import LearningCandidate, LearningSettings
 from pp_agent.learning.store import LearningStore
 
@@ -26,6 +27,7 @@ class LearningRuntime:
         self.settings = settings
         self.store = store or LearningStore(self.workspace / ".pp-agent" / "learning")
         self.extractor = extractor or LearningExtractor(llm_client, settings)
+        self.file_memory_writer = FileMemoryWriter(workspace=self.workspace, settings=settings, store=self.store)
 
     def on_turn_persisted(
         self,
@@ -46,4 +48,8 @@ class LearningRuntime:
             logger.warning("Learning extraction failed for session=%s turn=%s: %s", session_id, turn_id, exc)
             raise
         self.store.append_candidates(candidates)
+        try:
+            self.file_memory_writer.auto_apply(candidates)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Automatic file memory write failed for session=%s turn=%s: %s", session_id, turn_id, exc)
         return candidates

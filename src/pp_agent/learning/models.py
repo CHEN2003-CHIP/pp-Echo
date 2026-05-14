@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 LearningKind = Literal["project_convention", "lesson", "workflow", "user_preference", "skill_candidate"]
-LearningTarget = Literal["memory", "skill", "ignore"]
+LearningTarget = Literal["memory", "bootstrap_memory", "detailed_memory", "skill", "ignore"]
 LearningStatus = Literal["pending", "applied", "rejected"]
 LearningConfidence = Literal["low", "medium", "high"]
 
@@ -17,8 +17,14 @@ LearningConfidence = Literal["low", "medium", "high"]
 class LearningSettings(BaseModel):
     enable: bool = True
     auto_extract: bool = True
+    auto_apply_memory: bool = True
+    auto_apply_min_confidence: LearningConfidence = "medium"
     project_memory_enable: bool = True
     project_memory_char_limit: int = 4000
+    detailed_memory_enable: bool = True
+    detailed_memory_char_limit: int = 12000
+    detailed_memory_auto_consolidate: bool = True
+    detailed_memory_sync_index_after_write: bool = True
     candidate_limit_per_turn: int = 3
     min_confidence_to_suggest: LearningConfidence = "medium"
     llm_extractor_enable: bool = True

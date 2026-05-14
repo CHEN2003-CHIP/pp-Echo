@@ -45,11 +45,22 @@ def test_spawn_subagent_tool_returns_summary_only(tmp_path: Path, monkeypatch) -
     calls: list[tuple[str, str, str]] = []
 
     class FakeManager:
-        def __init__(self, *, workspace, session_host, parent_registry, session_store, runtime_factory) -> None:
-            _ = workspace, session_host, parent_registry, session_store, runtime_factory
+        def __init__(
+            self,
+            *,
+            workspace,
+            session_host,
+            parent_registry,
+            session_store,
+            runtime_factory,
+            specs=None,
+            event_sink=None,
+            cancellation_token=None,
+        ) -> None:
+            _ = workspace, session_host, parent_registry, session_store, runtime_factory, specs, event_sink, cancellation_token
 
-        def run_sync(self, *, parent_session_id, parent_head_id, spec_name, task):
-            _ = parent_head_id
+        def run_sync(self, *, parent_session_id, parent_head_id, spec_name, task, cancellation_token=None):
+            _ = parent_head_id, cancellation_token
             calls.append((parent_session_id, spec_name, task))
             return SubAgentRunResult(
                 spec_name="repo-researcher",
@@ -91,11 +102,22 @@ def test_spawn_subagent_tool_returns_failure_summary(tmp_path: Path, monkeypatch
     calls: list[str] = []
 
     class FakeManager:
-        def __init__(self, *, workspace, session_host, parent_registry, session_store, runtime_factory) -> None:
-            _ = workspace, session_host, parent_registry, session_store, runtime_factory
+        def __init__(
+            self,
+            *,
+            workspace,
+            session_host,
+            parent_registry,
+            session_store,
+            runtime_factory,
+            specs=None,
+            event_sink=None,
+            cancellation_token=None,
+        ) -> None:
+            _ = workspace, session_host, parent_registry, session_store, runtime_factory, specs, event_sink, cancellation_token
 
-        def run_sync(self, *, parent_session_id, parent_head_id, spec_name, task):
-            _ = parent_head_id, task
+        def run_sync(self, *, parent_session_id, parent_head_id, spec_name, task, cancellation_token=None):
+            _ = parent_head_id, task, cancellation_token
             calls.append(parent_session_id)
             return SubAgentRunResult(
                 spec_name=spec_name,

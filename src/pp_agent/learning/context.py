@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.learning.bootstrap_memory import BootstrapMemoryManager
 from pp_agent.learning.models import LearningSettings
 from pp_agent.learning.store import LearningStore
 from pp_agent.runtime.state import AgentState
@@ -18,7 +19,7 @@ class ProjectMemoryContextHook:
     def transform_context(self, _state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
         if not self.settings.enable or not self.settings.project_memory_enable:
             return messages
-        content = self.store.read_project_memory().strip()
+        content = self._read_bootstrap_memory().strip()
         if not content:
             return messages
         if len(content) > self.settings.project_memory_char_limit:
@@ -31,3 +32,9 @@ class ProjectMemoryContextHook:
         if not messages:
             return [memory_message]
         return [messages[0], memory_message, *messages[1:]]
+
+    def _read_bootstrap_memory(self) -> str:
+        bootstrap = BootstrapMemoryManager(workspace=self.workspace, settings=self.settings).read().strip()
+        if bootstrap:
+            return bootstrap
+        return self.store.read_project_memory()

@@ -1,0 +1,8 @@
+[workspace]
+members = ["pp-echo-claw-tui"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+

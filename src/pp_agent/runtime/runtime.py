@@ -14,6 +14,7 @@ from typing import Optional
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
 from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.provider import MemoryProvider, NoopMemoryProvider
+from pp_agent.runtime.cancellation import CancellationToken, OperationCancelled
 from pp_agent.runtime.compaction import ConversationCompactor
 from pp_agent.runtime.emitter import LifecycleEmitter
 from pp_agent.runtime.turn_loop import TurnController, TurnDecision
@@ -145,6 +146,7 @@ class AgentRuntime:
 
             
         self._subscribers: list[Subscriber] = []
+        self._cancellation_token = CancellationToken()
         self._approved_pending_plan = False
         self._queue_lock = threading.RLock()
         self.runtime_monitor = RuntimeMonitor()
@@ -157,6 +159,7 @@ class AgentRuntime:
         self._runtime_hooks = self._compose_runtime_hooks(runtime_hooks)
         self.lifecycle = LifecycleEmitter()
         self._wire_lifecycle()
+        self._attach_runtime_context_to_tool_registry()
         self.memory_provider = memory_provider or NoopMemoryProvider()
         self.auto_index_scheduler = auto_index_scheduler or NoopAutoIndexScheduler()
         self.learning_runtime = learning_runtime
@@ -208,6 +211,7 @@ class AgentRuntime:
         启动整个 runtime 主循环 _run_loop()
         把这轮运行过程中产生的所有 AgentEvent 收集起来返回。
         """
+        self._cancellation_token.clear()
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
         self.state.messages.append(user_message)
         context = _TurnPersistContext(
@@ -219,6 +223,7 @@ class AgentRuntime:
 
     def continue_(self) -> list[AgentEvent]:
         """如果当前没有挂起的 tool calls,并且没有挂起的 planner approval token,那才允许从 queued_messages 里取下一条消息出来；"""
+        self._cancellation_token.clear()
         next_message = self._dequeue_next_message() if not self.state.pending_tool_calls and not self.state.pending_plan_token else None
         """
         有挂起流程 → 继续当前流程
@@ -255,6 +260,7 @@ class AgentRuntime:
 
     def approve_pending_plan(self, token: str) -> list[AgentEvent]:
         """核对审批 token → 删除待审批记录 → 打开“已批准”开关 → 记录审批通过事件 → 恢复执行之前挂起的工具计划。"""
+        self._cancellation_token.clear()
         if token != self.state.pending_plan_token:
             raise ValueError(f"Token {token} does not match the pending planner gate for this session")
         self._pending_action_store().remove(token)
@@ -276,6 +282,16 @@ class AgentRuntime:
         list(self._emit(self._event(PLANNER_GATE_REJECTED, message=f"Rejected planner gate {token}", details={"token": token})))
         self._persist()
 
+    def request_cancel(self, reason: str = "cancel_requested") -> None:
+        self._cancellation_token.cancel(reason)
+
+    def cancellation_requested(self) -> bool:
+        return self._cancellation_token.cancelled
+
+    def set_cancellation_token(self, token: CancellationToken) -> None:
+        self._cancellation_token = token
+        self._attach_runtime_context_to_tool_registry()
+
     def compact_now(self) -> list[AgentEvent]:
         """手动触发一次上下文压缩，并把压缩产生的事件收集回来；如果真的压缩了，就保存状态"""
         events = self._collect_runtime_events(self._emit_compaction_if_needed())
@@ -296,6 +312,10 @@ class AgentRuntime:
         keep_running = True
         persist_end_index = turn_persist_context.new_message_start_index
         while keep_running:
+            if self._cancellation_token.cancelled:
+                yield from self._emit_cancelled_turn(self._cancellation_token.reason)
+                keep_running = False
+                break
             #开始新 turn，标记当前阶段
             self.state.turn.turn_id += 1
             start_decision = self.turn_controller.on_turn_start(self.state)
@@ -318,6 +338,10 @@ class AgentRuntime:
                 #如果不是恢复旧计划，就去问模型
                 try:
                     assistant_text, tool_calls = self._collect_assistant_message()
+                except OperationCancelled as exc:
+                    yield from self._emit_cancelled_turn(str(exc))
+                    keep_running = False
+                    break
                 except (LLMClientError, ValueError) as exc:
                     self.state.error_message = str(exc)
                     yield from self._emit(
@@ -411,10 +435,16 @@ class AgentRuntime:
             yield from self._emit(self._event(PLANNER_END, details={**planner_preview, "requires_approval": False}))
 
             tool_failed = False
+            turn_failure_kind: str | None = None
             continue_after_error = False
             skip_confirmation = executing_pending_plan and self._approved_pending_plan
             #逐个执行工具
             for index, call in enumerate(tool_calls):
+                if self._cancellation_token.cancelled:
+                    tool_failed = True
+                    turn_failure_kind = "canceled"
+                    keep_running = False
+                    break
                 #标记当前步骤进行中
                 plan_steps[index].status = "in_progress"
                 yield from self._emit(self._event(PLANNER_STEP, plan_step=plan_steps[index].model_copy(deep=True), details={"status": "in_progress"}))
@@ -434,6 +464,7 @@ class AgentRuntime:
                 yield from self._emit(tool_call_event)
                 yield from self._emit(self._event(TOOL_START, tool_name=call.name, tool_args=call.arguments, details=tool_details))
                 try:
+                    self._cancellation_token.raise_if_cancelled()
                     if decision.action != "allow":
                         raise PermissionError(decision.message or f"Tool '{call.name}' was rejected by runtime policy")
                     if skip_confirmation and self.tool_registry.get_spec(call.name).requires_confirmation:
@@ -442,6 +473,7 @@ class AgentRuntime:
                     else:
 
                         result = self.tool_registry.execute(call.name, call.arguments)
+                    self._cancellation_token.raise_if_cancelled()
                     """把工具结果转成 chat message，追加到 state.messages
                         把 plan step 标成 completed
                         发 TOOL_RESULT
@@ -460,6 +492,20 @@ class AgentRuntime:
                     yield from self._emit(self._event(PLANNER_STEP, plan_step=plan_steps[index].model_copy(deep=True), details={"status": "completed", **after_decision.details}))
                     yield from self._emit(self._event(TOOL_END, tool_name=call.name, message=result.content, details={**result.details, **after_decision.details, **tool_details}, is_error=False))
                     keep_running = keep_running and after_decision.continue_loop
+                except OperationCancelled as exc:
+                    friendly_message = str(exc) or "cancel_requested"
+                    error_result = self.tool_registry.error_result(call, friendly_message)
+                    self.state.messages.append(error_result.as_chat_message())
+                    plan_steps[index].status = "failed"
+                    tool_failed = True
+                    turn_failure_kind = "canceled"
+                    error_event = self._event(TOOL_ERROR, tool_name=call.name, message=friendly_message, details={**tool_details, "success": False, "preview": friendly_message, "failure_kind": "canceled"})
+                    error_event.details.update(error_result.details)
+                    yield from self._emit(error_event)
+                    yield from self._emit(self._event(PLANNER_STEP, plan_step=plan_steps[index].model_copy(deep=True), details={"status": "failed", "failure_kind": "canceled"}))
+                    yield from self._emit(self._event(TOOL_END, tool_name=call.name, message=friendly_message, details={**error_result.details, **tool_details, "failure_kind": "canceled"}, is_error=True))
+                    keep_running = False
+                    break
                 except Exception as exc:  # noqa: BLE001
                     """
                     用 tool_registry.error_result(...) 生成一个错误结果消息
@@ -485,7 +531,10 @@ class AgentRuntime:
             #把“已批准”开关关掉，避免影响下一轮
             self._approved_pending_plan = False
             yield from self._emit_compaction_if_needed()
-            yield from self._emit(self._event(TURN_END, details={"turn_id": self.state.turn.turn_id}))
+            turn_end_details = {"turn_id": self.state.turn.turn_id}
+            if turn_failure_kind:
+                turn_end_details.update({"failed": True, "failure_kind": turn_failure_kind})
+            yield from self._emit(self._event(TURN_END, details=turn_end_details))
             decision = self.turn_controller.after_tool_round(
                 tool_failed=tool_failed,
                 continue_after_error=continue_after_error,
@@ -502,6 +551,7 @@ class AgentRuntime:
                 keep_running = False
 
         self.state.is_streaming = False
+        cancel_was_requested = self._cancellation_token.cancelled
         turn_finished_at = time.time()
         new_messages = [
             message.model_copy(deep=True)
@@ -520,6 +570,8 @@ class AgentRuntime:
         )
         #这一整轮正式结束，保存状态，然后广播结束事件
         yield from self._emit(self._event(AGENT_END, details={}))
+        if cancel_was_requested:
+            self._cancellation_token.clear()
 
     def _collect_assistant_message(self) -> tuple[str, list[ToolCall]]:
         """Agent → LLM 的请求发送 + 响应解析全流程封装"""
@@ -551,6 +603,7 @@ class AgentRuntime:
         try:
             ## 核心：流式调用大模型（逐块返回响应，非一次性返回）
             for event in self.llm_client.stream_chat(request_decision.messages or messages, tools=request_decision.tools if request_decision.tools is not None else tools):
+                self._cancellation_token.raise_if_cancelled()
                 streamed_event_count += 1
                 finish_reason = str(event.get("finish_reason") or "").strip()
                 if finish_reason:
@@ -981,6 +1034,25 @@ class AgentRuntime:
             self._captured_events.append(event)
         yield event
 
+    def _emit_cancelled_turn(self, reason: str) -> Iterator[AgentEvent]:
+        message = reason or "cancel_requested"
+        self.state.error_message = message
+        yield from self._emit(
+            self._event(
+                ERROR,
+                message=message,
+                is_error=True,
+                details={"failure_kind": "canceled", "cancelled": True},
+            )
+        )
+        yield from self._emit(
+            self._event(
+                TURN_END,
+                details={"turn_id": self.state.turn.turn_id, "failed": True, "failure_kind": "canceled"},
+            )
+        )
+        yield from self._set_turn_phase("idle", "canceled")
+
     def _set_turn_phase(self, phase: str, reason: str) -> Iterator[AgentEvent]:
         """安全、规范地修改回合的执行阶段 + 自动触发阶段变更事件"""
         self.state.turn.phase = phase
@@ -1395,6 +1467,14 @@ class AgentRuntime:
         for callback in self._subscribers:
             self.lifecycle.subscribe(callback)
         self._runtime_hooks.register_with_lifecycle(self.lifecycle)
+
+    def _attach_runtime_context_to_tool_registry(self) -> None:
+        set_emitter = getattr(self.tool_registry, "set_runtime_event_emitter", None)
+        if callable(set_emitter):
+            set_emitter(lambda event: list(self._emit(event)))
+        set_token = getattr(self.tool_registry, "set_cancellation_token", None)
+        if callable(set_token):
+            set_token(self._cancellation_token)
 
     def _provider_name(self) -> str:
         provider = getattr(self.llm_client, "provider", None)

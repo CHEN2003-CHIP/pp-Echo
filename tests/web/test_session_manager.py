@@ -28,6 +28,7 @@ class FakeAgent:
         self.session_id = session_id
         self.state = FakeState()
         self._subscribers = subscribers
+        self._cancel_requested = False
 
     def prompt(self, text: str):
         self.state.messages.append(ChatMessage(role="user", content=[TextPart(text=text)], timestamp=1.0))
@@ -53,6 +54,12 @@ class FakeAgent:
 
     def reject_pending_plan(self, token: str):
         self.state.pending_plan_token = None
+
+    def request_cancel(self, reason: str = "cancel_requested") -> None:
+        self._cancel_requested = True
+
+    def cancellation_requested(self) -> bool:
+        return self._cancel_requested
 
 
 def _factory(_workspace: Path, session_id, subscribers):
@@ -94,3 +101,16 @@ def test_web_session_manager_approval_flow(tmp_path: Path) -> None:
 
     assert result["token"] == "token-1"
     assert events[0]["type"] == "planner_gate_approved"
+
+
+def test_web_session_manager_cancel_marks_running_handle(tmp_path: Path) -> None:
+    manager = WebSessionManager(tmp_path, runtime_factory=_factory)
+    handle = manager.get_handle("session-1")
+    handle._worker = SimpleNamespace(is_alive=lambda: True)
+
+    result = handle.cancel()
+    events = handle.drain_events()
+
+    assert result["cancel_requested"] is True
+    assert handle.snapshot()["cancel_requested"] is True
+    assert events[0]["type"] == "cancel_requested"

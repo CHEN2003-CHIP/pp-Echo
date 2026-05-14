@@ -46,6 +46,7 @@ class WebSessionHandle:
         return {
             "session_id": self.session_id,
             "busy": self.is_busy(),
+            "cancel_requested": self.cancel_requested(),
             "pending_plan_token": self.agent.state.pending_plan_token,
             "pending_tool_call_count": len(self.agent.state.pending_tool_calls),
             "queued_message_count": len(self.agent.state.queued_messages),
@@ -92,6 +93,23 @@ class WebSessionHandle:
         self.agent.reject_pending_plan(token)
         self._emit_local("planner_gate_rejected", f"Rejected planner gate {token}.", {"token": token})
         return {"session_id": self.session_id, "token": token}
+
+    def cancel(self) -> dict:
+        if not self.is_busy():
+            return {"session_id": self.session_id, "cancel_requested": False, "busy": False}
+        request_cancel = getattr(self.agent, "request_cancel", None)
+        if callable(request_cancel):
+            request_cancel("cancel_requested")
+        self._emit_local(
+            "cancel_requested",
+            "Cancel requested for the running turn.",
+            {"cancel_requested": True},
+        )
+        return {"session_id": self.session_id, "cancel_requested": True, "busy": self.is_busy()}
+
+    def cancel_requested(self) -> bool:
+        checker = getattr(self.agent, "cancellation_requested", None)
+        return bool(callable(checker) and checker())
 
     def _build_runtime(self, session_id: Optional[str]):
         return self._runtime_factory(
