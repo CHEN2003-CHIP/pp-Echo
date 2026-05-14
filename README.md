@@ -21,7 +21,11 @@
 ![pp-Echo hero](docs/assets/hero.svg)
 
 <p align="center">
-  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Explicit @subagent handoff</code> | <code>Rewind code + conversation safely</code> | <code>CLI + TUI</code>
+  <img src="docs/assets/windows-first-agent-pixel.png" alt="Pixel art Windows-first agent mascot" width="720" />
+</p>
+
+<p align="center">
+  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Explicit @subagent handoff</code> | <code>Rewind code + conversation safely</code> | <code>CLI + Web UI + TUI</code>
 </p>
 
 pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
@@ -34,8 +38,9 @@ pp-Echo should currently be understood as a `Windows-first` project.
 
 - Windows is the main supported and most tested path today.
 - The helper scripts and the quickest onboarding path are Windows-oriented.
+- The Web UI is part of the normal workflow, including project switching, visible runtime status, and approval handling.
 - Linux and macOS should not be assumed to have equal support yet.
-- The runtime, approvals, rewind, session tree, and storage model are real and useful today.
+- The runtime, exact-effect approvals, memory files, rewind, session tree, and storage model are real and useful today.
 - Subagent support exists, but it is still MVP-level rather than a finished agent-team system.
 
 In other words: this repo already contains real architecture worth studying, but it is still evolving and should not be described as a fully mature multi-agent platform.
@@ -47,6 +52,7 @@ The project is intentionally described as `Windows-first` to avoid confusion.
 - Use Windows for the clearest supported experience.
 - Treat Linux/macOS compatibility as future work rather than current parity.
 - Read the `.bat` scripts as the primary convenience entrypoints, not as optional historical leftovers.
+- Prefer `start-web.bat` when you want the browser UI with visible approvals, status, sessions, and project switching.
 
 ## Subagent Progress
 
@@ -308,6 +314,7 @@ Phase 2A upgrades sensitive approval binding so host approval applies to an exac
 - File effects distinguish whether the target was absent or present at staging time.
 - Shell effects use narrow normalization: whitespace-only differences normalize, but command content, separators, redirection, quotes, parameter order, and timeout changes remain material.
 - Planner approval is still not execution approval.
+- The Web UI mirrors this two-step model: first approve the plan, then apply the concrete staged write/edit/command. After host execution it removes the consumed token and shows a clear success/failure message.
 
 ## Shell Effect Classification
 

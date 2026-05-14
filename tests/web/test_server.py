@@ -6,6 +6,7 @@ from pp_agent.web import server as server_module
 from pp_agent.web.server import create_app
 from pp_agent.web.session_manager import WebSessionManager
 from pp_agent.web.workspaces import WebWorkspaceManager
+from pp_agent.tools.registry import ToolRegistry
 
 from tests.web.test_session_manager import _factory
 
@@ -90,6 +91,26 @@ def test_web_api_approves_pending_action_token(tmp_path: Path, monkeypatch) -> N
     assert response.status_code == 200
     assert response.json()["result"] == "approved"
     assert captured == {"workspace": (tmp_path / "workspace").resolve(), "token": "tok-1", "render": False}
+
+
+def test_web_api_approve_pending_action_applies_write_and_removes_token(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    staged = ToolRegistry(workspace).execute("write_file", {"path": "MEMORY.md", "content": "# Memory\n"})
+    token = staged.details["token"]
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    response = client.post(f"/api/approvals/{token}/approve")
+    approvals = client.get("/api/approvals")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["lifecycle"]["state"] == "grant_consumed"
+    assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == "# Memory\n"
+    assert token not in approvals.json()["tokens"]
+    assert all(item["token"] != token for item in approvals.json()["items"])
 
 
 def test_web_api_rejects_pending_action_token(tmp_path: Path, monkeypatch) -> None:

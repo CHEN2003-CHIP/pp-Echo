@@ -21,7 +21,7 @@ import {
   Square,
   X
 } from "lucide-react";
-import { api, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, WorkspaceEntry, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, WorkspaceEntry, WorkspacesState } from "./api";
 
 type Tab =
   | { id: string; type: "chat"; title: string; sessionId: string }
@@ -66,6 +66,8 @@ export function App() {
   const [status, setStatus] = useState("Ready");
   const [sideData, setSideData] = useState<Record<string, unknown>>({});
   const [approvalSummary, setApprovalSummary] = useState<ApprovalsSummary>({ count: 0, items: [] });
+  const [approvalAction, setApprovalAction] = useState<{ token: string; action: "approve" | "reject" } | null>(null);
+  const [approvalFeedback, setApprovalFeedback] = useState("");
   const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [pendingWorkspace, setPendingWorkspace] = useState<OpenWorkspaceResponse | null>(null);
   const pollers = useRef<Record<string, number>>({});
@@ -152,7 +154,7 @@ export function App() {
   }
 
   function refreshApprovals() {
-    api.approvals().then(setApprovalSummary).catch(() => undefined);
+    return api.approvals().then(setApprovalSummary).catch(() => undefined);
   }
 
   function openPanel(type: Exclude<Tab["type"], "chat">) {
@@ -247,28 +249,57 @@ export function App() {
 
   async function approve() {
     if (!activeApproval) return;
-    if (activeApproval.kind === "planner" && activeSessionId) {
-      await api.approve(activeSessionId);
-      clearPlannerToken(activeSessionId);
-    } else {
-      await api.approvePending(activeApproval.token);
-      removeApproval(activeApproval.token);
+    const approval = activeApproval;
+    setApprovalAction({ token: approval.token, action: "approve" });
+    setApprovalFeedback("");
+    try {
+      if (approval.kind === "planner" && activeSessionId) {
+        await api.approve(activeSessionId);
+        clearPlannerToken(activeSessionId);
+        setStatus("Plan approved");
+        setApprovalFeedback("Plan approved. Waiting for the concrete action.");
+      } else {
+        const result = await api.approvePending(approval.token);
+        removeApproval(approval.token);
+        const message = approvalSuccessMessage(approval.actionType || "", result);
+        setStatus(message);
+        setApprovalFeedback(message);
+      }
+      if (activeSessionId) refreshSessionState(activeSessionId);
+      await refreshApprovals();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(message);
+      setApprovalFeedback(message);
+    } finally {
+      setApprovalAction(null);
     }
-    if (activeSessionId) refreshSessionState(activeSessionId);
-    refreshApprovals();
   }
 
   async function reject() {
     if (!activeApproval) return;
-    if (activeApproval.kind === "planner" && activeSessionId) {
-      await api.reject(activeSessionId);
-      clearPlannerToken(activeSessionId);
-    } else {
-      await api.rejectPending(activeApproval.token);
-      removeApproval(activeApproval.token);
+    const approval = activeApproval;
+    setApprovalAction({ token: approval.token, action: "reject" });
+    setApprovalFeedback("");
+    try {
+      if (approval.kind === "planner" && activeSessionId) {
+        await api.reject(activeSessionId);
+        clearPlannerToken(activeSessionId);
+      } else {
+        await api.rejectPending(approval.token);
+        removeApproval(approval.token);
+      }
+      setStatus("Approval rejected");
+      setApprovalFeedback("Approval rejected.");
+      if (activeSessionId) refreshSessionState(activeSessionId);
+      await refreshApprovals();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(message);
+      setApprovalFeedback(message);
+    } finally {
+      setApprovalAction(null);
     }
-    if (activeSessionId) refreshSessionState(activeSessionId);
-    refreshApprovals();
   }
 
   function clearPlannerToken(sessionId: string) {
@@ -400,11 +431,15 @@ export function App() {
                       {activeApproval.meta && <small className="approval-meta">{activeApproval.meta}</small>}
                       <code>{String(activeApproval.token).slice(0, 18)}</code>
                       <div className="split-actions">
-                        <button onClick={approve}><Check size={15} /> {activeApproval.approveLabel}</button>
-                        <button onClick={reject}><X size={15} /> Reject</button>
+                        <button disabled={Boolean(approvalAction)} onClick={approve}>
+                          <Check size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "approve" ? "Applying..." : activeApproval.approveLabel}
+                        </button>
+                        <button disabled={Boolean(approvalAction)} onClick={reject}>
+                          <X size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "reject" ? "Rejecting..." : "Reject"}
+                        </button>
                       </div>
                     </>
-                  ) : <p className="muted">{approvalEmptyText(busy, approvalSummary.count)}</p>}
+                  ) : <p className="muted">{approvalFeedback || approvalEmptyText(busy, approvalSummary.count)}</p>}
                 </div>
                 <div className="panel-card">
                   <h3><Clock3 size={16} /> Recent Events</h3>
@@ -818,6 +853,15 @@ function approvalButtonLabel(actionType: string) {
   if (actionType === "edit_file") return "Apply edit";
   if (actionType === "run_shell") return "Run command";
   return "Approve action";
+}
+
+function approvalSuccessMessage(actionType: string, result: ApprovalActionResponse) {
+  const path = result.details?.absolute_path || result.details?.path;
+  if (actionType === "write_file" || actionType === "edit_file") {
+    return typeof path === "string" && path.trim() ? `Applied successfully: ${path}` : "Applied successfully.";
+  }
+  if (actionType === "run_shell") return "Command completed.";
+  return result.result || "Approval completed.";
 }
 
 function approvalDescription(item: PendingAction) {

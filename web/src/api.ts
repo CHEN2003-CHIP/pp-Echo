@@ -55,6 +55,15 @@ export type ApprovalsSummary = {
   items: PendingAction[];
 };
 
+export type ApprovalActionResponse = {
+  token: string;
+  action_type: string;
+  result: string;
+  success?: boolean;
+  lifecycle?: { state?: string } | null;
+  details?: Record<string, unknown>;
+};
+
 export type WorkspaceEntry = {
   path: string;
   name: string;
@@ -110,7 +119,7 @@ export const api = {
   reject: (sessionId: string) => request(`/api/sessions/${sessionId}/reject`, { method: "POST" }),
   cancel: (sessionId: string) => request(`/api/sessions/${sessionId}/cancel`, { method: "POST" }),
   approvals: () => request<ApprovalsSummary>("/api/approvals"),
-  approvePending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/approve`, { method: "POST" }),
+  approvePending: (token: string) => request<ApprovalActionResponse>(`/api/approvals/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectPending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/reject`, { method: "POST" }),
   capabilities: () => request<{ capabilities: unknown[] }>("/api/capabilities"),
   mcp: () => request<Record<string, unknown>>("/api/mcp"),

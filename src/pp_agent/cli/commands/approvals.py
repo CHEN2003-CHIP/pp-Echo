@@ -51,7 +51,15 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
         console.print(result.content)
         if result.details:
             console.print(json.dumps(result.details, ensure_ascii=False, indent=2))
-    return {"token": token, "action_type": payload["action_type"], "result": result.content}
+    lifecycle = result.details.get("lifecycle") if isinstance(result.details, dict) else None
+    return {
+        "token": token,
+        "action_type": payload["action_type"],
+        "result": result.content,
+        "success": not result.is_error,
+        "lifecycle": lifecycle,
+        "details": result.details or {},
+    }
 
 
 def reject_pending_action(workspace: Path, token: str, render: bool = True) -> dict:
