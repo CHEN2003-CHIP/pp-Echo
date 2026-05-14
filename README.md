@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="#quick-start"><img alt="Quick Start" src="https://img.shields.io/badge/Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
-  <a href="docs/agent-learning-zh.md"><img alt="中文学习路径" src="https://img.shields.io/badge/中文学习路径-DC2626?style=for-the-badge&logo=readme&logoColor=white"></a>
+  <a href="docs/agent-learning-zh.md"><img alt="Chinese Learning Path" src="https://img.shields.io/badge/Chinese_Learning_Path-DC2626?style=for-the-badge&logo=readme&logoColor=white"></a>
   <a href="#why-this-repo-is-worth-studying"><img alt="Why Study" src="https://img.shields.io/badge/Why_Study-1E293B?style=for-the-badge&logo=bookstack&logoColor=white"></a>
   <a href="#quick-learning-path"><img alt="Learning Path" src="https://img.shields.io/badge/Learning_Path-2563EB?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
   <a href="#demo--screenshots"><img alt="Demo" src="https://img.shields.io/badge/Demo-163257?style=for-the-badge&logo=gitlfs&logoColor=white"></a>
@@ -30,7 +30,7 @@
 
 pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
 
-pp-Echo 既是一个可实际运行的本地 coding agent，也是一个适合边读边学的 agent engineering 参考项目。如果你是 agent 初学者，这个仓库提供了很多项目没有的东西：真实可运行的 runtime、可见的 planning、审批门控、memory、session 恢复能力，以及一套不依赖庞大平台、可以真正顺着读懂的代码结构。
+pp-Echo 既是一个可以实际运行的本地 coding agent，也是一个适合边读边学的 agent engineering 参考项目。如果你是 agent 初学者，这个仓库提供了很多项目没有的东西：真实可运行的 runtime、可见的 planning、审批门控、memory、session 恢复能力，以及一套不依赖庞大平台也能顺着读懂的代码结构。
 
 ## Current Status
 
@@ -62,16 +62,17 @@ What exists now:
 
 - explicit user-triggered `@subagent` handoff
 - a built-in `spawn_subagent` tool
-- two built-in child specs: `repo-researcher` and `change-reviewer`
+- a built-in `orchestrate_agents` tool for parallel read-only repository analysis and planning-style fan-out
+- seven built-in child specs: `repo-researcher`, `change-reviewer`, `test-investigator`, `api-scout`, `memory-scout`, `implementation-planner`, and `code-worker`
 - child execution that forks a session, narrows tools, runs a constrained prompt, and returns a summary
 
 What does not exist yet:
 
 - full agent-team orchestration
 - rich long-running multi-agent coordination
-- a broad child-role ecosystem
+- broad autonomous agent-team execution with independent write ownership
 
-The honest description is: `subagent support exists, but it is currently an MVP child-handoff workflow rather than a finished agent-team system`.
+The honest description is: `subagent support exists, with explicit child handoff and narrow orchestration support, but it is not yet a finished autonomous agent-team system`.
 
 ## Why This Repo Is Worth Studying
 
@@ -115,7 +116,7 @@ pp-Echo is evaluated as an engineering agent, not only as a chatbot demo. The ev
 | Deterministic runtime benchmark | 15 tasks | Planner approval, safe rewind, session branching, lazy MCP activation, and context compaction without model randomness | `python -m pytest tests/benchmarks/test_runner.py` |
 | Optional stress suite | 10 cases | Longer context, multi-module search, secret-dump pressure, shell approval, and subagent delegation | `python -m pp_agent.cli.main eval run evals/datasets/agent-stress-10.json --workspace . --preflight` |
 
-Latest local live demo result:
+Most recent recorded local live demo result:
 
 | Run | Cases | Pass rate | Tool calls | Approval gates | Expected policy blocks |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -268,6 +269,8 @@ flowchart TD
 | Interactive chat | Checkpoint + rewind |
 | --- | --- |
 | ![Interactive chat screenshot](docs/assets/screenshot-chat.png) | ![Checkpoint screenshot](docs/assets/screenshot-checkpoint.png) |
+
+The Web UI is now part of the normal workflow; a dedicated Web UI screenshot should be added with the next visual refresh so the README matches the current browser approval experience.
 
 ## Why pp-Echo
 
@@ -449,7 +452,7 @@ python -m pp_agent.cli.main run "Audit this repo and summarize risky commands"
 
 Use `@subagent` when you want the runtime to force a child handoff before the main agent touches other tools.
 
-This is currently an MVP child workflow, not a full agent-team planner. Treat it as explicit delegated inspection with a constrained child, not as mature multi-agent orchestration.
+This is currently a bounded child workflow with an orchestration helper, not a full autonomous agent-team planner. Treat it as explicit delegated inspection and planning fan-out with constrained children, not as mature long-running multi-agent execution.
 
 ```text
 @subagent Read README.md and summarize the project
@@ -460,10 +463,16 @@ Current built-in subagent specs:
 
 - `repo-researcher`: read-only repository inspection with `read_file`, `list_files`, `search_text`, and `grep_code`
 - `change-reviewer`: change-review flow with `git_status` and `git_diff_worktree` added to the read-only tool set
+- `test-investigator`: inspect failing tests, error output, and related code paths
+- `api-scout`: trace interfaces, types, and call sites across the repository
+- `memory-scout`: search long-term file memory with `memory_search` and `memory_get`
+- `implementation-planner`: turn research findings into a low-risk implementation plan and write-scope split
+- `code-worker`: scoped coding child profile; currently constrained to read/review tools and staged-edit reporting
 
 Behavior notes:
 
 - `@subagent` is required before `spawn_subagent` can run.
+- `orchestrate_agents` can fan out multiple constrained subagents for read-only analysis, debugging, or implementation planning.
 - If the model invents an unknown child name, runtime normalizes it back to a valid built-in subagent spec.
 - In chat mode, `@subagent` requests are forced through `spawn_subagent` instead of silently falling back to direct main-agent file reads.
 - Current child execution is intentionally narrow: fork session, restrict tools, run a constrained prompt, return summary output.
