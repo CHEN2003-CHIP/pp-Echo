@@ -270,7 +270,7 @@ flowchart TD
 | --- | --- |
 | ![Interactive chat screenshot](docs/assets/screenshot-chat.png) | ![Checkpoint screenshot](docs/assets/screenshot-checkpoint.png) |
 
-The Web UI is now part of the normal workflow; a dedicated Web UI screenshot should be added with the next visual refresh so the README matches the current browser approval experience.
+![Web UI screenshot](docs/assets/screenshot-web-ui.png)
 
 ## Why pp-Echo
 
