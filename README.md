@@ -1,7 +1,7 @@
 # pp-Echo
 
 <p align="center">
-  <img src="docs/assets/logo-echo.svg" alt="pp-Echo logo" width="104" height="104" />
+  <img src="docs/assets/logo-echo.svg" alt="pp-Echo logo" width="420" />
 </p>
 
 <p align="center">
