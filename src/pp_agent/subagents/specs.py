@@ -6,6 +6,17 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from pp_agent.subagents.capabilities import (
+    ContextHookPolicy,
+    MCPPolicy,
+    MemoryPolicy,
+    SkillPolicy,
+    SubAgentProfile,
+    ToolCapabilityPolicy,
+    WorkspacePolicy,
+    profile_from_tool_allowlist,
+)
+
 
 class SubAgentSpec(BaseModel):
     name: str
@@ -16,6 +27,12 @@ class SubAgentSpec(BaseModel):
     require_plan_approval: bool = False
     max_turns: int = 4
     return_format: str = "summary"
+    profile: Optional[SubAgentProfile] = None
+
+    def resolved_profile(self) -> SubAgentProfile:
+        if self.profile is not None:
+            return self.profile.model_copy(deep=True)
+        return profile_from_tool_allowlist(self.name, self.tool_allowlist)
 
 
 class SubAgentRunResult(BaseModel):
@@ -249,6 +266,10 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
                 "Do not edit files, do not ask follow-up questions, and do not expand scope."
             ),
             tool_allowlist=["read_file", "list_files", "search_text", "grep_code"],
+            profile=SubAgentProfile(
+                name="repo-researcher",
+                tool=ToolCapabilityPolicy(allowlist=["read_file", "list_files", "search_text", "grep_code"]),
+            ),
             require_plan_approval=False,
             max_turns=4,
             return_format="summary",
@@ -262,6 +283,10 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
                 "Do not edit files, do not ask follow-up questions, and do not expand scope."
             ),
             tool_allowlist=["read_file", "search_text", "grep_code", "git_status", "git_diff_worktree"],
+            profile=SubAgentProfile(
+                name="change-reviewer",
+                tool=ToolCapabilityPolicy(allowlist=["read_file", "search_text", "grep_code", "git_status", "git_diff_worktree"]),
+            ),
             require_plan_approval=False,
             max_turns=4,
             return_format="summary",
@@ -274,7 +299,11 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
                 "Inspect test failures and related code with read-only tools, then explain likely root causes and the next debugging step. "
                 "Do not edit files, do not ask follow-up questions, and do not expand scope."
             ),
-            tool_allowlist=["read_file", "search_text", "grep_code", "list_files"],
+            tool_allowlist=["read_file", "search_text", "grep_code", "list_files", "git_status", "git_diff_worktree"],
+            profile=SubAgentProfile(
+                name="test-investigator",
+                tool=ToolCapabilityPolicy(allowlist=["read_file", "search_text", "grep_code", "list_files", "git_status", "git_diff_worktree"]),
+            ),
             require_plan_approval=False,
             max_turns=4,
             return_format="summary",
@@ -288,6 +317,10 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
                 "Do not edit files, do not ask follow-up questions, and do not expand scope."
             ),
             tool_allowlist=["read_file", "list_files", "search_text", "grep_code"],
+            profile=SubAgentProfile(
+                name="api-scout",
+                tool=ToolCapabilityPolicy(allowlist=["read_file", "list_files", "search_text", "grep_code"]),
+            ),
             require_plan_approval=False,
             max_turns=4,
             return_format="summary",
@@ -301,6 +334,11 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
                 "Return only concise findings grounded in retrieved memory. Do not edit files or expand scope."
             ),
             tool_allowlist=["memory_search", "memory_get", "read_file", "grep_code"],
+            profile=SubAgentProfile(
+                name="memory-scout",
+                tool=ToolCapabilityPolicy(allowlist=["memory_search", "memory_get", "read_file", "grep_code"]),
+                memory=MemoryPolicy(allow_memory_search=True, allow_memory_get=True),
+            ),
             require_plan_approval=False,
             max_turns=3,
             return_format="summary",
@@ -314,20 +352,28 @@ def default_subagent_specs() -> dict[str, SubAgentSpec]:
                 "Do not edit files. Do not ask follow-up questions."
             ),
             tool_allowlist=["read_file", "list_files", "search_text", "grep_code", "git_diff_worktree"],
+            profile=SubAgentProfile(
+                name="implementation-planner",
+                tool=ToolCapabilityPolicy(allowlist=["read_file", "list_files", "search_text", "grep_code", "git_diff_worktree"]),
+            ),
             require_plan_approval=False,
             max_turns=4,
             return_format="summary",
         ),
         "code-worker": SubAgentSpec(
             name="code-worker",
-            description="Prepare scoped code edits for a single write scope; edits are staged for parent approval.",
+            description="Prepare scoped code edits for a single write scope; edits become an isolated patch artifact for parent approval.",
             system_prompt=(
                 "You are code-worker, a scoped coding subagent. "
                 "Only work inside the write_scope named in your task. "
-                "When edit tools are available, stage minimal edits and report the pending action tokens. "
+                "When edit tools are available, make minimal edits inside the isolated worktree and report changed paths. "
                 "Never approve pending actions, never call spawn_subagent, and do not touch paths outside write_scope."
             ),
             tool_allowlist=["read_file", "list_files", "search_text", "grep_code", "git_diff_worktree"],
+            profile=SubAgentProfile(
+                name="code-worker",
+                tool=ToolCapabilityPolicy(allowlist=["read_file", "list_files", "search_text", "grep_code", "git_diff_worktree"]),
+            ),
             require_plan_approval=False,
             max_turns=4,
             return_format="summary",

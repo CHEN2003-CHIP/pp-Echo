@@ -151,7 +151,13 @@
       "change-reviewer": 4,
       "implementation-planner": 4,
       "code-worker": 4
-    }
+    },
+
+    "_comment_enforce_orchestrated_edit_contract": "When a user explicitly asks for orchestrate_agents/workflow=code_change/allow_edits=true, block main-agent direct edit_file/write_file/run_shell fallback for that turn.",
+    "enforce_orchestrated_edit_contract": true,
+
+    "_comment_require_patch_artifact_for_code_change": "When orchestrated edits are required, code_change is considered successful only if code-worker produces an apply_patch_artifact pending action.",
+    "require_patch_artifact_for_code_change": true
   },
 
   "_comment_tool_confirmation": "旧版确认配置入口，仍兼容；新项目建议使用 tool_policy.tool_confirmation。",

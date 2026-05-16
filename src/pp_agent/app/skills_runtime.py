@@ -3,12 +3,33 @@ from __future__ import annotations
 from importlib import import_module
 import re
 import time
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.runtime.state import AgentState
+
+
+logger = logging.getLogger(__name__)
+
+
+def _skill_policy(runtime: "SkillRuntime"):
+    return getattr(runtime, "subagent_skill_policy", None)
+
+
+def _policy_enabled(policy) -> bool:
+    return True if policy is None else bool(getattr(policy, "enabled", False))
+
+
+def _policy_allows_skill(policy, name: str) -> bool:
+    if policy is None:
+        return True
+    if not bool(getattr(policy, "enabled", False)):
+        return False
+    allowed = list(getattr(policy, "allowed_skills", []) or [])
+    return not allowed or name in allowed
 
 
 @dataclass
@@ -50,6 +71,10 @@ class SkillRuntime:
         self._last_match_sources = {}
 
     def use_skill(self, name: str, *, source: str = "manual"):
+        policy = _skill_policy(self)
+        if not _policy_allows_skill(policy, name):
+            logger.debug("skill use denied by policy", extra={"skill": name})
+            raise PermissionError(f"Skill '{name}' is not allowed by the active subagent policy.")
         descriptor = self.available_skills()[name]
         if name not in self._manual_active:
             self._manual_active.append(name)
@@ -66,6 +91,8 @@ class SkillRuntime:
         skills = self.available_skills()
         items: list[ActiveSkill] = []
         for name in active_names:
+            if not _policy_allows_skill(_skill_policy(self), name):
+                continue
             descriptor = skills.get(name)
             if descriptor is None:
                 continue
@@ -83,6 +110,13 @@ class SkillRuntime:
         return items
 
     def transform_context(self, state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
+        policy = _skill_policy(self)
+        if not _policy_enabled(policy):
+            logger.debug("skill context denied because policy disabled")
+            return messages
+        if policy is not None and not bool(getattr(policy, "inject_context", False)):
+            logger.debug("skill context injection denied by policy")
+            return messages
         descriptors = self._active_descriptors_for_state(state)
         if not descriptors:
             return messages
@@ -110,9 +144,14 @@ class SkillRuntime:
         self._last_auto_active = auto_matches
         active_names = list(dict.fromkeys([*self._manual_active, *auto_matches]))
         skills = self.available_skills()
-        return [skills[name] for name in active_names if name in skills]
+        policy = _skill_policy(self)
+        return [skills[name] for name in active_names if name in skills and _policy_allows_skill(policy, name)]
 
     def _auto_matches(self, state: AgentState) -> list[str]:
+        policy = _skill_policy(self)
+        if policy is not None and not bool(getattr(policy, "allow_auto_activation", False)):
+            self._last_match_sources = {name: "manual" for name in self._manual_active}
+            return []
         text = self._latest_user_text(state)
         if not text:
             self._last_match_sources = {name: "manual" for name in self._manual_active}
@@ -122,6 +161,8 @@ class SkillRuntime:
         lowered = text.lower()
         explicit: list[tuple[int, str]] = []
         for descriptor in skills.values():
+            if not _policy_allows_skill(policy, descriptor.name):
+                continue
             position = _mention_position(lowered, descriptor.name)
             if position is not None:
                 explicit.append((position, descriptor.name))
@@ -134,6 +175,8 @@ class SkillRuntime:
         user_terms = _match_terms(text)
         candidates: list[tuple[float, str]] = []
         for descriptor in skills.values():
+            if not _policy_allows_skill(policy, descriptor.name):
+                continue
             name_terms = _name_terms(descriptor.name)
             description_terms = _description_terms(descriptor.description)
             overlap = len(description_terms & user_terms)

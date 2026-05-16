@@ -45,7 +45,8 @@ def test_subagent_settings_are_loaded_from_project_config(tmp_path: Path) -> Non
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)
     (project_dir / "config.json").write_text(
-        '{"subagents":{"default_max_turns":5,"max_turns":{"memory-scout":2,"repo-researcher":6}}}',
+        '{"subagents":{"default_max_turns":5,"max_turns":{"memory-scout":2,"repo-researcher":6},'
+        '"enforce_orchestrated_edit_contract":false,"require_patch_artifact_for_code_change":false}}',
         encoding="utf-8",
     )
 
@@ -55,6 +56,8 @@ def test_subagent_settings_are_loaded_from_project_config(tmp_path: Path) -> Non
     assert settings.subagents.max_turns == {"memory-scout": 2, "repo-researcher": 6}
     assert settings.subagents.max_turns_for("memory-scout", 4) == 2
     assert settings.subagents.max_turns_for("api-scout", 4) == 5
+    assert settings.subagents.enforce_orchestrated_edit_contract is False
+    assert settings.subagents.require_patch_artifact_for_code_change is False
 
 
 def test_tool_policy_settings_are_loaded_from_project_config(tmp_path: Path) -> None:

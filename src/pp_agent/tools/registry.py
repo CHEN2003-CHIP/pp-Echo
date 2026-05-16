@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
+import subprocess
 import threading
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 from pp_agent.domain import ToolCall, ToolSpec
-from pp_agent.runtime.cancellation import CancellationToken
-from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.settings import ToolPolicyConfig
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.file_tools import (
@@ -25,8 +25,10 @@ from pp_agent.tools.effects import (
     analyze_extension_call,
     analyze_file_call,
     analyze_mcp_call,
+    build_file_effect,
     build_dynamic_tool_effect,
     build_shell_effect,
+    content_digest,
     dynamic_tool_declarations,
 )
 from pp_agent.tools.metadata import ToolMetadata
@@ -40,6 +42,81 @@ from pp_agent.tools.shell_tool import PowerShellTool
 SpecFactory = Callable[[], ToolSpec]
 ToolFactory = Callable[[], BaseTool]
 ToolExecutor = Callable[[Path, dict[str, Any]], Union[ToolExecutionResult, str]]
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pp_agent.subagents.capabilities import SubAgentProfile
+
+
+_WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "execute_safe_rewind"}
+_APPROVAL_EXECUTE_TOOLS = {"approve_pending_action", "reject_pending_action"}
+
+
+def _allow_mcp_tool(policy: Any, server_name: str, tool_name: str) -> bool:
+    if policy is None:
+        return True
+    if not bool(getattr(policy, "enabled", False)):
+        return False
+    allowed_servers = list(getattr(policy, "allowed_servers", []) or [])
+    if allowed_servers and server_name not in allowed_servers:
+        return False
+    qualified = f"{server_name}.{tool_name}" if "." not in tool_name else tool_name
+    allowed_tools = list(getattr(policy, "allowed_tools", []) or [])
+    return not allowed_tools or qualified in allowed_tools
+
+
+def _allow_tool(profile: Any, tool_name: str, *, tool_family: str | None = None, category: str | None = None) -> bool:
+    if profile is None:
+        return True
+    tool_policy = getattr(profile, "tool", None)
+    denylist = list(getattr(tool_policy, "denylist", []) or [])
+    allowlist = list(getattr(tool_policy, "allowlist", []) or [])
+    if tool_name in denylist:
+        return False
+    if allowlist and tool_name not in allowlist:
+        return False
+    workspace = getattr(profile, "workspace", None)
+    mode = str(getattr(workspace, "mode", "read_only"))
+    if mode == "read_only" and tool_name in _WRITE_TOOLS | _APPROVAL_EXECUTE_TOOLS:
+        return False
+    if mode == "staged_edits" and tool_name in _APPROVAL_EXECUTE_TOOLS:
+        return False
+    if mode == "worktree":
+        if tool_name in _APPROVAL_EXECUTE_TOOLS:
+            return False
+        if tool_name in _WRITE_TOOLS and not bool(getattr(workspace, "allow_write_tools", False)):
+            return False
+    if tool_family == "mcp" or category == "mcp":
+        if "." not in tool_name:
+            return False
+        server_name, mcp_tool = tool_name.split(".", 1)
+        return _allow_mcp_tool(getattr(profile, "mcp", None), server_name, mcp_tool)
+    return True
+
+
+def _allow_dynamic_registration(profile: Any, *, name: str, tool_family: str | None, category: str | None) -> bool:
+    if profile is None:
+        return True
+    family = tool_family or ("mcp" if category == "mcp" else "extension" if category == "extension" else category)
+    if family == "mcp" or category == "mcp":
+        mcp_policy = getattr(profile, "mcp", None)
+        if not bool(getattr(mcp_policy, "allow_dynamic_tools", False)):
+            return False
+        if "." not in name:
+            return False
+        server_name, mcp_tool = name.split(".", 1)
+        return _allow_mcp_tool(mcp_policy, server_name, mcp_tool)
+    if family == "extension" or category == "extension":
+        if category == "memory" and name in {"memory_search", "memory_get"}:
+            return _allow_tool(profile, name, tool_family=family, category=category)
+        tool_policy = getattr(profile, "tool", None)
+        return bool(getattr(tool_policy, "allow_dynamic_tools", False)) and _allow_tool(
+            profile,
+            name,
+            tool_family=family,
+            category=category,
+        )
+    return _allow_tool(profile, name, tool_family=family, category=category)
 
 
 @dataclass
@@ -60,13 +137,20 @@ class ToolRegistry:
     【架构角色】工具层入口，隔离工具实现与调用方
     【安全策略】支持执行前确认、超时控制、动态开关
     """
-    def __init__(self, workspace: Path, policy: Optional[ToolPolicyConfig] = None, current_session_id: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        policy: Optional[ToolPolicyConfig] = None,
+        current_session_id: Optional[str] = None,
+        capability_profile: Optional["SubAgentProfile"] = None,
+    ) -> None:
         """
         初始化工具注册中心
         :param workspace: 工作空间根目录（工具操作的安全边界）
         :param policy: 工具安全策略（确认弹窗、执行超时等）
         """
         self.workspace = workspace.resolve()
+        self.capability_profile = capability_profile
         self.policy = policy or ToolPolicyConfig()
         self.policy_evaluator = ToolPolicyEvaluator(
             self.workspace,
@@ -76,9 +160,9 @@ class ToolRegistry:
             ask_tools=self.policy.ask_tools,
         )
         self.current_session_id = current_session_id
-        self._runtime_event_emitter: Optional[Callable[[AgentEvent], None]] = None
+        self._runtime_event_emitter: Optional[Callable[[Any], None]] = None
         self._runtime_event_lock = threading.RLock()
-        self._cancellation_token: CancellationToken = CancellationToken()
+        self._cancellation_token: Any = None
         self._instances: dict[str, BaseTool] = {}
         self._confirmation_overrides = {
             "write_file": self.policy.confirm_write_file,
@@ -89,6 +173,9 @@ class ToolRegistry:
         }
         self._registrations = self._build_builtin_registrations()
         self._builtin_registration_names = set(self._registrations)
+
+    def set_capability_profile(self, profile: Optional["SubAgentProfile"]) -> None:
+        self.capability_profile = profile.model_copy(deep=True) if profile is not None else None
 
     def register(self, registration: ToolRegistration, *, replace: bool = False) -> None:
         """
@@ -198,6 +285,17 @@ class ToolRegistry:
         touches_external_hint: bool = False,
         replace: bool = False,
     ) -> None:
+        if not _allow_dynamic_registration(
+            self.capability_profile,
+            name=name,
+            tool_family=tool_family,
+            category=category,
+        ):
+            logger.debug(
+                "tool dynamic registration denied by capability profile",
+                extra={"tool_name": name, "category": category, "tool_family": tool_family},
+            )
+            return
         spec = ToolSpec(
             name=name,
             description=description,
@@ -299,7 +397,7 @@ class ToolRegistry:
             for name, registration in self._registrations.items()
         }
 
-    def set_runtime_event_emitter(self, emitter: Callable[[AgentEvent], None]) -> None:
+    def set_runtime_event_emitter(self, emitter: Callable[[Any], None]) -> None:
         self._runtime_event_emitter = emitter
 
     def emit_runtime_event(
@@ -313,6 +411,8 @@ class ToolRegistry:
     ) -> None:
         if self._runtime_event_emitter is None:
             return
+        from pp_agent.runtime.state import AgentEvent
+
         with self._runtime_event_lock:
             self._runtime_event_emitter(
                 AgentEvent(
@@ -325,24 +425,33 @@ class ToolRegistry:
                 )
             )
 
-    def set_cancellation_token(self, token: CancellationToken) -> None:
+    def set_cancellation_token(self, token: Any) -> None:
         self._cancellation_token = token
 
     @property
-    def cancellation_token(self) -> CancellationToken:
+    def cancellation_token(self) -> Any:
         return self._cancellation_token
 
     def cancellation_requested(self) -> bool:
-        return self._cancellation_token.cancelled
+        return bool(self._cancellation_token is not None and self._cancellation_token.cancelled)
 
     def raise_if_cancelled(self) -> None:
-        self._cancellation_token.raise_if_cancelled()
+        if self._cancellation_token is not None:
+            self._cancellation_token.raise_if_cancelled()
 
-    def clone_selected(self, names: list[str], *, current_session_id: Optional[str] = None) -> "ToolRegistry":
+    def clone_selected(
+        self,
+        names: list[str],
+        *,
+        current_session_id: Optional[str] = None,
+        workspace_override: Path | None = None,
+    ) -> "ToolRegistry":
+        workspace = (workspace_override or self.workspace).resolve()
         cloned = ToolRegistry(
-            self.workspace,
+            workspace,
             policy=self.policy.model_copy(deep=True),
             current_session_id=current_session_id,
+            capability_profile=self.capability_profile.model_copy(deep=True) if self.capability_profile is not None else None,
         )
         cloned._registrations = {
             name: self._registrations[name]
@@ -359,6 +468,7 @@ class ToolRegistry:
         return cloned
 
     def evaluate_call(self, name: str, arguments: dict[str, Any]):
+        self._ensure_tool_allowed(name)
         spec = self.get_spec(name)
         metadata = self._registrations[name].metadata
         permission_domain = spec.permission_domain
@@ -404,6 +514,7 @@ class ToolRegistry:
 
     def host_execute(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
         self.raise_if_cancelled()
+        self._ensure_tool_allowed(name)
         result = self._get_tool(name).execute(arguments)
         self.raise_if_cancelled()
         result.tool_name = name
@@ -411,6 +522,7 @@ class ToolRegistry:
 
     def host_execute_dynamic_approved(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
         self.raise_if_cancelled()
+        self._ensure_tool_allowed(name)
         tool = self._get_tool(name)
         execute_host_approved = getattr(tool, "execute_host_approved", None)
         if execute_host_approved is None:
@@ -428,12 +540,15 @@ class ToolRegistry:
         :return: 标准化执行结果
         """
         self.raise_if_cancelled()
+        self._ensure_tool_allowed(name)
         registration = self._registrations[name]
         if not registration.metadata.model_callable:
             raise PermissionError(f"Tool '{name}' is host-only and not model-callable")
         decision = self.evaluate_call(name, arguments)
         if decision.action == "deny":
             raise PermissionError(decision.reason)
+        if self._worktree_mode() and self._worktree_tool_supported(name):
+            return self._execute_worktree_tool(name, arguments)
         result = self._get_tool(name).execute(arguments)
         self.raise_if_cancelled()
         result.tool_name = name
@@ -459,8 +574,174 @@ class ToolRegistry:
                 },
             }
             for name, registration in self._registrations.items()
-            if registration.metadata.model_callable
+            if registration.metadata.model_callable and self._tool_allowed(name, registration.metadata)
         ]
+
+    def _tool_allowed(self, name: str, metadata: ToolMetadata | None = None) -> bool:
+        metadata = metadata or self._registrations[name].metadata
+        allowed = _allow_tool(
+            self.capability_profile,
+            name,
+            tool_family=metadata.tool_family,
+            category=metadata.category,
+        )
+        if not allowed:
+            logger.debug("tool filtered by capability profile", extra={"tool_name": name})
+        return allowed
+
+    def _ensure_tool_allowed(self, name: str) -> None:
+        if name not in self._registrations:
+            raise KeyError(name)
+        if not self._tool_allowed(name):
+            logger.debug("tool execution denied by capability profile", extra={"tool_name": name})
+            raise PermissionError(f"Tool '{name}' is not allowed by the active subagent capability profile.")
+
+    def _worktree_mode(self) -> bool:
+        workspace = getattr(self.capability_profile, "workspace", None)
+        return str(getattr(workspace, "mode", "")) == "worktree"
+
+    def _worktree_tool_supported(self, name: str) -> bool:
+        if name in {"write_file", "edit_file", "run_shell"}:
+            return True
+        metadata = self._registrations[name].metadata
+        return metadata.tool_family in {"extension", "mcp"}
+
+    def _execute_worktree_tool(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
+        metadata = self._registrations[name].metadata
+        if name == "write_file":
+            return self._execute_worktree_write(arguments)
+        if name == "edit_file":
+            return self._execute_worktree_edit(arguments)
+        if name == "run_shell":
+            return self._execute_worktree_shell(arguments)
+        if metadata.tool_family in {"extension", "mcp"}:
+            return self._execute_worktree_dynamic(name, arguments)
+        raise PermissionError(f"Tool '{name}' is not supported in isolated worktree mode.")
+
+    def _execute_worktree_write(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        path = self._resolve_worktree_path(arguments["path"])
+        overwrite = bool(arguments.get("overwrite", False))
+        existed = path.exists()
+        before = path.read_text(encoding="utf-8") if existed else ""
+        if existed and not overwrite:
+            raise ValueError("File already exists. Re-run with overwrite=true after confirming the diff.")
+        after = str(arguments["content"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(after, encoding="utf-8")
+        effect = build_file_effect(
+            workspace=self.workspace,
+            tool_name="write_file",
+            permission_domain=PermissionDomain.EDIT,
+            target_path=path,
+            after=after,
+            baseline={"kind": "absent"} if not existed else {"kind": "present", "content_digest": content_digest(before)},
+            overwrite=overwrite,
+        )
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name="write_file",
+            content=f"Written inside isolated worktree: {path.relative_to(self.workspace)}",
+            details={"path": str(path), "worktree": str(self.workspace), "persisted": True, "patch_artifact_pending": True, "effect": effect},
+        )
+
+    def _execute_worktree_edit(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        path = self._resolve_worktree_path(arguments["path"])
+        original = path.read_text(encoding="utf-8")
+        if arguments.get("diff"):
+            updated, replacements = EditFileTool._apply_search_replace_diff(original, arguments["diff"])
+        else:
+            old_text = arguments.get("old_text")
+            new_text = arguments.get("new_text")
+            if old_text is None or new_text is None:
+                raise ValueError("Provide either diff or old_text/new_text.")
+            updated = original.replace(str(old_text), str(new_text), 1)
+            if updated == original:
+                raise ValueError("old_text was not found in file")
+            replacements = 1
+        path.write_text(updated, encoding="utf-8")
+        effect = build_file_effect(
+            workspace=self.workspace,
+            tool_name="edit_file",
+            permission_domain=PermissionDomain.EDIT,
+            target_path=path,
+            after=updated,
+            baseline={"kind": "present", "content_digest": content_digest(original)},
+        )
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name="edit_file",
+            content=f"Edited inside isolated worktree: {path.relative_to(self.workspace)}",
+            details={"path": str(path), "worktree": str(self.workspace), "replacements": replacements, "persisted": True, "patch_artifact_pending": True, "effect": effect},
+        )
+
+    def _execute_worktree_shell(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        timeout = int(arguments.get("timeout_seconds", self.policy.shell_timeout_seconds))
+        command = str(arguments["command"])
+        effect = build_shell_effect(
+            tool_name="run_shell",
+            permission_domain=PermissionDomain.BASH,
+            command=command,
+            timeout_seconds=timeout,
+            workspace=self.workspace,
+        )
+        self._enforce_worktree_analysis(effect["analysis"])
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", command],
+            cwd=str(self.workspace),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        output = (completed.stdout or "") + (("\n" + completed.stderr) if completed.stderr else "")
+        if completed.returncode != 0:
+            raise RuntimeError(f"PowerShell exited with code {completed.returncode}\n{output}".strip())
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name="run_shell",
+            content=output.strip() or "[no output]",
+            details={"command": command, "timeout_seconds": timeout, "returncode": completed.returncode, "worktree": str(self.workspace), "patch_artifact_pending": True, "effect": effect},
+        )
+
+    def _execute_worktree_dynamic(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
+        decision, analysis = self._evaluate_dynamic_call(name, arguments)
+        if decision.action == "deny":
+            raise PermissionError(decision.reason)
+        self._enforce_worktree_analysis(analysis)
+        tool = self._get_tool(name)
+        execute_host_approved = getattr(tool, "execute_host_approved", None)
+        if execute_host_approved is None:
+            raise ValueError(f"Tool '{name}' does not support isolated worktree execution")
+        result = execute_host_approved(arguments)
+        result.tool_name = name
+        details = dict(result.details or {})
+        details.update({"worktree": str(self.workspace), "patch_artifact_pending": bool(analysis.get("touches_workspace")), "analysis": analysis})
+        result.details = details
+        return result
+
+    def _enforce_worktree_analysis(self, analysis: dict[str, Any]) -> None:
+        if bool(analysis.get("requests_network")):
+            raise PermissionError("Isolated worktree sandbox denies network-requesting tool calls.")
+        if bool(analysis.get("touches_external")):
+            raise PermissionError("Isolated worktree sandbox denies tool calls that touch paths outside the worktree.")
+        if bool(analysis.get("destructive_hint")):
+            raise PermissionError("Isolated worktree sandbox denies destructive tool calls.")
+        if bool(analysis.get("protected_path_hint")):
+            raise PermissionError("Isolated worktree sandbox denies protected-path tool calls.")
+        declared_required = analysis.get("declared_exact_effect_mode") == "required"
+        if analysis.get("confidence_band") in {"unknown", "low"} and not bool(analysis.get("known_safe_inspect")) and not declared_required:
+            raise PermissionError("Isolated worktree sandbox denies low-confidence tool calls.")
+
+    def _resolve_worktree_path(self, raw_path: str) -> Path:
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = self.workspace / path
+        resolved = path.resolve()
+        if resolved != self.workspace and self.workspace not in resolved.parents:
+            raise PermissionError("Path is outside the isolated worktree.")
+        if self.policy_evaluator.is_protected(resolved):
+            raise PermissionError("Path is protected by workspace policy.")
+        return resolved
 
     def _get_tool(self, name: str) -> BaseTool:
         """

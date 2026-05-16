@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.subagents.specs import SubAgentRunResult
-from pp_agent.tools.subagent_tool import SpawnSubagentTool
+from pp_agent.tools.subagent_tool import OrchestrateAgentsTool, SpawnSubagentTool
 
 
 class StubSessionHost:
@@ -17,12 +18,17 @@ class FakeRegistry:
 
 
 class FakeSessionStore:
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, messages: list[ChatMessage] | None = None) -> None:
         self._session_id = session_id
+        self._messages = messages or []
 
     def load(self, session_id: str):
         assert session_id == self._session_id
-        return SimpleNamespace(active_head_id="parent-head-1")
+        return SimpleNamespace(active_head_id="parent-head-1", messages=list(self._messages))
+
+    def branch_messages(self, record, head_id):
+        _ = record, head_id
+        return list(self._messages)
 
 
 def _make_tool(tmp_path: Path) -> tuple[SpawnSubagentTool, str]:
@@ -146,3 +152,141 @@ def test_spawn_subagent_tool_returns_failure_summary(tmp_path: Path, monkeypatch
     assert result.details["error_message"] == "Subagent 'missing-spec' is not available."
     assert result.details["failure_kind"] == "spec_not_found"
     assert calls == [session_id]
+
+
+def test_orchestrate_agents_tool_canonicalizes_explicit_edit_contract(tmp_path: Path, monkeypatch) -> None:
+    session_id = "parent-session-1"
+    latest_user = (
+        "\u4e0d\u8981\u76f4\u63a5\u8c03\u7528 edit_file/write_file.\n"
+        "\u8bf7\u5fc5\u987b\u4f7f\u7528 orchestrate_agents.\n"
+        "workflow=code_change\nallow_edits=true\nmax_agents=6\n\n"
+        "\u4efb\u52a1\uff1a\u521b\u5efa docs/worktree-smoke-web.md\uff0c\u5185\u5bb9\u53ea\u5199\u4e00\u884c\uff1a\n"
+        "pp-Echo isolated worktree smoke test"
+    )
+    session_store = FakeSessionStore(
+        session_id,
+        messages=[ChatMessage(role="user", content=[TextPart(text=latest_user)], timestamp=1.0)],
+    )
+    captured: dict[str, object] = {}
+
+    class FakeOrchestrator:
+        def __init__(self, **kwargs) -> None:
+            captured["init"] = kwargs
+
+        def run(
+            self,
+            *,
+            goal,
+            workflow,
+            max_agents,
+            allow_edits,
+            run_timeout_seconds,
+            max_agents_explicit,
+        ):
+            captured.update(
+                {
+                    "goal": goal,
+                    "workflow": workflow,
+                    "max_agents": max_agents,
+                    "allow_edits": allow_edits,
+                    "run_timeout_seconds": run_timeout_seconds,
+                    "max_agents_explicit": max_agents_explicit,
+                }
+            )
+            payload = {
+                "success": True,
+                "partial_success": False,
+                "workflow": workflow,
+                "final_summary": "ok",
+                "steps": [],
+                "recommended_next_action": "done",
+            }
+            return SimpleNamespace(success=True, partial_success=False, to_dict=lambda: dict(payload))
+
+    monkeypatch.setattr("pp_agent.tools.subagent_tool.SubAgentOrchestrator", FakeOrchestrator)
+
+    tool = OrchestrateAgentsTool(
+        tmp_path,
+        session_host=StubSessionHost(),  # type: ignore[arg-type]
+        session_store=session_store,  # type: ignore[arg-type]
+        parent_registry=FakeRegistry(),  # type: ignore[arg-type]
+        current_session_id=session_id,
+        runtime_factory=None,
+    )
+
+    result = tool.execute({"goal": "create the smoke file", "workflow": "research", "allow_edits": False, "max_agents": 2})
+
+    assert result.is_error is False
+    assert captured["goal"] == latest_user
+    assert captured["workflow"] == "code_change"
+    assert captured["allow_edits"] is True
+    assert captured["max_agents"] == 6
+    assert result.details["orchestrated_edit_contract"]["goal_source"] == "latest_user_message"
+    assert result.details["orchestrated_edit_contract"]["original_tool_goal"] == "create the smoke file"
+
+
+def test_orchestrate_agents_render_mentions_patch_artifact_state(tmp_path: Path, monkeypatch) -> None:
+    session_id = "parent-session-1"
+    session_store = FakeSessionStore(session_id)
+
+    class FakeOrchestrator:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run(
+            self,
+            *,
+            goal,
+            workflow,
+            max_agents,
+            allow_edits,
+            run_timeout_seconds,
+            max_agents_explicit,
+        ):
+            _ = goal, max_agents, allow_edits, run_timeout_seconds, max_agents_explicit
+            payload = {
+                "success": True,
+                "partial_success": False,
+                "workflow": workflow,
+                "final_summary": (
+                    "Multi-agent code_change completed. Patch artifact token(s): token-1. "
+                    "Pending changed path(s): docs/worktree-smoke-web.md. "
+                    "Status: staged only, not applied to the main workspace."
+                ),
+                "steps": [
+                    {
+                        "agent": "code-worker",
+                        "status": "success",
+                        "summary": "Patch artifact ready.",
+                        "session_id": "child-session-1",
+                        "inspected_paths": ["docs/worktree-smoke-web.md"],
+                        "staged_actions": [
+                            {
+                                "token": "token-1",
+                                "action_type": "apply_patch_artifact",
+                                "changed_paths": ["docs/worktree-smoke-web.md"],
+                            }
+                        ],
+                    }
+                ],
+                "recommended_next_action": "Use the Approval panel or approve_pending_action first.",
+            }
+            return SimpleNamespace(success=True, partial_success=False, to_dict=lambda: dict(payload))
+
+    monkeypatch.setattr("pp_agent.tools.subagent_tool.SubAgentOrchestrator", FakeOrchestrator)
+
+    tool = OrchestrateAgentsTool(
+        tmp_path,
+        session_host=StubSessionHost(),  # type: ignore[arg-type]
+        session_store=session_store,  # type: ignore[arg-type]
+        parent_registry=FakeRegistry(),  # type: ignore[arg-type]
+        current_session_id=session_id,
+        runtime_factory=None,
+    )
+
+    result = tool.execute({"goal": "create the smoke file", "workflow": "code_change", "allow_edits": True, "max_agents": 6})
+
+    assert "staged patch artifacts: token-1" in result.content
+    assert "pending changed paths: docs/worktree-smoke-web.md" in result.content
+    assert "status: staged only, not applied to the main workspace" in result.content
+    assert "Approval panel or approve_pending_action" in result.content

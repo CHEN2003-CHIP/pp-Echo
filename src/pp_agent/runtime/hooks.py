@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -39,12 +41,24 @@ TransformContextHook = Callable[[AgentState, list[ChatMessage]], list[ChatMessag
 BeforeToolCallHook = Callable[[AgentState, ToolCall, ToolRegistry], BeforeToolCallDecision]
 AfterToolCallHook = Callable[[AgentState, ToolCall, ToolExecutionResult], AfterToolCallDecision]
 ToolErrorHook = Callable[[AgentState, ToolCall, Exception], ToolErrorDecision]
+ContextHookKind = Literal["mcp", "skill", "memory", "project_memory", "extension", "runtime"]
+
+
+@dataclass(frozen=True)
+class ContextHookEntry:
+    name: str
+    kind: ContextHookKind
+    fn: TransformContextHook
+    enabled_for_subagent: bool = False
+
+    def __call__(self, state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
+        return self.fn(state, messages)
 
 
 class RuntimeHooks:
     def __init__(
         self,
-        transform_context: Optional[list[TransformContextHook]] = None,
+        transform_context: Optional[list[TransformContextHook | ContextHookEntry]] = None,
         before_tool_call: Optional[list[BeforeToolCallHook]] = None,
         after_tool_call: Optional[list[AfterToolCallHook]] = None,
         on_tool_error: Optional[list[ToolErrorHook]] = None,
@@ -74,11 +88,31 @@ class RuntimeHooks:
         self.on_tool_error_hooks = list(snapshot.get("on_tool_error", []))
         self.lifecycle_event_hooks = list(snapshot.get("lifecycle_event", []))
 
+    def add_transform_context_hook(
+        self,
+        name: str,
+        kind: ContextHookKind,
+        fn: TransformContextHook,
+        *,
+        enabled_for_subagent: bool = False,
+    ) -> None:
+        self.transform_context_hooks.append(
+            ContextHookEntry(
+                name=name,
+                kind=kind,
+                fn=fn,
+                enabled_for_subagent=enabled_for_subagent,
+            )
+        )
+
     def transform_context(self, state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
         # 调用所有 transform_context 钩子，对传入的消息列表进行转换
         current = messages
         for hook in self.transform_context_hooks:
-            current = hook(state, current)
+            if isinstance(hook, ContextHookEntry):
+                current = hook.fn(state, current)
+            else:
+                current = hook(state, current)
         return current
 
     def before_tool_call(self, state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:

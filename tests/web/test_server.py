@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from pp_agent.web import server as server_module
+from pp_agent.subagents.worktree import WorktreeManager
 from pp_agent.web.server import create_app
 from pp_agent.web.session_manager import WebSessionManager
 from pp_agent.web.workspaces import WebWorkspaceManager
@@ -111,6 +113,50 @@ def test_web_api_approve_pending_action_applies_write_and_removes_token(tmp_path
     assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == "# Memory\n"
     assert token not in approvals.json()["tokens"]
     assert all(item["token"] != token for item in approvals.json()["items"])
+
+
+def test_web_api_lists_patch_artifact_with_session_metadata_and_applies_it(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "pp-agent-test"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "pp-agent-test@example.invalid"], cwd=workspace, check=True)
+    (workspace / "README.md").write_text("init\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=workspace, check=True, capture_output=True, text=True)
+
+    manager = WorktreeManager(workspace)
+    handle = manager.create(run_id="run-web", agent="code-worker", node_id="code_patch", attempt=1)
+    (Path(handle.worktree_path) / "docs").mkdir(parents=True, exist_ok=True)
+    (Path(handle.worktree_path) / "docs" / "worktree-smoke-web.md").write_text(
+        "pp-Echo isolated worktree smoke test\n",
+        encoding="utf-8",
+    )
+    artifact = manager.finalize(handle)
+    assert artifact is not None
+    payload = manager.stage_pending_artifact(
+        artifact,
+        workspace / ".pp-agent" / "pending-edits",
+        session_id="session-1",
+        workflow="code_change",
+    )
+
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+    approvals = client.get("/api/approvals")
+    response = client.post(f"/api/approvals/{payload['token']}/approve")
+    refreshed = client.get("/api/approvals")
+
+    item = next(item for item in approvals.json()["items"] if item["token"] == payload["token"])
+    assert item["details"]["session_id"] == "session-1"
+    assert item["details"]["workflow"] == "code_change"
+    assert item["details"]["changed_paths"] == ["docs/worktree-smoke-web.md"]
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["details"]["changed_paths"] == ["docs/worktree-smoke-web.md"]
+    assert (workspace / "docs" / "worktree-smoke-web.md").read_text(encoding="utf-8") == "pp-Echo isolated worktree smoke test\n"
+    assert payload["token"] not in refreshed.json()["tokens"]
 
 
 def test_web_api_rejects_pending_action_token(tmp_path: Path, monkeypatch) -> None:

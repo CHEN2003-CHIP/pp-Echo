@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -81,6 +82,38 @@ _WEB_EN_KEYWORDS = (
     "summarize this link",
 )
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+logger = logging.getLogger(__name__)
+
+
+def _mcp_policy(runtime: "MCPRuntime"):
+    return getattr(runtime, "subagent_mcp_policy", None)
+
+
+def _policy_allows_server(policy, server_name: str) -> bool:
+    if policy is None:
+        return True
+    if not bool(getattr(policy, "enabled", False)):
+        return False
+    allowed_servers = list(getattr(policy, "allowed_servers", []) or [])
+    return not allowed_servers or server_name in allowed_servers
+
+
+def _policy_allows_tool(policy, server_name: str, tool_name: str) -> bool:
+    if not _policy_allows_server(policy, server_name):
+        return False
+    if policy is None:
+        return True
+    qualified = f"{server_name}.{tool_name}" if "." not in tool_name else tool_name
+    allowed_tools = list(getattr(policy, "allowed_tools", []) or [])
+    return not allowed_tools or qualified in allowed_tools
+
+
+def _policy_allows_dynamic_tools(policy) -> bool:
+    return True if policy is None else bool(getattr(policy, "allow_dynamic_tools", False))
+
+
+def _policy_injects_context(policy) -> bool:
+    return True if policy is None else bool(getattr(policy, "enabled", False) and getattr(policy, "inject_context", False))
 
 
 @dataclass
@@ -104,7 +137,7 @@ class MCPRuntime:
 
     def status(self) -> dict[str, object]:
         return {
-            "enabled": True,
+            "enabled": _mcp_policy(self) is None or bool(getattr(_mcp_policy(self), "enabled", False)),
             "server_count": len(self._manager_or_config_names()),
             "servers": self._manager_or_config_names(),
             "discovered": bool(self._discovered_servers),
@@ -123,6 +156,9 @@ class MCPRuntime:
         if "." not in qualified_name:
             raise ValueError("MCP tool name must be qualified as <server>.<tool>")
         server_name, tool_name = qualified_name.split(".", 1)
+        policy = _mcp_policy(self)
+        if not _policy_allows_tool(policy, server_name, tool_name):
+            raise PermissionError(f"MCP tool is not allowed by the active policy: {qualified_name}")
         self.ensure_server_ready(server_name)
         result = self._manager_for_current_config().call_mcp_tool(server_name, tool_name, arguments)
         return _mcp_result_to_tool_execution(result, tool_name=qualified_name)
@@ -145,11 +181,22 @@ class MCPRuntime:
         self._manager = None
 
     def ensure_discovered(self) -> None:
+        policy = _mcp_policy(self)
+        if policy is not None and not bool(getattr(policy, "enabled", False)):
+            logger.debug("MCP discovery denied by subagent policy")
+            return
         for server_name in self._manager_for_current_config().server_names():
-            if self.settings.capabilities.mcp.includes_server(server_name):
+            if self.settings.capabilities.mcp.includes_server(server_name) and _policy_allows_server(policy, server_name):
                 self.ensure_server_ready(server_name)
 
     def ensure_server_ready(self, server_name: str) -> None:
+        policy = _mcp_policy(self)
+        if policy is not None and not bool(getattr(policy, "enabled", False)):
+            logger.debug("MCP server denied because policy disabled", extra={"server": server_name})
+            return
+        if not _policy_allows_server(policy, server_name):
+            logger.debug("MCP server denied by policy", extra={"server": server_name})
+            return
         if server_name in self._discovered_servers:
             return
         manager = self._manager_for_current_config()
@@ -162,6 +209,12 @@ class MCPRuntime:
         prompts = manager.list_mcp_prompts(server_name)
         for tool in tools:
             qualified_name = f"{server_name}.{tool.name}"
+            if not _policy_allows_tool(policy, server_name, tool.name):
+                logger.debug("MCP tool denied by policy", extra={"server": server_name, "tool": qualified_name})
+                continue
+            if not _policy_allows_dynamic_tools(policy):
+                logger.debug("MCP tool dynamic registration denied by policy", extra={"server": server_name, "tool": qualified_name})
+                continue
             if qualified_name in self._registered_tool_names:
                 continue
             self._registered_tool_names.append(qualified_name)
@@ -197,6 +250,11 @@ class MCPRuntime:
             qualified = f"{server_name}.{item.name}"
             if qualified not in self._resource_names:
                 self._resource_names.append(qualified)
+        visible_tools = [
+            f"{server_name}.{tool.name}"
+            for tool in tools
+            if _policy_allows_tool(policy, server_name, tool.name)
+        ]
         self._server_summaries[server_name] = {
             "server": server_name,
             "description": manager.server_config(server_name).description,
@@ -204,7 +262,7 @@ class MCPRuntime:
             "resource_count": len(resources),
             "prompt_count": len(prompts),
             "session_active": server_name in manager.active_session_names(),
-            "tools": [f"{server_name}.{tool.name}" for tool in tools],
+            "tools": visible_tools,
         }
         self._discovered_servers.add(server_name)
         self.registry.mark_loaded(
@@ -216,6 +274,17 @@ class MCPRuntime:
         )
 
     def transform_context(self, state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
+        policy = _mcp_policy(self)
+        if policy is not None and not bool(getattr(policy, "enabled", False)):
+            self._last_auto_servers = []
+            self._last_match_details = {}
+            logger.debug("MCP context transform denied because policy disabled")
+            return messages
+        if not _policy_injects_context(policy):
+            self._last_auto_servers = []
+            self._last_match_details = {}
+            logger.debug("MCP context injection denied by policy")
+            return messages
         text = self._latest_user_text(state)
         if not text:
             self._last_auto_servers = []
@@ -228,8 +297,9 @@ class MCPRuntime:
             return messages
         activated: list[tuple[str, str, str]] = []
         for server_name, matched_by, reason in matched[:1]:
-            self.ensure_server_ready(server_name)
-            activated.append((server_name, matched_by, reason))
+            if _policy_allows_server(policy, server_name):
+                self.ensure_server_ready(server_name)
+                activated.append((server_name, matched_by, reason))
         self._last_auto_servers = [server_name for server_name, _, _ in activated]
         self._last_match_details = {
             "matched_server": activated[0][0],
@@ -278,7 +348,7 @@ class MCPRuntime:
         explicit: list[tuple[int, str]] = []
         manager = self._manager_for_current_config()
         for server_name in manager.server_names():
-            if not self.settings.capabilities.mcp.includes_server(server_name):
+            if not self.settings.capabilities.mcp.includes_server(server_name) or not _policy_allows_server(_mcp_policy(self), server_name):
                 continue
             pos = _mention_position(lowered, server_name)
             if pos is not None:
@@ -291,7 +361,7 @@ class MCPRuntime:
         manager = self._manager_for_current_config()
         candidates: list[tuple[float, str, str]] = []
         for server_name in manager.server_names():
-            if not self.settings.capabilities.mcp.includes_server(server_name):
+            if not self.settings.capabilities.mcp.includes_server(server_name) or not _policy_allows_server(_mcp_policy(self), server_name):
                 continue
             server = manager.server_config(server_name)
             score, matched_by, reason = self._intent_score(server, text)
@@ -306,7 +376,7 @@ class MCPRuntime:
         candidates: list[tuple[float, str, str]] = []
         manager = self._manager_for_current_config()
         for server_name in manager.server_names():
-            if not self.settings.capabilities.mcp.includes_server(server_name):
+            if not self.settings.capabilities.mcp.includes_server(server_name) or not _policy_allows_server(_mcp_policy(self), server_name):
                 continue
             server = manager.server_config(server_name)
             score = 0.0
@@ -395,7 +465,7 @@ class MCPRuntime:
         return [
             name
             for name in self._manager_for_current_config().server_names()
-            if self.settings.capabilities.mcp.includes_server(name)
+            if self.settings.capabilities.mcp.includes_server(name) and _policy_allows_server(_mcp_policy(self), name)
         ]
 
     @staticmethod
@@ -448,18 +518,20 @@ def load_executable_extensions(
     runtime_hooks: RuntimeHooks,
     search_roots: Optional[list[object]] = None,
     include_mcp: Optional[bool] = None,
+    include_extensions: bool = True,
     transport_factory=None,
     time_fn=None,
 ) -> ExecutableExtensions:
     runtime = ExecutableExtensions()
-    descriptors = load_extensions(
-        workspace.resolve(),
-        settings.global_dir,
-        config=settings.capabilities.extensions,
-        search_roots=search_roots,
-    )
-    for descriptor in descriptors.values():
-        _load_extension_descriptor(descriptor, runtime, tool_registry, runtime_hooks)
+    if include_extensions:
+        descriptors = load_extensions(
+            workspace.resolve(),
+            settings.global_dir,
+            config=settings.capabilities.extensions,
+            search_roots=search_roots,
+        )
+        for descriptor in descriptors.values():
+            _load_extension_descriptor(descriptor, runtime, tool_registry, runtime_hooks)
 
     mcp_enabled = settings.capabilities.mcp.enable if include_mcp is None else include_mcp
     if mcp_enabled:
@@ -471,7 +543,7 @@ def load_executable_extensions(
             transport_factory=transport_factory,
             time_fn=time_fn,
         )
-        runtime_hooks.transform_context_hooks.append(runtime.mcp_runtime.transform_context)
+        runtime_hooks.add_transform_context_hook("mcp_runtime", "mcp", runtime.mcp_runtime.transform_context)
     return runtime
 
 
@@ -517,7 +589,12 @@ def _apply_loaded_extension(
         )
     for command in loaded.commands:
         runtime.commands.register(command)
-    runtime_hooks.transform_context_hooks.extend(loaded.transform_context_hooks)
+    for index, hook in enumerate(loaded.transform_context_hooks):
+        runtime_hooks.add_transform_context_hook(
+            f"extension:{loaded.descriptor.name}:transform:{index}",
+            "extension",
+            hook,
+        )
     runtime_hooks.before_tool_call_hooks.extend(loaded.before_tool_call_hooks)
     runtime_hooks.after_tool_call_hooks.extend(loaded.after_tool_call_hooks)
     runtime_hooks.on_tool_error_hooks.extend(loaded.tool_error_hooks)

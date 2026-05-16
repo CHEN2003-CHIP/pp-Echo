@@ -842,6 +842,7 @@ function approvalEmptyText(busy: boolean, workspaceApprovalCount: number) {
 }
 
 function approvalTitle(actionType: string) {
+  if (actionType === "apply_patch_artifact") return "apply isolated patch artifact";
   if (actionType === "write_file") return "apply staged write";
   if (actionType === "edit_file") return "apply staged edit";
   if (actionType === "run_shell") return "run staged command";
@@ -849,6 +850,7 @@ function approvalTitle(actionType: string) {
 }
 
 function approvalButtonLabel(actionType: string) {
+  if (actionType === "apply_patch_artifact") return "Apply patch";
   if (actionType === "write_file") return "Apply write";
   if (actionType === "edit_file") return "Apply edit";
   if (actionType === "run_shell") return "Run command";
@@ -856,6 +858,14 @@ function approvalButtonLabel(actionType: string) {
 }
 
 function approvalSuccessMessage(actionType: string, result: ApprovalActionResponse) {
+  if (actionType === "apply_patch_artifact") {
+    const changedPaths = Array.isArray(result.details?.changed_paths)
+      ? result.details.changed_paths.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : [];
+    return changedPaths.length > 0
+      ? `Patch applied successfully: ${changedPaths.join(", ")}`
+      : "Patch artifact applied successfully.";
+  }
   const path = result.details?.absolute_path || result.details?.path;
   if (actionType === "write_file" || actionType === "edit_file") {
     return typeof path === "string" && path.trim() ? `Applied successfully: ${path}` : "Applied successfully.";
@@ -865,6 +875,16 @@ function approvalSuccessMessage(actionType: string, result: ApprovalActionRespon
 }
 
 function approvalDescription(item: PendingAction) {
+  if (item.action_type === "apply_patch_artifact") {
+    const details = item.details || {};
+    const changedPaths = Array.isArray(details.changed_paths)
+      ? details.changed_paths.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : [];
+    if (changedPaths.length > 0) {
+      return `Changed paths: ${changedPaths.join(", ")}. Staged only; the main workspace updates after approval.`;
+    }
+    return "Isolated patch artifact is staged only; the main workspace updates after approval.";
+  }
   if (item.target_path) return `Target: ${item.target_path}`;
   if (item.command) return `Command: ${item.command}`;
   const details = item.details || {};

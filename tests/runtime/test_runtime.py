@@ -4,7 +4,7 @@ from pathlib import Path
 from agent_core.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks
 from agent_core.runtime.monitor import RuntimeMonitor
 from agent_core.runtime.session import AgentSession
-from agent_core.types import ChatMessage, ModelConfig, TextPart
+from agent_core.types import ChatMessage, ModelConfig, TextPart, ToolCall
 from storage.sessions import SessionStore
 from storage.timeline import TimelineStore
 from tools.pending_actions import PendingActionStore
@@ -590,6 +590,186 @@ def test_agent_runtime_stages_network_mcp_tool_for_host_approval(tmp_path: Path)
 
     assert seen == ["https://example.com/article"]
     assert result.content == "fetched"
+
+
+def test_explicit_orchestrated_edit_forces_orchestrate_agents_before_direct_tools(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    agent.state.messages.append(
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart(
+                    text=(
+                        "不要直接调用 edit_file/write_file。\n"
+                        "请必须使用 orchestrate_agents。\n"
+                        "workflow=code_change\nallow_edits=true\n"
+                        "任务：修改 README.md"
+                    )
+                )
+            ],
+            timestamp=0.0,
+        )
+    )
+
+    assistant_text, tool_calls = agent._collect_assistant_message()
+
+    assert assistant_text == ""
+    assert [call.name for call in tool_calls] == ["orchestrate_agents"]
+    assert tool_calls[0].arguments["workflow"] == "code_change"
+    assert tool_calls[0].arguments["allow_edits"] is True
+    assert tool_calls[0].arguments["max_agents"] == 6
+
+
+def test_subagent_runtime_does_not_force_nested_orchestrate_agents(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    agent.subagent_profile = object()
+    agent.state.messages.append(
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart(
+                    text=(
+                        "不要直接调用 edit_file/write_file。\n"
+                        "请必须使用 orchestrate_agents。\n"
+                        "workflow=code_change\nallow_edits=true\nmax_agents=6\n\n"
+                        "任务：创建 docs/worktree-smoke-web.md，内容只写一行：\n"
+                        "pp-Echo isolated worktree smoke test"
+                    )
+                )
+            ],
+            timestamp=0.0,
+        )
+    )
+
+    assistant_text, tool_calls = agent._collect_assistant_message()
+
+    assert assistant_text == "ok"
+    assert tool_calls == []
+    assert agent._explicit_orchestrated_edit_request(agent.state) is None
+
+
+def test_orchestrated_edit_contract_blocks_main_direct_edit_fallback(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    agent.state.messages.append(
+        ChatMessage(
+            role="user",
+            content=[TextPart(text="请必须使用 orchestrate_agents workflow=code_change allow_edits=true 修改 README.md")],
+            timestamp=0.0,
+        )
+    )
+    agent.state.messages.append(
+        ToolExecutionResult(
+            tool_call_id="call-orch",
+            tool_name="orchestrate_agents",
+            content="Multi-agent orchestration completed\nNo patch artifact.",
+            details={
+                "workflow": "code_change",
+                "steps": [
+                    {
+                        "agent": "code-worker",
+                        "status": "failed",
+                        "failure_kind": "no_patch_artifact",
+                        "staged_actions": [],
+                    }
+                ],
+            },
+        ).as_chat_message()
+    )
+
+    decision = agent._default_before_tool_call(
+        agent.state,
+        ToolCall(id="call-edit", name="edit_file", arguments={"path": "README.md", "old_text": "a", "new_text": "b"}),
+        agent.tool_registry,
+    )
+
+    assert decision.action == "reject"
+    assert decision.details["orchestrated_edit_contract"] is True
+
+
+def test_main_runtime_waits_for_patch_artifact_approval_before_reading_changed_path(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    agent.state.messages.append(
+        ChatMessage(
+            role="user",
+            content=[TextPart(text="请必须使用 orchestrate_agents workflow=code_change allow_edits=true 创建 docs/worktree-smoke-web.md")],
+            timestamp=0.0,
+        )
+    )
+    agent.state.messages.append(
+        ToolExecutionResult(
+            tool_call_id="call-orch",
+            tool_name="orchestrate_agents",
+            content="Multi-agent orchestration succeeded\nstaged patch artifacts: token-1",
+            details={
+                "workflow": "code_change",
+                "steps": [
+                    {
+                        "agent": "code-worker",
+                        "status": "success",
+                        "staged_actions": [
+                            {
+                                "token": "token-1",
+                                "action_type": "apply_patch_artifact",
+                                "changed_paths": ["docs/worktree-smoke-web.md"],
+                            }
+                        ],
+                    }
+                ],
+            },
+        ).as_chat_message()
+    )
+
+    message = agent._pending_patch_artifact_wait_message(
+        agent.state,
+        [ToolCall(id="call-read", name="read_file", arguments={"path": "docs/worktree-smoke-web.md"})],
+    )
+
+    assert "stop probing and wait for approval" in message
+    assert "token-1" in message
+    assert "docs/worktree-smoke-web.md" in message
+
+
+def test_main_runtime_waits_for_patch_artifact_approval_before_more_tool_probing(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    agent.state.messages.append(
+        ChatMessage(
+            role="user",
+            content=[TextPart(text="请必须使用 orchestrate_agents workflow=code_change allow_edits=true 创建 docs/worktree-smoke-web.md")],
+            timestamp=0.0,
+        )
+    )
+    agent.state.messages.append(
+        ToolExecutionResult(
+            tool_call_id="call-orch",
+            tool_name="orchestrate_agents",
+            content="Multi-agent orchestration succeeded\nstaged patch artifacts: token-1",
+            details={
+                "workflow": "code_change",
+                "steps": [
+                    {
+                        "agent": "code-worker",
+                        "status": "success",
+                        "staged_actions": [
+                            {
+                                "token": "token-1",
+                                "action_type": "apply_patch_artifact",
+                                "changed_paths": ["docs/worktree-smoke-web.md"],
+                            }
+                        ],
+                    }
+                ],
+            },
+        ).as_chat_message()
+    )
+
+    for tool_call in [
+        ToolCall(id="call-list", name="list_files", arguments={"path": "docs"}),
+        ToolCall(id="call-shell", name="run_shell", arguments={"command": "Get-ChildItem docs"}),
+    ]:
+        message = agent._pending_patch_artifact_wait_message(agent.state, [tool_call])
+        assert "stop probing and wait for approval" in message
+        assert "Approval panel or approve_pending_action" in message
+        assert "token-1" in message
 
 
 def test_runtime_policy_details_include_shared_analysis_fields(tmp_path: Path) -> None:

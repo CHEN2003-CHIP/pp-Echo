@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
+
+from pp_agent.runtime.hooks import ContextHookEntry
+from pp_agent.subagents.capabilities import SubAgentProfile
+
+
+logger = logging.getLogger(__name__)
 
 
 class SubAgentTurnLimitReached(RuntimeError):
@@ -54,6 +61,88 @@ class SubAgentRuntimeAdapter:
         attach = getattr(self._runtime, "_attach_runtime_context_to_tool_registry", None)
         if callable(attach):
             attach()
+
+    def apply_profile(self, profile: SubAgentProfile) -> None:
+        """Apply the second-line subagent isolation guard.
+
+        Runtime creation options are the first line of defense and should avoid
+        installing disallowed hooks in the child runtime at all. This adapter
+        pass is intentionally kept as defense-in-depth for older factories and
+        tests that still create full runtimes.
+        """
+        runtime = self._runtime
+        setattr(runtime, "subagent_profile", profile)
+        registry = getattr(runtime, "tool_registry", None)
+        if registry is not None and hasattr(registry, "set_capability_profile"):
+            registry.set_capability_profile(profile)
+        mcp_runtime = getattr(runtime, "mcp_runtime", None)
+        if mcp_runtime is not None:
+            setattr(mcp_runtime, "subagent_mcp_policy", profile.mcp)
+            if profile.mcp.enabled and registry is not None:
+                mcp_runtime.tool_registry = registry
+        skill_runtime = getattr(runtime, "skill_runtime", None)
+        if skill_runtime is not None:
+            setattr(skill_runtime, "subagent_skill_policy", profile.skill)
+        self._filter_transform_context_hooks(profile)
+        logger.debug(
+            "subagent profile applied",
+            extra={
+                "profile": profile.name,
+                "mcp_enabled": profile.mcp.enabled,
+                "skill_enabled": profile.skill.enabled,
+                "workspace_mode": profile.workspace.mode,
+            },
+        )
+
+    def _filter_transform_context_hooks(self, profile: SubAgentProfile) -> None:
+        hooks = getattr(self._runtime, "runtime_hooks", None)
+        if hooks is None or not hasattr(hooks, "transform_context_hooks"):
+            return
+        kept: list[Any] = []
+        for hook in list(hooks.transform_context_hooks):
+            keep = self._keep_transform_hook(hook, profile)
+            logger.debug(
+                "subagent transform hook %s",
+                "kept" if keep else "removed",
+                extra={"profile": profile.name, "hook": self._hook_name(hook)},
+            )
+            if keep:
+                kept.append(hook)
+        hooks.transform_context_hooks = kept
+
+    def _keep_transform_hook(self, hook: Any, profile: SubAgentProfile) -> bool:
+        if isinstance(hook, ContextHookEntry):
+            if hook.kind == "runtime":
+                return True
+            if hook.kind == "mcp":
+                return profile.context_hooks.allow_mcp_hook
+            if hook.kind == "skill":
+                return profile.context_hooks.allow_skill_hook
+            if hook.kind in {"memory", "project_memory"}:
+                return profile.context_hooks.allow_memory_hooks
+            if hook.kind == "extension":
+                return profile.context_hooks.allow_extension_hooks
+            return bool(hook.enabled_for_subagent)
+        owner = getattr(hook, "__self__", None)
+        owner_name = owner.__class__.__name__ if owner is not None else ""
+        if owner is self._runtime:
+            return True
+        if owner_name == "MCPRuntime":
+            return profile.context_hooks.allow_mcp_hook
+        if owner_name == "SkillRuntime":
+            return profile.context_hooks.allow_skill_hook
+        if owner_name in {"MemoryRetrievalHook", "ProjectMemoryContextHook"}:
+            return profile.context_hooks.allow_memory_hooks
+        return False
+
+    @staticmethod
+    def _hook_name(hook: Any) -> str:
+        if isinstance(hook, ContextHookEntry):
+            return f"{hook.kind}:{hook.name}"
+        owner = getattr(hook, "__self__", None)
+        owner_name = owner.__class__.__name__ if owner is not None else ""
+        name = getattr(hook, "__name__", hook.__class__.__name__)
+        return f"{owner_name}.{name}" if owner_name else str(name)
 
     def set_cancellation_token(self, token: Any) -> None:
         setter = getattr(self._runtime, "set_cancellation_token", None)

@@ -27,7 +27,9 @@ FILE_MEMORY_PROTOCOL_PROMPT = (
 SUBAGENT_ORCHESTRATION_PROMPT = (
     "Use orchestrate_agents for complex repository research, debugging, or implementation planning that benefits "
     "from parallel specialized subagents. For simple questions, answer directly. Set allow_edits=true only when "
-    "the user explicitly allows subagents to stage file edits; staged edits still require normal approval."
+    "the user explicitly allows subagents to stage file edits; staged edits still require normal approval. "
+    "When the user explicitly requires orchestrate_agents or workflow=code_change with allow_edits=true, do not "
+    "fall back to direct edit_file/write_file if orchestration produces no patch artifact; report the failure instead."
 )
 
 PERMISSION_MODES = {"read-only", "workspace-write", "danger-full-access", "prompt"}
@@ -172,6 +174,8 @@ class StorageSettings(BaseModel):
 class SubAgentSettings(BaseModel):
     default_max_turns: Optional[int] = None
     max_turns: dict[str, int] = Field(default_factory=dict)
+    enforce_orchestrated_edit_contract: bool = True
+    require_patch_artifact_for_code_change: bool = True
 
     def max_turns_for(self, name: str, fallback: int) -> int:
         configured = self.max_turns.get(name, self.default_max_turns)
@@ -359,6 +363,10 @@ class Settings(BaseModel):
                 str(name): max(1, int(value))
                 for name, value in dict(subagent_config["max_turns"]).items()
             }
+        if "enforce_orchestrated_edit_contract" in subagent_config:
+            self.subagents.enforce_orchestrated_edit_contract = bool(subagent_config["enforce_orchestrated_edit_contract"])
+        if "require_patch_artifact_for_code_change" in subagent_config:
+            self.subagents.require_patch_artifact_for_code_change = bool(subagent_config["require_patch_artifact_for_code_change"])
 
     def _apply_capability_config(self, capability_config: dict) -> None:
         """

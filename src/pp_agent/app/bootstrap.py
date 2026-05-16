@@ -56,6 +56,7 @@ from pp_agent.tools.legacy_hints_readiness import build_legacy_hint_readiness_re
 from pp_agent.tools.metadata import ToolMetadata
 from pp_agent.tools.registry import ToolRegistration, ToolRegistry
 from pp_agent.tools.subagent_tool import OrchestrateAgentsTool, SpawnSubagentTool
+from pp_agent.subagents.capabilities import RuntimeCreationOptions
 from pp_agent.subagents.catalog import SubAgentCatalog
 from pp_agent.subagents.specs import SubAgentSpec
 
@@ -902,6 +903,7 @@ def create_runtime_from_record(
     workspace: Path,
     record: SessionRecord,
     lifecycle_subscribers: Optional[list[LifecycleSubscriber]] = None,
+    options: Optional[RuntimeCreationOptions] = None,
 ) -> AgentRuntime:
     """
     根据会话记录创建Agent运行时实例
@@ -911,9 +913,16 @@ def create_runtime_from_record(
     :return: Agent运行时实例
     """
     settings = load_settings(workspace)
+    options = options or RuntimeCreationOptions.main()
     session_store = session_store_for(workspace)
-    tool_registry = ToolRegistry(workspace, policy=settings.tool_policy, current_session_id=record.id)
-    register_file_memory_tools(tool_registry, settings=settings)
+    tool_registry = ToolRegistry(
+        workspace,
+        policy=settings.tool_policy,
+        current_session_id=record.id,
+        capability_profile=options.subagent_profile,
+    )
+    if options.mode == "main" or (options.subagent_profile is not None and options.subagent_profile.memory.allow_memory_search):
+        register_file_memory_tools(tool_registry, settings=settings)
     _register_spawn_subagent_tool(
         workspace=workspace,
         session_store=session_store,
@@ -943,6 +952,8 @@ def create_runtime_from_record(
         memory_provider=memory_provider_for(workspace),
         auto_index_scheduler=auto_index_scheduler_for(workspace),
         learning_runtime=learning_runtime_for(workspace, llm_client),
+        enforce_orchestrated_edit_contract=settings.subagents.enforce_orchestrated_edit_contract,
+        require_patch_artifact_for_code_change=settings.subagents.require_patch_artifact_for_code_change,
     )
     # 安装自动检查点钩子
     _install_auto_checkpoint_hook(
@@ -958,7 +969,9 @@ def create_runtime_from_record(
         settings=settings,
         tool_registry=tool_registry,
         runtime_hooks=agent.runtime_hooks,
-        search_roots=_extension_roots_for(workspace.resolve(), settings),
+        search_roots=_extension_roots_for(workspace.resolve(), settings) if options.enable_extension_hooks else [],
+        include_mcp=options.enable_mcp,
+        include_extensions=options.enable_extension_hooks,
     )
     # 发现扩展资源根目录
     extension_resource_roots = discover_extension_resource_roots(extension_runtime, workspace.resolve(), reason="startup")
@@ -966,15 +979,19 @@ def create_runtime_from_record(
         workspace=workspace.resolve(),
         user_root=settings.global_dir,
         config=settings.capabilities.skills,
-        search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
+        search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]) if options.enable_skills else [],
     )
+    if options.subagent_profile is not None:
+        setattr(skill_runtime, "subagent_skill_policy", options.subagent_profile.skill)
     # 注册上下文转换钩子
-    project_memory_hook = project_memory_context_hook_for(workspace)
-    if project_memory_hook is not None:
-        agent.runtime_hooks.transform_context_hooks.append(project_memory_hook.transform_context)
-    retrieval_hook = memory_retrieval_hook_for(workspace, session_id=record.id)
-    agent.runtime_hooks.transform_context_hooks.append(retrieval_hook.transform_context)
-    agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
+    if options.enable_memory_hooks:
+        project_memory_hook = project_memory_context_hook_for(workspace)
+        if project_memory_hook is not None:
+            agent.runtime_hooks.add_transform_context_hook("project_memory", "project_memory", project_memory_hook.transform_context)
+        retrieval_hook = memory_retrieval_hook_for(workspace, session_id=record.id)
+        agent.runtime_hooks.add_transform_context_hook("memory_retrieval", "memory", retrieval_hook.transform_context)
+    if options.enable_skills:
+        agent.runtime_hooks.add_transform_context_hook("skill_runtime", "skill", skill_runtime.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
     setattr(agent, "extension_resources", extension_runtime.resources)
@@ -982,6 +999,10 @@ def create_runtime_from_record(
     setattr(agent, "mcp_runtime", extension_runtime.mcp_runtime)
     setattr(agent, "skill_runtime", skill_runtime)
     setattr(agent, "_extension_runtime", extension_runtime)
+    if options.subagent_profile is not None:
+        setattr(agent, "subagent_profile", options.subagent_profile)
+        if extension_runtime.mcp_runtime is not None:
+            setattr(extension_runtime.mcp_runtime, "subagent_mcp_policy", options.subagent_profile.mcp)
     for subscriber in lifecycle_subscribers or []:
         agent.subscribe(subscriber)
     return agent
@@ -1033,6 +1054,7 @@ def reload_runtime_extensions(
         runtime_hooks=agent.runtime_hooks,
         search_roots=_extension_roots_for(workspace.resolve(), settings),
         include_mcp=include_mcp,
+        include_extensions=True,
         transport_factory=transport_factory,
         time_fn=time_fn,
     )
@@ -1046,10 +1068,10 @@ def reload_runtime_extensions(
     agent.learning_runtime = learning_runtime_for(workspace, agent.llm_client)
     project_memory_hook = project_memory_context_hook_for(workspace)
     if project_memory_hook is not None:
-        agent.runtime_hooks.transform_context_hooks.append(project_memory_hook.transform_context)
+        agent.runtime_hooks.add_transform_context_hook("project_memory", "project_memory", project_memory_hook.transform_context)
     retrieval_hook = memory_retrieval_hook_for(workspace, session_id=agent.session_id)
-    agent.runtime_hooks.transform_context_hooks.append(retrieval_hook.transform_context)
-    agent.runtime_hooks.transform_context_hooks.append(skill_runtime.transform_context)
+    agent.runtime_hooks.add_transform_context_hook("memory_retrieval", "memory", retrieval_hook.transform_context)
+    agent.runtime_hooks.add_transform_context_hook("skill_runtime", "skill", skill_runtime.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
     setattr(agent, "extension_resources", extension_runtime.resources)

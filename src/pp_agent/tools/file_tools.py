@@ -10,6 +10,7 @@ from typing import Any
 
 from pp_agent.domain import ToolSpec
 from pp_agent.storage.approvals import PendingActionStore, create_approval_grant
+from pp_agent.subagents.worktree import PatchArtifact, WorktreeManager
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.effects import build_file_effect, build_shell_effect, content_digest
 from pp_agent.tools.policy import PermissionDomain
@@ -232,6 +233,25 @@ class PreviewPendingActionTool(BaseTool):
         payload = store.load(arguments["token"])
         if payload["action_type"] == "run_shell":
             content = payload.get("command") or ""
+        elif payload["action_type"] == "apply_patch_artifact":
+            artifact_payload = payload.get("details", {}).get("artifact", {})
+            changed_paths = payload.get("details", {}).get("changed_paths", [])
+            check = "unknown"
+            try:
+                artifact = PatchArtifact(**artifact_payload)
+                completed = WorktreeManager(self.workspace).apply_check(artifact)
+                check = "ok" if completed.returncode == 0 else (completed.stderr or completed.stdout or "failed").strip()
+            except Exception as exc:  # noqa: BLE001
+                check = str(exc)
+            content = "\n".join(
+                [
+                    f"Patch artifact: {artifact_payload.get('artifact_id', 'unknown')}",
+                    f"Patch path: {artifact_payload.get('patch_path', payload.get('details', {}).get('patch_path', 'unknown'))}",
+                    f"Worktree: {artifact_payload.get('worktree_path', 'unknown')}",
+                    f"Changed paths: {', '.join(changed_paths) if changed_paths else 'none'}",
+                    f"Apply check: {check}",
+                ]
+            )
         elif payload["action_type"] in {"run_extension_tool", "run_mcp_tool"}:
             content = "No preview available."
         elif payload["action_type"] == "planner_approval":
@@ -372,6 +392,30 @@ class ApprovePendingActionTool(BaseTool):
                     "command": payload["command"],
                     "timeout_seconds": timeout,
                     "returncode": completed.returncode,
+                    "effect": effect,
+                },
+            )
+        if action_type == "apply_patch_artifact":
+            try:
+                artifact = PatchArtifact(**payload.get("details", {}).get("artifact", {}))
+                manager = WorktreeManager(self.workspace)
+                check = manager.apply_check(artifact)
+                if check.returncode != 0:
+                    raise RuntimeError((check.stderr or check.stdout or "git apply --check failed").strip())
+                applied = manager.apply(artifact)
+                if applied.returncode != 0:
+                    raise RuntimeError((applied.stderr or applied.stdout or "git apply failed").strip())
+            except Exception as exc:
+                return self._record_execution_failure(store, arguments["token"], effect, exc)
+            return self._consume_success(
+                store,
+                token=arguments["token"],
+                content=f"Patch artifact applied successfully.\nArtifact: {artifact.artifact_id}",
+                effect=effect,
+                details={
+                    "token": arguments["token"],
+                    "artifact": artifact.model_dump(mode="python"),
+                    "changed_paths": list(artifact.changed_paths),
                     "effect": effect,
                 },
             )
@@ -532,6 +576,12 @@ class ApprovePendingActionTool(BaseTool):
                 effect_id=stored_effect["effect_id"],
                 created_at=stored_effect["created_at"],
             )
+        if action_type == "apply_patch_artifact":
+            artifact_payload = payload.get("details", {}).get("artifact", {})
+            artifact = PatchArtifact(**artifact_payload)
+            return WorktreeManager(self.workspace).build_effect(
+                artifact.model_copy(update={"status": artifact.status})
+            ) | {"effect_id": stored_effect["effect_id"], "created_at": stored_effect["created_at"]}
         if action_type in {"run_extension_tool", "run_mcp_tool"}:
             if self.tool_registry is None:
                 raise ValueError("Dynamic approvals require tool registry access.")
@@ -567,6 +617,15 @@ class RejectPendingActionTool(BaseTool):
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         store = PendingActionStore(self.pending_root())
         payload = store.load(arguments["token"])
+        if payload["action_type"] == "apply_patch_artifact":
+            payload["lifecycle"] = {
+                "state": "rejected",
+                "updated_at": time.time(),
+                "failure_reason_code": None,
+                "failure_reason_detail": None,
+            }
+            store.save(arguments["token"], payload)
+            return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=f"Rejected pending action {arguments['token']}", details={"token": arguments["token"], "action_type": payload["action_type"]})
         store.remove(arguments["token"])
         return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=f"Rejected pending action {arguments['token']}", details={"token": arguments["token"], "action_type": payload["action_type"]})
 

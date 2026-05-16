@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from pp_agent.runtime.cancellation import CancellationToken, OperationCancelled
 from pp_agent.runtime.lifecycle import SUBAGENT_END, SUBAGENT_FAIL, SUBAGENT_PROGRESS, SUBAGENT_START
+from pp_agent.subagents.capabilities import RuntimeCreationOptions, SubAgentProfile
 from pp_agent.subagents.catalog import SubAgentCatalog
 from pp_agent.subagents.runtime_adapter import SubAgentRuntimeAdapter, SubAgentTurnLimitReached
 from pp_agent.subagents.specs import (
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from pp_agent.storage.sessions import SessionStore
     from pp_agent.tools.registry import ToolRegistry
 
-RuntimeFactory = Callable[[Path, Any, Optional[list[Callable]]], Any]
+RuntimeFactory = Callable[..., Any]
 
 
 def build_subagent_tool_registry(
@@ -29,6 +30,8 @@ def build_subagent_tool_registry(
     workspace: Path,
     current_session_id: str,
     allowlist: list[str],
+    profile: SubAgentProfile | None = None,
+    tool_workspace: Path | None = None,
 ) -> ToolRegistry:
     _ = workspace
     metadata = parent_registry.metadata()
@@ -38,8 +41,27 @@ def build_subagent_tool_registry(
         if name in metadata
         and metadata[name].model_callable
         and name != "spawn_subagent"
+        and name != "orchestrate_agents"
     ]
-    return parent_registry.clone_selected(allowed_names, current_session_id=current_session_id)
+    if profile is not None:
+        if profile.workspace.mode == "read_only":
+            allowed_names = [name for name in allowed_names if name not in {"write_file", "edit_file", "run_shell", "approve_pending_action", "reject_pending_action"}]
+        elif profile.workspace.mode == "staged_edits":
+            allowed_names = [name for name in allowed_names if name not in {"approve_pending_action", "reject_pending_action"}]
+        if not profile.tool.allow_dynamic_tools:
+            allowed_names = [
+                name
+                for name in allowed_names
+                if metadata[name].tool_family not in {"extension", "mcp"} or name in {"memory_search", "memory_get"}
+            ]
+    cloned = parent_registry.clone_selected(
+        allowed_names,
+        current_session_id=current_session_id,
+        workspace_override=tool_workspace,
+    )
+    if profile is not None and hasattr(cloned, "set_capability_profile"):
+        cloned.set_capability_profile(profile)
+    return cloned
 
 
 class SubAgentManager:
@@ -78,6 +100,7 @@ class SubAgentManager:
         parent_head_id: Optional[str],
         spec_name: str,
         task: str,
+        tool_workspace: Path | None = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> SubAgentRunResult:
         started_at = self._now()
@@ -147,7 +170,11 @@ class SubAgentManager:
             if token is not None:
                 token.raise_if_cancelled()
             child_record = self.session_store.load(child_session_id)
-            child_runtime = self.runtime_factory(self.workspace, child_record, None)
+            profile = spec.resolved_profile()
+            if tool_workspace is not None:
+                profile.workspace.worktree_path = str(tool_workspace.resolve())
+                profile.workspace.parent_workspace = str(self.workspace)
+            child_runtime = self._create_child_runtime(child_record, profile)
             child = SubAgentRuntimeAdapter(child_runtime)
             if token is not None:
                 child.set_cancellation_token(token)
@@ -160,9 +187,12 @@ class SubAgentManager:
                     self.parent_registry,
                     self.workspace,
                     child_session_id,
-                    spec.tool_allowlist,
+                    profile.tool.allowlist or spec.tool_allowlist,
+                    profile=profile,
+                    tool_workspace=tool_workspace,
                 )
             )
+            child.apply_profile(profile)
             child.queue_lifecycle_event(
                 SUBAGENT_START,
                 details={
@@ -412,12 +442,22 @@ class SubAgentManager:
 
     def _validate_spec(self, spec: SubAgentSpec) -> Optional[str]:
         metadata = self.parent_registry.metadata()
-        for name in spec.tool_allowlist:
-            if name == "spawn_subagent":
+        profile = spec.resolved_profile()
+        for name in profile.tool.allowlist or spec.tool_allowlist:
+            if name in {"spawn_subagent", "orchestrate_agents"}:
                 return f"Subagent '{spec.name}' cannot allow tool 'spawn_subagent'."
             if name not in metadata:
                 return f"Subagent '{spec.name}' references unknown tool '{name}'."
+            if profile.workspace.mode == "read_only" and name in {"write_file", "edit_file", "run_shell"}:
+                return f"Subagent '{spec.name}' is read-only but allows write tool '{name}'."
         return None
+
+    def _create_child_runtime(self, child_record, profile: SubAgentProfile):
+        options = RuntimeCreationOptions.for_subagent(profile)
+        try:
+            return self.runtime_factory(self.workspace, child_record, None, options=options)
+        except TypeError:
+            return self.runtime_factory(self.workspace, child_record, None)
 
     @staticmethod
     def _validate_summary_text(final_text: str, parsed: dict[str, object]) -> Optional[str]:

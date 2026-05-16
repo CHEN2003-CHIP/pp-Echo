@@ -21,6 +21,7 @@ from pp_agent.runtime.turn_loop import TurnController, TurnDecision
 from pp_agent.runtime.hooks import (
     AfterToolCallDecision,
     BeforeToolCallDecision,
+    ContextHookEntry,
     RuntimeHooks,
     ToolErrorDecision,
 )
@@ -63,6 +64,7 @@ from pp_agent.domain import PlanStep, QueuedMessage
 from pp_agent.runtime.state import AgentEvent, AgentState
 from pp_agent.domain import ChatMessage, TextPart, ToolCall, ToolCallPart
 from pp_agent.storage.sessions import SessionRecord, SessionStore
+from pp_agent.subagents.contract import explicit_orchestrated_edit_request
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.effects import is_protected_path
@@ -116,6 +118,8 @@ class AgentRuntime:
         memory_provider: Optional[MemoryProvider] = None,
         auto_index_scheduler: Optional[AutoIndexScheduler] = None,
         learning_runtime: Optional[object] = None,
+        enforce_orchestrated_edit_contract: bool = True,
+        require_patch_artifact_for_code_change: bool = True,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -163,6 +167,8 @@ class AgentRuntime:
         self.memory_provider = memory_provider or NoopMemoryProvider()
         self.auto_index_scheduler = auto_index_scheduler or NoopAutoIndexScheduler()
         self.learning_runtime = learning_runtime
+        self.enforce_orchestrated_edit_contract = bool(enforce_orchestrated_edit_contract)
+        self.require_patch_artifact_for_code_change = bool(require_patch_artifact_for_code_change)
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -180,7 +186,15 @@ class AgentRuntime:
     def _compose_runtime_hooks(self, hooks: Optional[RuntimeHooks]) -> RuntimeHooks:
         hooks = hooks or RuntimeHooks()
         return RuntimeHooks(
-            transform_context=[self._default_transform_context, *hooks.transform_context_hooks],
+            transform_context=[
+                ContextHookEntry(
+                    name="agent_runtime_default",
+                    kind="runtime",
+                    fn=self._default_transform_context,
+                    enabled_for_subagent=True,
+                ),
+                *hooks.transform_context_hooks,
+            ],
             before_tool_call=[self._default_before_tool_call, *hooks.before_tool_call_hooks],
             after_tool_call=[self._default_after_tool_call, *hooks.after_tool_call_hooks],
             on_tool_error=[self._default_tool_error_hook, *hooks.on_tool_error_hooks],
@@ -672,9 +686,17 @@ class AgentRuntime:
                 response_event.details["tool_call_text_fallback_mode"] = "trailing_single_call"
                 resolved_tool_calls = fallback_tool_calls
                 assistant_text = ""
-        explicit_subagent = self._explicit_subagent_request(self.state)
+        child_runtime = self._is_subagent_runtime()
+        explicit_subagent = None if child_runtime else self._explicit_subagent_request(self.state)
+        orchestrated_edit = None if child_runtime else self._explicit_orchestrated_edit_request(self.state)
+        denied_text_tool = self._denied_text_tool_call_name(assistant_text) if assistant_text.strip() and not resolved_tool_calls else None
+        if denied_text_tool is not None and orchestrated_edit is None:
+            response_event.details["tool_call_text_fallback_denied"] = True
+            response_event.details["tool_call_text_fallback_denied_tool"] = denied_text_tool
+            assistant_text = ""
         if (
             explicit_subagent is not None
+            and denied_text_tool is None
             and not self._has_subagent_result_since_latest_user(self.state)
             and not any(call.name == "spawn_subagent" for call in resolved_tool_calls)
         ):
@@ -690,7 +712,33 @@ class AgentRuntime:
                 )
             ]
             assistant_text = ""
+        if (
+            orchestrated_edit is not None
+            and self.enforce_orchestrated_edit_contract
+            and not self._has_orchestration_result_since_latest_user(self.state)
+            and not any(call.name == "orchestrate_agents" for call in resolved_tool_calls)
+        ):
+            response_event.details["orchestrated_edit_forced"] = True
+            resolved_tool_calls = [
+                ToolCall(
+                    id=str(uuid.uuid4()),
+                    name="orchestrate_agents",
+                    arguments={
+                        "goal": orchestrated_edit["goal"],
+                        "workflow": "code_change",
+                        "allow_edits": True,
+                        "max_agents": 6,
+                    },
+                )
+            ]
+            assistant_text = ""
+        resolved_tool_calls = self._normalize_orchestrate_tool_calls(resolved_tool_calls, orchestrated_edit)
         resolved_tool_calls = self._normalize_subagent_tool_calls(resolved_tool_calls, explicit_subagent)
+        patch_wait_message = self._pending_patch_artifact_wait_message(self.state, resolved_tool_calls)
+        if patch_wait_message:
+            response_event.details["patch_artifact_wait_guard"] = True
+            assistant_text = patch_wait_message
+            resolved_tool_calls = []
         #没有回复文本与工具调用结果时，尝试用工具结果内容做回退；如果还是没有，就发 ProviderError 事件并报错
         if not assistant_text.strip() and not resolved_tool_calls:
             fallback_text = self._tool_result_fallback(messages)
@@ -815,6 +863,17 @@ class AgentRuntime:
             return []
         return [ToolCall(id=str(uuid.uuid4()), name=name, arguments=arguments)]
 
+    def _denied_text_tool_call_name(self, assistant_text: str) -> str | None:
+        last_brace = assistant_text.rfind("{")
+        if last_brace < 0:
+            return None
+        prefix = assistant_text[:last_brace].rstrip()
+        name_match = TEXT_TOOL_NAME_RE.search(prefix)
+        if not name_match:
+            return None
+        name = name_match.group(1).strip()
+        return name if name in TEXT_TOOL_CALL_FALLBACK_DENYLIST else None
+
     @staticmethod
     def _available_subagent_specs() -> set[str]:
         from pp_agent.subagents.specs import default_subagent_specs
@@ -857,6 +916,42 @@ class AgentRuntime:
                     arguments["task"] = explicit_subagent["task"]
             normalized.append(call.model_copy(update={"arguments": arguments}))
         return normalized
+
+    def _normalize_orchestrate_tool_calls(
+        self,
+        tool_calls: list[ToolCall],
+        orchestrated_edit: dict[str, str] | None,
+    ) -> list[ToolCall]:
+        if not tool_calls or orchestrated_edit is None or not self.enforce_orchestrated_edit_contract or self._is_subagent_runtime():
+            return tool_calls
+        normalized: list[ToolCall] = []
+        for call in tool_calls:
+            if call.name != "orchestrate_agents":
+                normalized.append(call)
+                continue
+            arguments = dict(call.arguments)
+            original_goal = str(arguments.get("goal") or "").strip()
+            arguments["goal"] = orchestrated_edit["goal"]
+            arguments["workflow"] = "code_change"
+            arguments["allow_edits"] = True
+            try:
+                arguments["max_agents"] = max(int(arguments.get("max_agents") or 0), 6)
+            except (TypeError, ValueError):
+                arguments["max_agents"] = 6
+            arguments["_orchestrated_edit_contract"] = {
+                "goal_source": "latest_user_message",
+                "original_tool_goal": original_goal,
+            }
+            normalized.append(call.model_copy(update={"arguments": arguments}))
+        return normalized
+
+    def _explicit_orchestrated_edit_request(self, state: AgentState) -> dict[str, str] | None:
+        if self._is_subagent_runtime():
+            return None
+        latest_user_text = self._latest_user_text(state).strip()
+        if explicit_orchestrated_edit_request(latest_user_text):
+            return {"goal": latest_user_text}
+        return None
 
     def _build_plan_steps(self, tool_calls: list[ToolCall]) -> list[PlanStep]:
         """??????????????ToolCall?? ? ??? Agent ??????????????PlanStep??"""
@@ -1295,6 +1390,25 @@ class AgentRuntime:
         subagent_failure_note = self._latest_subagent_failure_note(state)
         if subagent_failure_note:
             notes.append(subagent_failure_note)
+        if (
+            not self._is_subagent_runtime()
+            and self._explicit_orchestrated_edit_request(state) is not None
+            and self._has_orchestration_result_since_latest_user(state)
+            and not self._has_patch_artifact_orchestration_since_latest_user(state)
+        ):
+            notes.append(
+                "The current turn requires orchestrated code_change edits, but the latest orchestration produced no apply_patch_artifact. "
+                "Report that failure; do not switch to direct edit_file/write_file fallback."
+            )
+        pending_patch = self._latest_pending_patch_artifact_since_latest_user(state)
+        if pending_patch is not None:
+            paths = ", ".join(pending_patch.get("changed_paths") or []) or "unknown"
+            tokens = ", ".join(pending_patch.get("tokens") or []) or "unknown"
+            notes.append(
+                "A code_change patch artifact is staged but not applied to the main workspace. "
+                f"Pending tokens: {tokens}. Pending changed paths: {paths}. "
+                "Do not keep probing with read_file, list_files, or run_shell before approval; tell the user to use the Approval panel or approve_pending_action first."
+            )
         if not notes:
             return messages
         directive = ChatMessage(
@@ -1329,6 +1443,94 @@ class AgentRuntime:
                 return True
         return False
 
+    def _has_orchestration_result_since_latest_user(self, state: AgentState) -> bool:
+        latest_user_index = self._latest_user_index(state)
+        start = 0 if latest_user_index is None else latest_user_index + 1
+        for message in state.messages[start:]:
+            if message.role == "tool" and message.tool_name == "orchestrate_agents":
+                return True
+        return False
+
+    def _has_patch_artifact_orchestration_since_latest_user(self, state: AgentState) -> bool:
+        return self._latest_pending_patch_artifact_since_latest_user(state) is not None
+
+    def _latest_pending_patch_artifact_since_latest_user(self, state: AgentState) -> dict[str, list[str]] | None:
+        latest_user_index = self._latest_user_index(state)
+        start = 0 if latest_user_index is None else latest_user_index + 1
+        tokens: list[str] = []
+        changed_paths: list[str] = []
+        for message in state.messages[start:]:
+            if message.role != "tool" or message.tool_name != "orchestrate_agents":
+                continue
+            details = dict(message.metadata.get("tool_details") or {})
+            steps = details.get("steps")
+            if not isinstance(steps, list):
+                continue
+            for raw_step in steps:
+                if not isinstance(raw_step, dict):
+                    continue
+                staged_actions = raw_step.get("staged_actions")
+                if not isinstance(staged_actions, list):
+                    continue
+                inspected_paths = raw_step.get("inspected_paths")
+                for action in staged_actions:
+                    if not isinstance(action, dict) or action.get("action_type") != "apply_patch_artifact":
+                        continue
+                    token = str(action.get("token") or "").strip()
+                    if token:
+                        tokens.append(token)
+                    for path in action.get("changed_paths") or []:
+                        value = str(path).replace("\\", "/").strip()
+                        if value and value not in changed_paths:
+                            changed_paths.append(value)
+                    if isinstance(inspected_paths, list):
+                        for path in inspected_paths:
+                            value = str(path).replace("\\", "/").strip()
+                            if value and not value.endswith(".patch") and value not in changed_paths:
+                                changed_paths.append(value)
+        if not tokens:
+            return None
+        return {"tokens": tokens, "changed_paths": changed_paths}
+
+    def _is_subagent_runtime(self) -> bool:
+        return getattr(self, "subagent_profile", None) is not None
+
+    def _pending_patch_artifact_wait_message(self, state: AgentState, tool_calls: list[ToolCall]) -> str:
+        if self._is_subagent_runtime() or not tool_calls:
+            return ""
+        pending_patch = self._latest_pending_patch_artifact_since_latest_user(state)
+        if pending_patch is None:
+            return ""
+        tokens = ", ".join(pending_patch.get("tokens") or []) or "unknown"
+        pending_paths = {
+            path.replace("\\", "/").strip()
+            for path in pending_patch.get("changed_paths", [])
+            if path
+        }
+        attempted_tools = sorted({call.name for call in tool_calls if call.name})
+        for call in tool_calls:
+            if call.name not in {"read_file", "list_files"}:
+                continue
+            raw_path = str(call.arguments.get("path") or "").replace("\\", "/").strip()
+            if raw_path and (
+                raw_path in pending_paths
+                or any(path.startswith(f"{raw_path.rstrip('/')}/") for path in pending_paths)
+            ):
+                return (
+                    "The multi-agent code_change workflow has already staged an apply_patch_artifact, so this turn should stop probing and wait for approval. "
+                    f"The requested path `{raw_path}` is still pending inside the patch artifact. "
+                    f"Use the Approval panel or approve_pending_action first (token: {tokens}). "
+                    "After approval, read the file from the main workspace."
+                )
+        if attempted_tools:
+            return (
+                "The multi-agent code_change workflow has already staged an apply_patch_artifact, so this turn should stop probing and wait for approval. "
+                f"Do not continue with {', '.join(attempted_tools)} before approval. "
+                f"Use the Approval panel or approve_pending_action first (token: {tokens}). "
+                "The main workspace will not reflect the staged change until approval."
+            )
+        return ""
+
     @staticmethod
     def _latest_subagent_failure_note(state: AgentState) -> str:
         for message in reversed(state.messages):
@@ -1353,8 +1555,33 @@ class AgentRuntime:
 
     def _default_before_tool_call(self, state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
         """Agent 工具执行前的「最终安全校验钩子」"""
-        explicit_subagent = self._explicit_subagent_request(state)
+        child_runtime = self._is_subagent_runtime()
+        explicit_subagent = None if child_runtime else self._explicit_subagent_request(state)
         subagent_handoff_done = self._has_subagent_result_since_latest_user(state)
+        orchestrated_edit = None if child_runtime else self._explicit_orchestrated_edit_request(state)
+        if (
+            orchestrated_edit is not None
+            and self.enforce_orchestrated_edit_contract
+            and not getattr(self, "subagent_profile", None)
+            and call.name in {"edit_file", "write_file", "run_shell"}
+        ):
+            patch_ready = self._has_patch_artifact_orchestration_since_latest_user(state)
+            if self.require_patch_artifact_for_code_change or not patch_ready:
+                message = (
+                    "This turn is under an orchestrated edit contract. The main agent may not use "
+                    f"{call.name} as a fallback. Use orchestrate_agents with workflow=code_change and "
+                    "allow_edits=true; if no apply_patch_artifact is produced, report the orchestration failure."
+                )
+                return BeforeToolCallDecision(
+                    action="reject",
+                    message=message,
+                    details={
+                        "policy_action": "reject",
+                        "permission_domain": "edit",
+                        "policy_reason": message,
+                        "orchestrated_edit_contract": True,
+                    },
+                )
         if explicit_subagent is not None and not subagent_handoff_done and call.name != "spawn_subagent":
             message = "This request explicitly asked for `@subagent`, so the main agent must hand off via `spawn_subagent` before using other tools."
             return BeforeToolCallDecision(

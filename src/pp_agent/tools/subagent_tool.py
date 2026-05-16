@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from pp_agent.domain import ToolSpec
+from pp_agent.domain import TextPart, ToolSpec
+from pp_agent.subagents.contract import canonicalize_orchestration_arguments
 from pp_agent.subagents.orchestrator import SubAgentOrchestrator, default_manager_factory
 from pp_agent.subagents.specs import SubAgentSpec, render_subagent_tool_message
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
@@ -192,14 +193,21 @@ class OrchestrateAgentsTool(BaseTool):
         )
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        parent_record = self.session_store.load(self.current_session_id)
+        latest_user_text = _latest_user_text_from_record(self.session_store, parent_record)
+        canonical_arguments, contract_metadata = canonicalize_orchestration_arguments(
+            arguments,
+            latest_user_text=latest_user_text,
+        )
+        arguments = canonical_arguments
         goal = str(arguments["goal"]).strip()
         if not goal:
             raise ValueError("goal is required")
         workflow = str(arguments.get("workflow") or "auto")
         max_agents = int(arguments.get("max_agents") or 4)
+        max_agents_explicit = "max_agents" in arguments
         allow_edits = bool(arguments.get("allow_edits", False))
         run_timeout_seconds = int(arguments.get("run_timeout_seconds") or 900)
-        parent_record = self.session_store.load(self.current_session_id)
         orchestrator = SubAgentOrchestrator(
             workspace=self.workspace,
             manager_factory=default_manager_factory(
@@ -223,8 +231,11 @@ class OrchestrateAgentsTool(BaseTool):
             max_agents=max_agents,
             allow_edits=allow_edits,
             run_timeout_seconds=run_timeout_seconds,
+            max_agents_explicit=max_agents_explicit,
         )
         payload = result.to_dict()
+        if contract_metadata.get("orchestrated_edit_contract"):
+            payload["orchestrated_edit_contract"] = contract_metadata
         content = _render_orchestration_content(payload)
         return ToolExecutionResult(
             tool_call_id="",
@@ -233,6 +244,24 @@ class OrchestrateAgentsTool(BaseTool):
             is_error=not (result.success or result.partial_success),
             details=payload,
         )
+
+
+def _latest_user_text_from_record(session_store: SessionStore, record: Any) -> str:
+    try:
+        messages = session_store.branch_messages(record, record.active_head_id)
+    except Exception:  # noqa: BLE001
+        messages = list(getattr(record, "messages", []) or [])
+    for message in reversed(messages):
+        if getattr(message, "role", None) != "user":
+            continue
+        parts = [
+            part.text.strip()
+            for part in getattr(message, "content", []) or []
+            if isinstance(part, TextPart) and part.text.strip()
+        ]
+        if parts:
+            return "\n".join(parts).strip()
+    return ""
 
 
 def _render_orchestration_content(payload: dict[str, object]) -> str:
@@ -261,6 +290,27 @@ def _render_orchestration_content(payload: dict[str, object]) -> str:
             staged = raw_step.get("staged_actions")
             if isinstance(staged, list) and staged:
                 tokens = ", ".join(str(item.get("token")) for item in staged if isinstance(item, dict))
-                lines.append(f"   staged edits: {tokens}")
+                action_types = ", ".join(str(item.get("action_type")) for item in staged if isinstance(item, dict))
+                label = "staged patch artifacts" if "apply_patch_artifact" in action_types else "staged edits"
+                lines.append(f"   {label}: {tokens}")
+                if "apply_patch_artifact" in action_types:
+                    changed_paths = sorted(
+                        {
+                            str(path)
+                            for item in staged
+                            if isinstance(item, dict)
+                            for path in (item.get("changed_paths") or [])
+                            if str(path).strip()
+                        }
+                        | {
+                            str(path)
+                            for path in (raw_step.get("inspected_paths") or [])
+                            if str(path).strip() and not str(path).strip().endswith(".patch")
+                        }
+                    )
+                    if changed_paths:
+                        lines.append(f"   pending changed paths: {', '.join(changed_paths)}")
+                    lines.append("   status: staged only, not applied to the main workspace")
+                    lines.append("   next: use the Approval panel or approve_pending_action to apply the patch artifact before reading the changed path from the main workspace")
     lines.append(f"Next: {payload.get('recommended_next_action')}")
     return "\n".join(line for line in lines if line.strip())
