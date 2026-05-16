@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Explicit @subagent handoff</code> | <code>Rewind code + conversation safely</code> | <code>CLI + Web UI + TUI</code>
+  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Bounded multi-agent orchestration</code> | <code>Layered memory</code> | <code>CLI + Web UI + TUI</code>
 </p>
 
 pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
@@ -38,12 +38,12 @@ pp-Echo should currently be understood as a `Windows-first` project.
 
 - Windows is the main supported and most tested path today.
 - The helper scripts and the quickest onboarding path are Windows-oriented.
-- The Web UI is part of the normal workflow, including project switching, visible runtime status, and approval handling.
+- The Web UI is part of the normal workflow, including project switching, visible runtime status, approval handling, and isolated patch-artifact application.
 - Linux and macOS should not be assumed to have equal support yet.
-- The runtime, exact-effect approvals, memory files, rewind, session tree, and storage model are real and useful today.
-- Subagent support exists, but it is still MVP-level rather than a finished agent-team system.
+- The runtime, exact-effect approvals, layered file memory, rewind, session tree, and storage model are real and useful today.
+- Multi-agent support is best described as a bounded local orchestration layer with explicit child specs, isolated patch staging, and host-approved application.
 
-In other words: this repo already contains real architecture worth studying, but it is still evolving and should not be described as a fully mature multi-agent platform.
+In other words: this repo already contains real architecture worth studying, but it is still evolving and should not be described as a fully autonomous agent-team platform.
 
 ## Windows-First Scope
 
@@ -56,15 +56,16 @@ The project is intentionally described as `Windows-first` to avoid confusion.
 
 ## Subagent Progress
 
-The `@subagent` path is real, but narrow by design today.
+The `@subagent` path is real, and `orchestrate_agents` is now part of the normal bounded workflow.
 
 What exists now:
 
 - explicit user-triggered `@subagent` handoff
 - a built-in `spawn_subagent` tool
-- a built-in `orchestrate_agents` tool for parallel read-only repository analysis and planning-style fan-out
+- a built-in `orchestrate_agents` tool for parallel repository analysis, bounded planning fan-out, and isolated `code_change` staging
 - seven built-in child specs: `repo-researcher`, `change-reviewer`, `test-investigator`, `api-scout`, `memory-scout`, `implementation-planner`, and `code-worker`
-- child execution that forks a session, narrows tools, runs a constrained prompt, and returns a summary
+- child execution that forks a session, narrows tools, runs a constrained prompt, and returns structured results
+- isolated worktree patch artifacts for bounded edit workflows, with host-side approval before the main workspace is mutated
 
 What does not exist yet:
 
@@ -72,7 +73,19 @@ What does not exist yet:
 - rich long-running multi-agent coordination
 - broad autonomous agent-team execution with independent write ownership
 
-The honest description is: `subagent support exists, with explicit child handoff and narrow orchestration support, but it is not yet a finished autonomous agent-team system`.
+The honest description is: `pp-Echo already has real bounded multi-agent runtime behavior, but it is still approval-first, repo-oriented, and intentionally narrower than a mature autonomous agent-team system`.
+
+## Layered Memory
+
+pp-Echo now separates file memory into distinct layers instead of treating everything as one long note.
+
+- `session` state stays in the session store and is used for restore, rewind, and current-turn continuity.
+- workspace bootstrap memory lives in the repo root `MEMORY.md` and carries durable project constraints.
+- global bootstrap memory lives in `$PP_AGENT_HOME/MEMORY.md` and carries durable cross-workspace user preferences.
+- short-lived notes go to `memory/daily/YYYY-MM-DD.md`.
+- durable detailed knowledge goes to themed files such as `memory/architecture.md`, `memory/bugs.md`, and `memory/workflows.md`.
+
+Bootstrap memory is injected automatically at session start. Detailed and journal memory are retrieved through `memory_search` and `memory_get` instead of being blindly injected into every prompt.
 
 ## Why This Repo Is Worth Studying
 
@@ -94,7 +107,7 @@ The honest description is: `subagent support exists, with explicit child handoff
 - How an agent runtime manages turns, planning, tools, and execution.
 - How tool registration and dispatch work in a repo-aware coding assistant.
 - How session hosting, rewind, and checkpoint ideas can improve agent usability.
-- How memory and vector retrieval integrate into an agent workflow.
+- How layered memory, file retrieval, and vector recall integrate into an agent workflow.
 - How one backend can drive both a CLI chat experience and a richer TUI.
 - How to structure a project so it is usable as both product and learning material.
 
@@ -201,6 +214,14 @@ Minimal non-interactive demo:
 set PP_AGENT_API_KEY=your_api_key
 set PYTHONPATH=src
 python -m pp_agent.cli.main run "Give me a quick overview of this repo"
+```
+
+Useful local diagnostics:
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main workflow doctor --json
+python -m pp_agent.cli.main memory search "project conventions" --scope workspace
 ```
 
 ### Installed CLI
@@ -472,7 +493,8 @@ Current built-in subagent specs:
 Behavior notes:
 
 - `@subagent` is required before `spawn_subagent` can run.
-- `orchestrate_agents` can fan out multiple constrained subagents for read-only analysis, debugging, or implementation planning.
+- `orchestrate_agents` can fan out multiple constrained subagents for analysis, debugging, implementation planning, or bounded `code_change` staging.
+- `workflow=code_change` with `allow_edits=true` stages an isolated patch artifact first; the host still has to approve application before the main workspace changes.
 - If the model invents an unknown child name, runtime normalizes it back to a valid built-in subagent spec.
 - In chat mode, `@subagent` requests are forced through `spawn_subagent` instead of silently falling back to direct main-agent file reads.
 - Current child execution is intentionally narrow: fork session, restrict tools, run a constrained prompt, return summary output.
@@ -507,6 +529,15 @@ python -m pp_agent.cli.main rewind-safe --session <session_id> --turns 2
 set PYTHONPATH=src
 python -m pp_agent.cli.main capabilities list
 python -m pp_agent.cli.main skills list
+```
+
+### 6. Memory and runtime diagnostics
+
+```powershell
+set PYTHONPATH=src
+python -m pp_agent.cli.main memory search "user preferences" --scope global
+python -m pp_agent.cli.main memory get global/MEMORY.md
+python -m pp_agent.cli.main workflow doctor
 ```
 
 ## Architecture
@@ -583,11 +614,34 @@ Create `.pp-agent/config.json` for per-project overrides:
     "edit_file": true,
     "run_shell": true,
     "high_risk_plan": true
+  },
+  "memory": {
+    "file_memory_enable": true,
+    "file_memory_search_enable": true,
+    "file_memory_root": ".",
+    "file_memory_top_k": 5
+  },
+  "learning": {
+    "enable": true,
+    "auto_extract": true,
+    "auto_apply_memory": true,
+    "auto_apply_min_confidence": "medium",
+    "project_memory_enable": true,
+    "project_memory_char_limit": 4000,
+    "detailed_memory_enable": true,
+    "detailed_memory_char_limit": 12000,
+    "detailed_memory_sync_index_after_write": true
   }
 }
 ```
 
 `tool_confirmation` still exists for planner-era compatibility, but it is no longer the complete safety model on its own. Sensitive execution now also passes through a mandatory execution-time policy gate.
+
+Additional configuration notes:
+
+- `PP_AGENT_HOME` controls global bootstrap memory and user-level runtime state.
+- `memory search --scope workspace|global|all` lets you choose which file-memory layer to query.
+- Workspace `MEMORY.md` is bootstrap memory, not a dumping ground for every short-lived task trace.
 
 ### Resources and manifests
 
@@ -619,4 +673,3 @@ Start here:
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
-pp-Echo isolated worktree smoke test

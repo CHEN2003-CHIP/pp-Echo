@@ -1,6 +1,6 @@
 # pp-Echo Learning Guide (English)
 
-This guide should be read with one important framing in mind: `pp-Echo` is currently a Windows-first project. The runtime, approval model, rewind flow, and session architecture are real and worth studying now, but the repo should not be described as a finished cross-platform agent platform or a mature agent-team framework.
+This guide should be read with one important framing in mind: `pp-Echo` is currently a Windows-first project. The runtime, approval model, rewind flow, session architecture, layered memory, and bounded orchestration flow are real and worth studying now, but the repo should not be described as a finished cross-platform agent platform or a fully autonomous agent-team framework.
 
 ## 0. Read This First
 
@@ -8,21 +8,23 @@ Before going deep into the modules, keep these project truths in mind:
 
 - Windows is the clearest and most supported path today.
 - The core runtime and safety architecture are already substantial and studyable.
-- Subagent support exists, but it is currently MVP-level.
+- Subagent support and orchestration are real, but they are still bounded and approval-first.
 - “Agent team” should be treated as a direction, not as a completed subsystem.
 
 ## 0A. What Subagent Means Here Today
 
-The repository already contains explicit subagent handoff support, but its scope is intentionally narrow.
+The repository already contains explicit subagent handoff support plus a bounded orchestration path, but its scope is intentionally narrow.
 
 Current reality:
 
 - users can explicitly request `@subagent`
 - runtime routes that request through `spawn_subagent`
-- the built-in child specs are currently `repo-researcher` and `change-reviewer`
-- the child path is summary-oriented: fork session, restricted tools, constrained execution, summary return
+- bounded fan-out can run through `orchestrate_agents`
+- the built-in child specs include repository research, change review, test investigation, API tracing, memory lookup, implementation planning, and bounded code work
+- the child path is still constrained: fork session, restricted tools, constrained execution, structured summary return
+- bounded edit orchestration stages an isolated patch artifact first and still requires host approval before the main workspace changes
 
-This is useful and real, but it is not the same thing as a broad multi-agent planner or a mature agent-team system.
+This is useful and real, but it is not the same thing as a broad autonomous multi-agent planner or a mature agent-team system.
 
 This guide is for developers who are new to agent systems. The goal is not to explain every implementation detail, but to help you quickly build a strong mental model of:
 

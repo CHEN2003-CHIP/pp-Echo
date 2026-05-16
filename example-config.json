@@ -292,7 +292,19 @@
     "snippet_compress_error_stacks": true,
 
     "_comment_snippet_path_weight_boost": "当用户问题命中文件路径时，对相关片段的额外权重。",
-    "snippet_path_weight_boost": 1.0
+    "snippet_path_weight_boost": 1.0,
+
+    "_comment_file_memory_enable": "Enable Markdown file memory indexing and memory_search / memory_get.",
+    "file_memory_enable": true,
+
+    "_comment_file_memory_search_enable": "Enable the file-memory search tool.",
+    "file_memory_search_enable": true,
+
+    "_comment_file_memory_root": "Workspace root used for file-memory scanning.",
+    "file_memory_root": ".",
+
+    "_comment_file_memory_top_k": "Default memory_search result count.",
+    "file_memory_top_k": 5
   },
 
   "_comment_learning": "自我学习配置：从已完成 turn 中提取候选经验，人工 review 后可写入项目记忆或 skill。",
@@ -303,11 +315,26 @@
     "_comment_auto_extract": "每轮结束后是否自动尝试提取学习候选。",
     "auto_extract": true,
 
+    "_comment_auto_apply_memory": "Automatically write journal and eligible durable memory.",
+    "auto_apply_memory": true,
+
+    "_comment_auto_apply_min_confidence": "Minimum confidence for automatic durable memory promotion.",
+    "auto_apply_min_confidence": "medium",
+
     "_comment_project_memory_enable": "是否启用 .pp-agent/learning/memory.md 项目记忆上下文。",
     "project_memory_enable": true,
 
     "_comment_project_memory_char_limit": "注入项目记忆时的字符数上限。",
     "project_memory_char_limit": 4000,
+
+    "_comment_detailed_memory_enable": "Enable durable detailed memory files under memory/*.md.",
+    "detailed_memory_enable": true,
+
+    "_comment_detailed_memory_char_limit": "Managed character budget for detailed memory files.",
+    "detailed_memory_char_limit": 12000,
+
+    "_comment_detailed_memory_sync_index_after_write": "Refresh file-memory search index after memory writes.",
+    "detailed_memory_sync_index_after_write": true,
 
     "_comment_candidate_limit_per_turn": "每轮最多生成多少个学习候选。",
     "candidate_limit_per_turn": 3,

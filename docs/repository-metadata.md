@@ -4,7 +4,7 @@ Use the following values in GitHub repository settings.
 
 ## Description
 
-`A Windows-first local coding agent CLI with visible planning, approval gates, explicit subagent MVP handoff, session branching, and git-backed safe rewind.`
+`A Windows-first local coding agent with visible planning, approval-first bounded multi-agent orchestration, layered memory, session branching, and git-backed safe rewind.`
 
 ## Topics
 
