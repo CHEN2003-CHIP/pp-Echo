@@ -51,13 +51,20 @@ class LearningExtractor:
         if not raw_text.strip() or not is_safe_learning_text(raw_text):
             return None
         try:
+            target = str(payload.get("suggested_target") or "journal")
+            if target == "bootstrap_memory":
+                target = "workspace_bootstrap"
+            elif target == "detailed_memory":
+                target = "detailed"
+            elif target == "memory":
+                target = "journal"
             return LearningCandidate(
                 kind=str(payload.get("kind") or "lesson"),
                 title=clean_learning_text(str(payload.get("title") or "Untitled lesson"), limit=120),
                 content=clean_learning_text(str(payload.get("content") or ""), limit=1600),
                 evidence=clean_learning_text(str(payload.get("evidence") or ""), limit=800),
                 confidence=str(payload.get("confidence") or "medium"),
-                suggested_target=str(payload.get("suggested_target") or "memory"),
+                suggested_target=target,
                 source_session_id=session_id,
                 source_turn_id=turn_id,
             )
@@ -127,11 +134,13 @@ class LearningExtractor:
             "Return only a JSON array. Each item must have kind, title, content, evidence, "
             "confidence, and suggested_target. kind must be one of project_convention, lesson, "
             "workflow, user_preference, skill_candidate. confidence must be low, medium, or high. "
-            "suggested_target must be bootstrap_memory, detailed_memory, skill, or ignore. Use "
-            "bootstrap_memory for short summaries, user preferences, project conventions, and key "
-            "decisions that should fit in MEMORY.md. Use detailed_memory for bug details, architecture "
-            "decisions, debugging experience, and reusable workflow details that belong in memory/*.md. "
+            "suggested_target must be global_bootstrap, workspace_bootstrap, journal, detailed, skill, or ignore. "
+            "Use global_bootstrap only for stable cross-workspace user preferences and working habits. "
+            "Use workspace_bootstrap for stable repo conventions and durable top-level project constraints that belong in MEMORY.md. "
+            "Use journal for recent smoke results, short-lived findings, temporary observations, and day-scoped work notes that belong in memory/daily/*.md. "
+            "Use detailed for durable bugs, architecture decisions, debugging experience, and reusable workflow details that belong in memory/*.md. "
             "Use skill only for reusable procedures that should become an explicit skill. "
+            "Do not put one-off file names, temporary artifacts, transient logs, or short-lived task traces into bootstrap memory. "
             "Only include reusable facts grounded in the turn. Do not include secrets, temporary logs, or one-off details. "
             f"Return at most {self.settings.candidate_limit_per_turn} items."
         )

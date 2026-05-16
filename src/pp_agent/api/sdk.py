@@ -5,6 +5,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Optional
 
+from pp_agent.runtime.control_plane import build_runtime_doctor_report
 from pp_agent.runtime import AgentEvent, AgentRuntime, SessionHost
 
 Subscriber = Callable[[AgentEvent], None]
@@ -259,6 +260,20 @@ def rewind_safe(
 
 def approvals_summary(workspace: Path, *, host: Optional[SessionHost] = None) -> dict:
     return (host or _default_host(workspace)).approvals_summary(workspace)
+
+
+def runtime_doctor_report(
+    workspace: Path,
+    *,
+    session_id: Optional[str] = None,
+) -> dict:
+    bootstrap = import_module("pp_agent.app.bootstrap")
+    return build_runtime_doctor_report(
+        workspace,
+        session_store=bootstrap.session_store_for(workspace),
+        pending_store=bootstrap.pending_action_store_for(workspace),
+        session_id=session_id,
+    )
 
 
 def subscribe(runtime: AgentRuntime, callback: Subscriber) -> AgentRuntime:

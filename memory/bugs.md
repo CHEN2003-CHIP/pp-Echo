@@ -46,4 +46,73 @@ When orchestrating multiple sub-agents in parallel for deep analysis tasks, a lo
 Evidence: repo-researcher and api-scout both failed with failure_kind 'turn_limit_reached' after exceeding max_turns=2 during the analysis of pp-Echo modules.
 
 Source: session=941f6f6c-e8d9-4bc1-a043-73379a04c142 turn=turn-2
+
+### Subagent Runtime Isolation Risks
+
+SubagentRuntime uses separate memory spaces and UUID-based session tracking, but shared resource cleanup may not be atomic across all failure modes. File descriptor inheritance between parent/child processes requires auditing.
+
+Evidence: Analysis of /src/runtime/subagent_runtime.py reveals potential non-atomic cleanup in failure scenarios and lack of explicit file descriptor isolation verification.
+
+Source: session=29bafa53-e4b3-481c-9e2c-e82da7c33006 turn=turn-1
+
+### README.md Smoke Test Line Specification
+
+The README.md file requires a specific line 'pp-Echo isolated worktree smoke test' to be appended at the very end. Previous attempts failed by adding descriptive text or formatting (e.g., '**Smoke test**:') instead of the exact required string.
+
+Evidence: Prior subagent manifest indicates an incorrect edit was staged ('**Smoke test**: ...') and the current review confirms the need for the exact text without additional content.
+
+Source: session=42c21b52-5214-464d-a058-7388c244fcaa turn=turn-2
+
+### Handling Staged Incorrect Edits in Read-Only Contexts
+
+When a read-only agent (like change-reviewer) identifies a staged edit containing incorrect content, it cannot fix it directly. The workflow requires identifying the discrepancy and recommending a code-worker agent with edit_file capability to perform the correction.
+
+Evidence: The assistant found a previous edit was staged but contained incorrect content and noted 'No tools available for editing' due to the read-only capability profile.
+
+Source: session=1f179ac2-3e6e-430a-b8ca-a12a08607399 turn=turn-2
+
+### Orchestration failure handling when tools lack write capability
+
+In a multi-agent orchestration (workflow=code_change), agents may have conflicting views on tool availability. If an agent claims a file was created but subsequent agents verify that write tools are unavailable in their specific context, the overall operation fails without a patch artifact. This requires explicit failure reporting.
+
+Evidence: Agent api-scout claimed creation, but implementation-planner and change-reviewer verified no write capabilities were available. Result: 'The orchestration completed but failed to produce an apply_patch_artifact'.
+
+Source: session=94388b3f-62f8-4d38-8525-1fde68818ddb turn=turn-1
+
+### Prior Agent Capability Assumption Error
+
+A prior agent (code-worker) incorrectly assumed write capabilities were unavailable and failed to produce a patch artifact, yet claimed to have created the target file. The current agent (change-reviewer) has read-only constraints and must verify the actual state rather than trusting prior claims.
+
+Evidence: Prior manifest states 'incorrectly concluded that write capabilities were unavailable' and 'produced no apply_patch_artifact', while claiming file creation. Current role tools are limited to read_file, search_text, grep_code, git_status, git_diff_worktree.
+
+Source: session=7696b756-f793-4e00-85cc-17675faee509 turn=turn-1
+
+### Handling failed patch artifacts in orchestrate_agents
+
+If the orchestrate_agents workflow (specifically code_change) completes but the code-worker subagent fails to produce an isolated patch artifact, the system must report the task as FAILED instead of attempting to verify or create files directly.
+
+Evidence: Assistant response: 'The orchestration has completed, but the code-worker subagent failed to produce an apply_patch_artifact... I cannot fall back to direct file editing... Status: FAILED'
+
+Source: session=67678dcf-22f8-436d-854d-520d98d5dc1b turn=turn-1
+
+### code_change workflow with allow_edits=true failure protocol
+
+When workflow=code_change and allow_edits=true are set, direct calls to edit_file or write_file are prohibited. If orchestrate_agents fails to produce a patch artifact, the system must report the task as failed rather than falling back to direct file editing.
+
+Evidence: Assistant response: 'Per the explicit instruction... direct calls to edit_file or write_file are prohibited... if no patch artifact is produced, the task must be reported as failed'
+
+Source: session=2496623b-5d5a-4f03-a793-83291741378d turn=turn-1
+
+### Subagent dependency chain failure pattern
+
+In code_change workflows, failures in foundational subagents (memory-scout, repo-researcher, api-scout) cause dependent agents (implementation-planner, code-worker) to skip execution, resulting in a total lack of patch artifacts.
+
+Evidence: Log output showing memory-scout/repo-researcher/api-scout failed with child_runtime_error, leading to implementation-planner/code-worker being skipped due to dependency_failed.
+
+
+Subagents may incorrectly assume workspace constraints (e.g., read-only) or tool requirements (e.g., strict need for orchestrate_agents) based on prior context, even when their own capability profile allows direct actions like write_file.
+
+Evidence: The code-worker subagent assumed the workspace was read-only and that orchestrate_agents was strictly required, despite having write_file capabilities available in its profile.
+
+Source: session=56171e59-aec0-40fe-936f-b1c3298489f2 turn=turn-2
 <!-- pp-echo-detail-memory:end -->

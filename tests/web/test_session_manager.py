@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
+from pp_agent.app import bootstrap
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.runtime.state import AgentEvent
 from pp_agent.web.session_manager import WebSessionManager
@@ -88,6 +89,7 @@ def test_web_session_manager_queues_while_busy(tmp_path: Path) -> None:
 
     assert result["queued"] is True
     assert handle.snapshot()["queued_message_count"] == 1
+    assert handle.snapshot()["runtime_control"]["status"] == "executing"
 
 
 def test_web_session_manager_approval_flow(tmp_path: Path) -> None:
@@ -114,3 +116,27 @@ def test_web_session_manager_cancel_marks_running_handle(tmp_path: Path) -> None
     assert result["cancel_requested"] is True
     assert handle.snapshot()["cancel_requested"] is True
     assert events[0]["type"] == "cancel_requested"
+
+
+def test_web_session_snapshot_includes_pending_patch_artifact_summary(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manager = WebSessionManager(workspace, runtime_factory=_factory)
+    handle = manager.get_handle("session-1")
+    store = bootstrap.pending_action_store_for(workspace)
+    payload = store.stage(
+        action_type="apply_patch_artifact",
+        target_path=workspace / ".pp-agent" / "artifacts" / "demo.patch",
+        details={
+            "session_id": "session-1",
+            "workflow": "code_change",
+            "artifact_id": "artifact-1",
+            "changed_paths": ["docs/worktree-smoke-web.md"],
+        },
+    )
+
+    snapshot = handle.snapshot()
+
+    assert snapshot["runtime_control"]["status"] == "awaiting_artifact_approval"
+    assert snapshot["runtime_control"]["pending_artifact_count"] == 1
+    assert snapshot["pending_artifacts"][0]["token"] == payload["token"]

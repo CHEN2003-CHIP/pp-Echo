@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from pp_agent.app import bootstrap
+from pp_agent.runtime.control_plane import list_pending_patch_artifacts, summarize_runtime_control
 from pp_agent.runtime import AgentEvent
 
 
@@ -43,6 +44,10 @@ class WebSessionHandle:
         return self._worker is not None and self._worker.is_alive()
 
     def snapshot(self) -> dict:
+        pending_artifacts = list_pending_patch_artifacts(
+            bootstrap.pending_action_store_for(self.workspace),
+            session_id=self.session_id,
+        )
         return {
             "session_id": self.session_id,
             "busy": self.is_busy(),
@@ -51,6 +56,16 @@ class WebSessionHandle:
             "pending_tool_call_count": len(self.agent.state.pending_tool_calls),
             "queued_message_count": len(self.agent.state.queued_messages),
             "turn": self.agent.state.turn.model_dump(mode="json"),
+            "pending_artifacts": pending_artifacts,
+            "runtime_control": summarize_runtime_control(
+                pending_plan_token=self.agent.state.pending_plan_token,
+                pending_tool_call_count=len(self.agent.state.pending_tool_calls),
+                queued_message_count=len(self.agent.state.queued_messages),
+                busy=self.is_busy(),
+                cancel_requested=self.cancel_requested(),
+                turn_phase=getattr(self.agent.state.turn, "phase", "idle"),
+                pending_artifacts=pending_artifacts,
+            ),
             "messages": [message.model_dump(mode="json") for message in self.agent.state.messages],
         }
 

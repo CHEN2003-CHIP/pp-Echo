@@ -25,13 +25,19 @@ def test_learning_review_and_reject_command_helpers(tmp_path: Path) -> None:
 def test_apply_learning_candidate_to_memory(tmp_path: Path) -> None:
     settings = Settings.load(tmp_path)
     store = LearningStore(settings.project_dir / "learning")
-    candidate = LearningCandidate(id="learn-1", title="Run tests", content="Run focused tests.")
+    candidate = LearningCandidate(
+        id="learn-1",
+        kind="project_convention",
+        title="Run tests",
+        content="Run focused tests.",
+    )
     store.append_candidates([candidate])
 
     payload = apply_learning_candidate(DummyAgent(), tmp_path, "learn-1", "memory")
 
     assert payload["ok"] is True
     assert payload["bootstrap_path"] == str(tmp_path / "MEMORY.md")
+    assert payload["applied_action"] == "workspace_bootstrap"
     assert "Run focused tests" in store.read_project_memory()
     assert "Run focused tests" in (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
     assert store.get("learn-1").status == "applied"
@@ -41,7 +47,7 @@ def test_apply_learning_candidate_preserves_manual_memory_notes(tmp_path: Path) 
     (tmp_path / "MEMORY.md").write_text("# Manual\n\nKeep this note.\n", encoding="utf-8")
     settings = Settings.load(tmp_path)
     store = LearningStore(settings.project_dir / "learning")
-    candidate = LearningCandidate(id="learn-1", title="Run tests", content="Run focused tests.")
+    candidate = LearningCandidate(id="learn-1", kind="project_convention", title="Run tests", content="Run focused tests.")
     store.append_candidates([candidate])
 
     apply_learning_candidate(DummyAgent(), tmp_path, "learn-1", "memory")
@@ -68,6 +74,26 @@ def test_apply_learning_candidate_compacts_project_memory_when_over_limit(tmp_pa
 
     assert len(store.read_project_memory()) <= settings.learning.project_memory_char_limit
     assert "Keep newest focused test preference" in (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+
+
+def test_apply_learning_candidate_to_global_memory(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / ".global"))
+    settings = Settings.load(tmp_path)
+    store = LearningStore(settings.project_dir / "learning")
+    candidate = LearningCandidate(
+        id="learn-1",
+        kind="user_preference",
+        title="Language preference",
+        content="User prefers Chinese planning output.",
+        suggested_target="global_bootstrap",
+    )
+    store.append_candidates([candidate])
+
+    payload = apply_learning_candidate(DummyAgent(), tmp_path, "learn-1", "memory")
+
+    assert payload["ok"] is True
+    assert payload["applied_action"] == "global_bootstrap"
+    assert "Chinese planning output" in (tmp_path / ".global" / "MEMORY.md").read_text(encoding="utf-8")
 
 
 def test_apply_learning_candidate_to_skill(tmp_path: Path) -> None:

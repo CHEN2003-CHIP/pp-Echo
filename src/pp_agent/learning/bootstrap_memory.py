@@ -18,12 +18,22 @@ class BootstrapMemorySyncResult:
 
 
 class BootstrapMemoryManager:
-    """Maintains pp-Echo's managed section inside workspace MEMORY.md."""
+    """Maintains pp-Echo's managed section inside a bootstrap MEMORY.md file."""
 
-    def __init__(self, *, workspace: Path, settings: LearningSettings) -> None:
+    def __init__(
+        self,
+        *,
+        workspace: Path,
+        settings: LearningSettings,
+        path: Path | None = None,
+        label: str = "Workspace",
+        document_title: str = "Project Memory",
+    ) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings
-        self.path = self.workspace / "MEMORY.md"
+        self.path = (path or (self.workspace / "MEMORY.md")).resolve()
+        self.label = label
+        self.document_title = document_title
 
     def read(self) -> str:
         if not self.path.exists():
@@ -45,7 +55,7 @@ class BootstrapMemoryManager:
         navigation = self._memory_navigation(limit=1200)
         parts = [
             MANAGED_BEGIN,
-            "## pp-Echo Bootstrap Memory",
+            f"## pp-Echo {self.label} Bootstrap Memory",
             "",
             "Short-lived prompt memory for durable preferences, project decisions, and navigation.",
             "Use `memory_search` and `memory_get` for detailed notes in `memory/**/*.md`.",
@@ -60,12 +70,15 @@ class BootstrapMemoryManager:
         managed = "\n".join(parts).strip() + "\n"
         if len(managed) <= self.settings.project_memory_char_limit:
             return managed
-        notes_budget = max(200, self.settings.project_memory_char_limit - len(management_shell(navigation)))
+        notes_budget = max(
+            200,
+            self.settings.project_memory_char_limit - len(management_shell(navigation, label=self.label)),
+        )
         compact_notes = _compact_bullets(project_memory, limit=notes_budget)
         return "\n".join(
             [
                 MANAGED_BEGIN,
-                "## pp-Echo Bootstrap Memory",
+                f"## pp-Echo {self.label} Bootstrap Memory",
                 "",
                 "Short-lived prompt memory for durable preferences, project decisions, and navigation.",
                 "Use `memory_search` and `memory_get` for detailed notes in `memory/**/*.md`.",
@@ -100,10 +113,22 @@ class BootstrapMemoryManager:
                 break
         return "\n".join(lines)[:limit].rstrip()
 
-    @staticmethod
-    def _replace_managed_section(existing: str, managed: str) -> str:
+    def learned_notes(self) -> str:
+        content = self.read()
+        start = content.find("### Learned Notes")
+        if start == -1:
+            return ""
+        start += len("### Learned Notes")
+        end = content.find("### Detailed Memory Index", start)
+        if end == -1:
+            end = content.find(MANAGED_END, start)
+        if end == -1:
+            return ""
+        return content[start:end].strip()
+
+    def _replace_managed_section(self, existing: str, managed: str) -> str:
         if not existing.strip():
-            return "# Project Memory\n\n" + managed
+            return f"# {self.document_title}\n\n" + managed if managed.startswith(MANAGED_BEGIN) else managed
         start = existing.find(MANAGED_BEGIN)
         end = existing.find(MANAGED_END)
         if start != -1 and end != -1 and end >= start:
@@ -112,11 +137,22 @@ class BootstrapMemoryManager:
         return existing.rstrip() + "\n\n" + managed
 
 
-def management_shell(navigation: str) -> str:
+class GlobalBootstrapMemoryManager(BootstrapMemoryManager):
+    def __init__(self, *, global_root: Path, settings: LearningSettings) -> None:
+        super().__init__(
+            workspace=global_root,
+            settings=settings,
+            path=global_root / "MEMORY.md",
+            label="Global User",
+            document_title="Global Memory",
+        )
+
+
+def management_shell(navigation: str, *, label: str = "Project") -> str:
     return "\n".join(
         [
             MANAGED_BEGIN,
-            "## pp-Echo Bootstrap Memory",
+            f"## pp-Echo {label} Bootstrap Memory",
             "Short-lived prompt memory for durable preferences, project decisions, and navigation.",
             "Use `memory_search` and `memory_get` for detailed notes in `memory/**/*.md`.",
             "### Learned Notes",
@@ -165,4 +201,10 @@ def _first_heading(path: Path) -> str:
     return ""
 
 
-__all__ = ["BootstrapMemoryManager", "BootstrapMemorySyncResult", "MANAGED_BEGIN", "MANAGED_END"]
+__all__ = [
+    "BootstrapMemoryManager",
+    "BootstrapMemorySyncResult",
+    "GlobalBootstrapMemoryManager",
+    "MANAGED_BEGIN",
+    "MANAGED_END",
+]

@@ -7,27 +7,31 @@ Short-lived prompt memory for durable preferences, project decisions, and naviga
 Use `memory_search` and `memory_get` for detailed notes in `memory/**/*.md`.
 
 ### Learned Notes
-- **Subagent Output Format Specification**: All subagent responses must strictly follow a 5-section format: Summary, Findings, Recommended next action, Files/paths inspected, and Confidence. Markdown headers and numbering are automatically stripped during parsing.
-  Evidence: AGENTS.md defines strict 5-section output format for all subagent responses with automatic parsing that strips Markdown headers and numbering.
-  Source: session=8f8c9f46-a351-4a4d-bbb2-ad520f9812d1 turn=turn-1
-- **Subagent Output Format Standard**: All subagent responses must strictly follow a 5-section format: Summary, Findings, Recommended next action, Files/paths inspected, and Confidence. Markdown heading syntax and numbering are automatically stripped during parsing. Outputs exceeding 2500 characters or missing required fields trigger an invalid_summary failure.
-  Evidence: Agent Workflow section in findings; Constraints section in user prompt.
-  Source: session=9abfdf73-d284-4650-b690-b55d85d7b17d turn=turn-1
-- **Subagent Output Format Specification**: All subagents must return a structured summary with exactly five plain text sections: Summary, Findings, Recommended next action, Files/paths inspected, and Confidence. Markdown heading markers (e.g., #), code fences, and raw file dumps are strictly prohibited.
-  Evidence: AGENTS.md specifies strict 5-section output format; SubagentManager normalizes output by stripping Markdown headings and numbering.
-  Source: session=abcaba04-9664-4de8-b302-91d488c70e92 turn=turn-1
-- **pp-Echo Parallel Analysis Protocol**: The pp-Echo project utilizes a parallel subagent orchestration system to analyze core modules (README.md, AGENTS.md, src/pp_agent/subagents) simultaneously. This workflow enforces read-only access by default to ensure safety during initial architectural mapping.
-  Evidence: Tool 'orchestrate_agents' ran 3 subagents in parallel for read-only analysis of specific modules. The summary confirms 'Completed parallel read-only analysis' and 'local-first coding agent with a modular architecture supporting parallel subagent execution'.
-  Source: session=6306c941-e74e-42a8-aad6-06693f8429a2 turn=turn-1
-- **pp-Echo Bootstrap Memory Structure**: The project uses a dual-memory system: MEMORY.md (bootstrap) for short-lived preferences and decisions, and memory/**/*.md files for detailed notes accessed via memory_search/memory_get.
-  Evidence: MEMORY.md header explicitly states 'Short-lived prompt memory... Use memory_search and memory_get for detailed notes in memory/**/*.md'.
-  Source: session=6306c941-e74e-42a8-aad6-06693f8429a2 turn=turn-3
-- **Response Style Preference**: User prefers concise and efficient responses.
-  Evidence: User explicitly stated: '记住我的偏好，以后回答都是简洁高效' (Remember my preference, future answers should be concise and efficient).
-  Source: session=6306c941-e74e-42a8-aad6-06693f8429a2 turn=turn-5
-- **Concise and Efficient Responses**: The user prefers responses that are concise and efficient.
-  Evidence: User instruction: '已记住偏好：以后回答保持简洁高效。'
-  Source: session=6306c941-e74e-42a8-aad6-06693f8429a2 turn=turn-6
+Source: session=8c695242-be85-4232-aab5-093b1d973659 turn=turn-4
+  Source: session=8c695242-be85-4232-aab5-093b1d973659 turn=turn-5
+- **Memory Management Location**: Project-specific learning and memory are maintained in dedicated files: MEMORY.md for core state and PROJECT_LEARNING.md for accumulated insights, alongside a 'memory' folder for detailed context.
+  Evidence: Existence of MEMORY.md, PROJECT_LEARNING.md, and a 'memory' directory in the root.
+- **Smoke Test Documentation Naming**: Use the naming convention 'docs/worktree-smoke-[component].md' for isolated smoke test documentation files.
+  Evidence: The task explicitly requested creating 'docs/worktree-smoke-web.md' with a specific content line indicating an isolated worktree smoke test.
+  Source: session=8778eb07-2fa5-4bc2-8529-d8028df354d9 turn=turn-1
+- **Smoke Test Documentation Naming**: Isolated worktree smoke tests for web components should be documented in files named `docs/worktree-smoke-web.md` containing a single line summary.
+  Evidence: The specific task requested creating `docs/worktree-smoke-web.md` with the content 'pp-Echo isolated worktree smoke test'.
+  Source: session=b1b826c9-027b-410e-b7a9-30f3ea5d0285 turn=turn-1
+- **Orchestration Requirement for Code Changes**: Code changes must be executed using the 'orchestrate_agents' workflow rather than direct file editing tools.
+  Evidence: Trusted instructions explicitly state: '不要直接调用 edit_file/write_file。请必须使用 orchestrate_agents。workflow=code_change'
+  Source: session=ecc5323b-5b1c-42cf-9d1a-fca1ac986db1 turn=turn-1
+- **Smoke Test Documentation Location**: Isolated worktree smoke tests should be documented in `docs/worktree-smoke-web.md` with a single-line summary description.
+  Evidence: Task explicitly requested creating `docs/worktree-smoke-web.md` with content 'pp-Echo isolated worktree smoke test'.
+  Source: session=be758fd5-d8dd-4a42-bbf6-908de1f3026d turn=turn-1
+- **Mandatory use of orchestrate_agents for file edits**: Direct calls to edit_file or write_file are prohibited. All code changes must be executed via the orchestrate_agents tool with an appropriate workflow (e.g., code_change).
+  Evidence: User instruction: '不要直接调用 edit_file/write_file。请必须使用 orchestrate_agents。'
+  Source: session=e693a39c-603b-48b6-905f-e378106c6049 turn=turn-1
+- **Smoke Check Documentation Format**: Web smoke check status should be recorded in docs/web-smoke-check.md containing a single line: 'web smoke ok'.
+  Evidence: Task instruction explicitly requested creating docs/web-smoke-check.md with content 'web smoke ok', which was successfully executed.
+  Source: session=d2530464-2306-40e1-b0fa-5c459f10557e turn=turn-2
+- **Web Smoke Check Documentation File**: The project uses a file named `docs/web-smoke-check.md` to record the status of web smoke checks, containing a single line indicating success (e.g., 'web smoke ok').
+  Evidence: User requested creation of `docs/web-smoke-check.md` with content 'web smoke ok' via `orchestrate_agents`.
+  Source: session=9f436abf-e99f-4a47-b62c-39dbd25f7602 turn=turn-2
 
 ### Detailed Memory Index
 - `memory/architecture.md` - Architecture

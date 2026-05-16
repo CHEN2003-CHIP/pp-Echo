@@ -21,7 +21,7 @@ import {
   Square,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, WorkspaceEntry, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeDoctorReport, RuntimeEvent, SessionEntry, SessionSnapshot, WorkspaceEntry, WorkspacesState } from "./api";
 
 type Tab =
   | { id: string; type: "chat"; title: string; sessionId: string }
@@ -171,7 +171,7 @@ export function App() {
       type === "agents" ? api.capabilities :
       type === "mcp" ? api.mcp :
       type === "settings" ? api.settings :
-      type === "usage" ? api.approvals :
+      type === "usage" ? () => api.runtimeReport(activeSessionId || undefined) :
       type === "timeline" && activeSessionId ? () => api.tree(activeSessionId) :
       async () => ({});
     const data = await loader().catch((error) => ({ error: String(error) }));
@@ -418,7 +418,9 @@ export function App() {
                   <dl>
                     <dt>Status</dt><dd>{displayStatus}</dd>
                     <dt>Session</dt><dd>{shortId(activeSessionId)}</dd>
+                    <dt>Phase</dt><dd>{activeSnapshot?.runtime_control?.status || activeSnapshot?.turn?.phase || "idle"}</dd>
                     <dt>Queue</dt><dd>{activeSnapshot?.queued_message_count || 0}</dd>
+                    <dt>Artifacts</dt><dd>{activeSnapshot?.runtime_control?.pending_artifact_count || 0}</dd>
                     <dt>Mode</dt><dd>{activeSnapshot?.cancel_requested ? "Canceling" : busy ? "Working" : "Idle"}</dd>
                   </dl>
                 </div>
@@ -562,6 +564,43 @@ function WorkspaceTile({ label, workspace, active = false, onOpen }: { label: st
 }
 
 function PanelView({ type, data, onReload }: { type: string; data: unknown; onReload: () => void }) {
+  if (type === "usage" && data && typeof data === "object") {
+    const report = data as RuntimeDoctorReport;
+    return (
+      <section className="panel-page">
+        <header>
+          <div>
+            <h2>{panelTitle(type)}</h2>
+            <p>{panelSubtitle(type)}</p>
+          </div>
+          <button onClick={onReload}><RefreshCw size={16} /> Reload</button>
+        </header>
+        <div className="panel-card">
+          <h3><Activity size={16} /> Runtime Doctor</h3>
+          <dl>
+            <dt>Status</dt><dd>{report.status}</dd>
+            <dt>Sessions</dt><dd>{report.summary?.session_count ?? 0}</dd>
+            <dt>Pending</dt><dd>{report.summary?.pending_action_count ?? 0}</dd>
+            <dt>Artifacts</dt><dd>{report.summary?.pending_artifact_count ?? 0}</dd>
+            <dt>Findings</dt><dd>{report.summary?.finding_count ?? 0}</dd>
+          </dl>
+          {Array.isArray(report.sessions) && report.sessions.length > 0 && (
+            <ul className="event-list">
+              {report.sessions.slice(0, 6).map((session) => (
+                <li key={session.session_id}>
+                  <strong>{shortId(session.session_id)}</strong>
+                  <span>{session.status} 路 artifacts {session.pending_artifact_count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {Array.isArray(report.findings) && report.findings.length > 0 && (
+            <pre>{JSON.stringify(report.findings, null, 2)}</pre>
+          )}
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="panel-page">
       <header>

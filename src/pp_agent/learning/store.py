@@ -55,6 +55,13 @@ class LearningStore:
         content = f"{existing}\n\n{text}\n" if existing else f"{text}\n"
         self.memory_path.write_text(content, encoding="utf-8")
 
+    def has_similar_project_memory(self, entry: str) -> bool:
+        normalized = _normalize_memory_text(entry)
+        if not normalized:
+            return False
+        haystack = _normalize_memory_text(self.read_project_memory())
+        return normalized in haystack
+
     def replace_project_memory(self, content: str) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.memory_path.write_text(content.strip() + "\n", encoding="utf-8")
@@ -94,3 +101,7 @@ class LearningStore:
         self.root.mkdir(parents=True, exist_ok=True)
         content = "".join(item.model_dump_json() + "\n" for item in items)
         self.candidates_path.write_text(content, encoding="utf-8")
+
+
+def _normalize_memory_text(value: str) -> str:
+    return " ".join(str(value or "").split()).strip().lower()

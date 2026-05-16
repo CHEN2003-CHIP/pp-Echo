@@ -67,7 +67,7 @@ def apply_learning_candidate(agent, workspace: Path, candidate_id: str, target: 
         if candidate.suggested_target in {"ignore", "skill"}:
             memory_candidate = candidate.model_copy(update={"suggested_target": "memory"})
         result = FileMemoryWriter(workspace=workspace, settings=settings.learning, store=store).apply_candidate(memory_candidate)
-        path = str(store.memory_path if result.action == "bootstrap_memory" else result.path)
+        path = str(result.path or store.memory_path)
     elif target == "skill":
         path_obj = curator.skill_path_for(candidate)
         path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -83,6 +83,7 @@ def apply_learning_candidate(agent, workspace: Path, candidate_id: str, target: 
     payload = {"ok": True, "id": candidate_id, "target": target, "path": path}
     if target == "memory":
         payload["bootstrap_path"] = str(workspace / "MEMORY.md")
+        payload["applied_action"] = result.action
     return payload
 
 

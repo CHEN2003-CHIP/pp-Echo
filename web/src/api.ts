@@ -35,6 +35,19 @@ export type SessionSnapshot = {
   pending_tool_call_count: number;
   queued_message_count: number;
   turn?: { phase?: string | null; reason?: string | null };
+  pending_artifacts?: Array<{
+    token: string;
+    session_id?: string;
+    workflow?: string;
+    artifact_id?: string;
+    changed_paths?: string[];
+    lifecycle_state?: string;
+  }>;
+  runtime_control?: {
+    status?: string;
+    pending_artifact_count?: number;
+    pending_artifacts?: Array<{ token: string; changed_paths?: string[] }>;
+  };
   messages: Array<{ role: string; content: Array<{ type: string; text?: string; name?: string }> }>;
 };
 
@@ -79,6 +92,33 @@ export type WorkspacesState = {
   recent: WorkspaceEntry[];
 };
 
+export type RuntimeDoctorReport = {
+  workspace: string;
+  status: string;
+  session_id?: string | null;
+  summary: {
+    session_count: number;
+    pending_action_count: number;
+    pending_artifact_count: number;
+    finding_count: number;
+  };
+  sessions: Array<{
+    session_id: string;
+    pending_plan_token?: string | null;
+    pending_artifact_count: number;
+    status: string;
+  }>;
+  pending_artifacts: Array<{
+    token: string;
+    session_id?: string;
+    workflow?: string;
+    artifact_id?: string;
+    changed_paths?: string[];
+    lifecycle_state?: string;
+  }>;
+  findings: Array<Record<string, unknown>>;
+};
+
 export type OpenWorkspaceResponse = WorkspacesState & {
   requires_confirmation: boolean;
   candidate?: WorkspaceEntry | null;
@@ -119,6 +159,8 @@ export const api = {
   reject: (sessionId: string) => request(`/api/sessions/${sessionId}/reject`, { method: "POST" }),
   cancel: (sessionId: string) => request(`/api/sessions/${sessionId}/cancel`, { method: "POST" }),
   approvals: () => request<ApprovalsSummary>("/api/approvals"),
+  runtimeReport: (sessionId?: string) =>
+    request<RuntimeDoctorReport>(sessionId ? `/api/runtime/report?session_id=${encodeURIComponent(sessionId)}` : "/api/runtime/report"),
   approvePending: (token: string) => request<ApprovalActionResponse>(`/api/approvals/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectPending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/reject`, { method: "POST" }),
   capabilities: () => request<{ capabilities: unknown[] }>("/api/capabilities"),

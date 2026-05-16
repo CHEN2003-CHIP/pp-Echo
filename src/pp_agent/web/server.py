@@ -215,6 +215,10 @@ def create_app(
     def approvals() -> dict:
         return sdk.approvals_summary(active_workspace())
 
+    @app.get("/api/runtime/report")
+    def runtime_report(session_id: Optional[str] = None) -> dict:
+        return sdk.runtime_doctor_report(active_workspace(), session_id=session_id)
+
     @app.post("/api/approvals/{token}/approve")
     def approve_pending_action(token: str) -> dict:
         try:

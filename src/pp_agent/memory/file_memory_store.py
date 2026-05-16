@@ -42,11 +42,13 @@ class FileMemoryIndexStore:
         workspace: Path,
         index_path: Path,
         memory_root: Path | None = None,
+        global_root: Path | None = None,
         extra_paths: list[str] | None = None,
         busy_timeout_ms: int = 5000,
     ) -> None:
         self.workspace = workspace.resolve()
         self.memory_root = (memory_root or workspace).resolve()
+        self.global_root = global_root.resolve() if global_root is not None else None
         self.index_path = Path(index_path).expanduser()
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         self.extra_paths = list(extra_paths or [])
@@ -58,6 +60,10 @@ class FileMemoryIndexStore:
         root_memory = self.memory_root / "MEMORY.md"
         if root_memory.exists():
             candidates.append(root_memory)
+        if self.global_root is not None:
+            global_memory = self.global_root / "MEMORY.md"
+            if global_memory.exists():
+                candidates.append(global_memory)
         memory_dir = self.memory_root / "memory"
         if memory_dir.exists():
             candidates.extend(path for path in memory_dir.rglob("*.md") if path.is_file())
@@ -76,7 +82,7 @@ class FileMemoryIndexStore:
                 if rel in seen or not self.is_allowed_memory_label(rel):
                     continue
                 resolved = candidate.resolve()
-                if not self._is_under_workspace(resolved):
+                if not self._is_under_allowed_roots(resolved):
                     continue
                 stat = resolved.stat()
                 files.append(
@@ -169,7 +175,7 @@ class FileMemoryIndexStore:
         return {
             row["path"]: FileMemoryFile(
                 path=row["path"],
-                absolute_path=self.memory_root / row["path"],
+                absolute_path=self.resolve_memory_path(row["path"]),
                 mtime=float(row["mtime"]),
                 size=int(row["size"]),
                 content_hash=row["content_hash"],
@@ -247,18 +253,28 @@ class FileMemoryIndexStore:
         label = self._normalize_label(raw_path)
         if not self.is_allowed_memory_label(label):
             raise FileMemoryAccessError("forbidden_path", f"Path is not an allowed memory Markdown file: {raw_path}")
-        candidate = (self.memory_root / label).resolve(strict=False)
-        if not self._is_under_workspace(candidate):
-            raise FileMemoryAccessError("path_escape", "Memory path escapes the workspace")
+        if label == "global/MEMORY.md":
+            if self.global_root is None:
+                raise FileMemoryAccessError("forbidden_path", "Global memory is not configured")
+            candidate = (self.global_root / "MEMORY.md").resolve(strict=False)
+        else:
+            candidate = (self.memory_root / label).resolve(strict=False)
+        if not self._is_under_allowed_roots(candidate):
+            raise FileMemoryAccessError("path_escape", "Memory path escapes allowed memory roots")
         if candidate.exists():
             resolved = candidate.resolve()
-            if not self._is_under_workspace(resolved):
-                raise FileMemoryAccessError("path_escape", "Memory path resolves outside the workspace")
+            if not self._is_under_allowed_roots(resolved):
+                raise FileMemoryAccessError("path_escape", "Memory path resolves outside allowed memory roots")
             return resolved
         return candidate
 
     def to_memory_path(self, path: Path) -> str:
         try:
+            if self.global_root is not None:
+                try:
+                    return "global/" + path.resolve(strict=False).relative_to(self.global_root).as_posix()
+                except ValueError:
+                    pass
             return path.resolve(strict=False).relative_to(self.memory_root).as_posix()
         except ValueError:
             return path.as_posix()
@@ -267,6 +283,8 @@ class FileMemoryIndexStore:
     def is_allowed_memory_label(label: str) -> bool:
         normalized = label.replace("\\", "/")
         if normalized == "MEMORY.md":
+            return True
+        if normalized == "global/MEMORY.md":
             return True
         return normalized.startswith("memory/") and normalized.endswith(".md") and "/../" not in f"/{normalized}/"
 
@@ -299,6 +317,14 @@ class FileMemoryIndexStore:
     def _is_under_workspace(self, path: Path) -> bool:
         resolved = path.resolve(strict=False)
         return resolved == self.workspace or self.workspace in resolved.parents
+
+    def _is_under_allowed_roots(self, path: Path) -> bool:
+        resolved = path.resolve(strict=False)
+        if self._is_under_workspace(resolved):
+            return True
+        if self.global_root is None:
+            return False
+        return resolved == self.global_root or self.global_root in resolved.parents
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection, connection:

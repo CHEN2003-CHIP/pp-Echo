@@ -249,6 +249,17 @@ if app:
         )
 
 
+    @workflow_app.command("doctor")
+    def workflow_doctor(
+        session_id: Optional[str] = typer.Option(None, "--session"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.workflow import workflow_doctor_main
+
+        workflow_doctor_main(workspace, session_id=session_id, json_mode=json_mode)
+
+
     @config_app.command("show")
     def config_show(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
         from pp_agent.cli.commands.config import config_show_main
@@ -414,6 +425,7 @@ if app:
         query: str = typer.Argument(...),
         top_k: int = typer.Option(5, "--top-k"),
         mode: str = typer.Option("auto", "--mode"),
+        scope: str = typer.Option("auto", "--scope"),
         include_debug: bool = typer.Option(False, "--include-debug"),
         json_mode: bool = typer.Option(False, "--json"),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
@@ -425,6 +437,7 @@ if app:
             query,
             top_k=top_k,
             mode=mode,
+            scope=scope,
             include_debug=include_debug,
             json_mode=json_mode,
         )
@@ -545,6 +558,10 @@ def main() -> None:
     workflow_repo_parser.add_argument("--path-filter", default=None)
     workflow_repo_parser.add_argument("--staged-only", action="store_true")
     workflow_repo_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    workflow_doctor_parser = workflow_subparsers.add_parser("doctor")
+    workflow_doctor_parser.add_argument("--session", default=None)
+    workflow_doctor_parser.add_argument("--json", action="store_true")
+    workflow_doctor_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     config_parser = subparsers.add_parser("config")
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
     config_show_parser = config_subparsers.add_parser("show")
@@ -622,6 +639,7 @@ def main() -> None:
     memory_search_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     memory_search_parser.add_argument("--top-k", type=int, default=5)
     memory_search_parser.add_argument("--mode", default="auto")
+    memory_search_parser.add_argument("--scope", default="auto")
     memory_search_parser.add_argument("--include-debug", action="store_true")
     memory_search_parser.add_argument("--json", action="store_true")
     memory_get_parser = memory_subparsers.add_parser("get")
@@ -720,6 +738,14 @@ def main() -> None:
             path_filter=args.path_filter,
             staged_only=args.staged_only,
         )
+    elif command == "workflow" and args.workflow_command == "doctor":
+        from pp_agent.cli.commands.workflow import workflow_doctor_main
+
+        workflow_doctor_main(
+            Path(args.workspace),
+            session_id=args.session,
+            json_mode=args.json,
+        )
     elif command == "config" and args.config_command == "show":
         from pp_agent.cli.commands.config import config_show_main
 
@@ -803,6 +829,7 @@ def main() -> None:
             args.query,
             top_k=args.top_k,
             mode=args.mode,
+            scope=args.scope,
             include_debug=args.include_debug,
             json_mode=args.json,
         )

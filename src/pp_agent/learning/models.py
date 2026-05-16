@@ -9,7 +9,17 @@ from pydantic import BaseModel, Field
 
 
 LearningKind = Literal["project_convention", "lesson", "workflow", "user_preference", "skill_candidate"]
-LearningTarget = Literal["memory", "bootstrap_memory", "detailed_memory", "skill", "ignore"]
+LearningTarget = Literal[
+    "memory",
+    "bootstrap_memory",
+    "detailed_memory",
+    "global_bootstrap",
+    "workspace_bootstrap",
+    "journal",
+    "detailed",
+    "skill",
+    "ignore",
+]
 LearningStatus = Literal["pending", "applied", "rejected"]
 LearningConfidence = Literal["low", "medium", "high"]
 
@@ -43,12 +53,24 @@ class LearningCandidate(BaseModel):
     source_turn_id: str = ""
     created_at: float = Field(default_factory=time.time)
     applied_at: Optional[float] = None
+    promoted_target: Optional[LearningTarget] = None
+    promoted_at: Optional[float] = None
+    promotion_reason: str = ""
 
     def mark_applied(self) -> "LearningCandidate":
         return self.model_copy(update={"status": "applied", "applied_at": time.time()})
 
     def mark_rejected(self) -> "LearningCandidate":
         return self.model_copy(update={"status": "rejected"})
+
+    def mark_promoted(self, target: LearningTarget, *, reason: str = "") -> "LearningCandidate":
+        return self.model_copy(
+            update={
+                "promoted_target": target,
+                "promoted_at": time.time(),
+                "promotion_reason": reason.strip(),
+            }
+        )
 
 
 class LearningStatusSummary(BaseModel):

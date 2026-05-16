@@ -27,6 +27,7 @@ MEMORY_SEARCH_SCHEMA = {
         "query": {"type": "string"},
         "top_k": {"type": "integer", "default": 5},
         "mode": {"type": "string", "enum": ["auto", "hybrid", "bm25", "vector"], "default": "auto"},
+        "scope": {"type": "string", "enum": ["auto", "workspace", "global", "all"], "default": "auto"},
         "include_debug": {"type": "boolean", "default": False},
     },
     "required": ["query"],
@@ -103,12 +104,16 @@ def memory_search_executor(workspace: Path, arguments: dict[str, Any], *, settin
     if mode not in {"auto", "hybrid", "bm25", "vector"}:
         mode = "auto"
     include_debug = bool(arguments.get("include_debug", False))
+    scope = str(arguments.get("scope") or "auto")
+    if scope not in {"auto", "workspace", "global", "all"}:
+        scope = "auto"
     engine = build_file_memory_search_engine(workspace, settings=settings)
     result = engine.search(
         FileMemorySearchRequest(
             query=str(arguments.get("query") or ""),
             top_k=max(1, top_k),
             mode=mode,  # type: ignore[arg-type]
+            scope=scope,  # type: ignore[arg-type]
             include_debug=include_debug,
         )
     )
@@ -181,6 +186,7 @@ def build_file_memory_store(workspace: Path, *, settings: Settings | None = None
         workspace=settings.workspace,
         index_path=settings.file_memory_index_path(),
         memory_root=settings.file_memory_root_path(),
+        global_root=settings.global_dir,
         extra_paths=settings.memory.file_memory_extra_paths,
         busy_timeout_ms=settings.memory.sqlite_busy_timeout_ms,
     )

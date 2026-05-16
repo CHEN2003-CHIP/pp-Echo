@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from pp_agent.domain import ChatMessage, TextPart
-from pp_agent.learning.bootstrap_memory import BootstrapMemoryManager, MANAGED_BEGIN, MANAGED_END
-from pp_agent.learning.context import ProjectMemoryContextHook
+from pp_agent.learning.bootstrap_memory import BootstrapMemoryManager, GlobalBootstrapMemoryManager, MANAGED_BEGIN, MANAGED_END
+from pp_agent.learning.context import GlobalMemoryContextHook, ProjectMemoryContextHook
 from pp_agent.learning.models import LearningSettings
 from pp_agent.learning.store import LearningStore
 
@@ -46,7 +46,7 @@ def test_bootstrap_memory_sync_compacts_managed_section(tmp_path: Path) -> None:
     result = manager.sync(long_memory)
 
     assert result.managed_chars <= settings.project_memory_char_limit
-    assert "pp-Echo Bootstrap Memory" in manager.read()
+    assert "pp-Echo Workspace Bootstrap Memory" in manager.read()
 
 
 def test_project_memory_context_hook_prefers_root_memory(tmp_path: Path) -> None:
@@ -74,3 +74,26 @@ def test_project_memory_context_hook_falls_back_to_legacy_memory(tmp_path: Path)
     transformed = hook.transform_context(None, messages)  # type: ignore[arg-type]
 
     assert "legacy memory" in transformed[1].content[0].text
+
+
+def test_global_bootstrap_memory_manager_uses_global_title(tmp_path: Path) -> None:
+    manager = GlobalBootstrapMemoryManager(global_root=tmp_path, settings=LearningSettings())
+
+    manager.sync("- User prefers focused tests first.")
+
+    content = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    assert "# Global Memory" in content
+    assert "pp-Echo Global User Bootstrap Memory" in content
+
+
+def test_global_memory_context_hook_injects_global_memory(tmp_path: Path) -> None:
+    settings = LearningSettings()
+    global_root = tmp_path / "global"
+    global_root.mkdir()
+    (global_root / "MEMORY.md").write_text("# Global Memory\n\nAlways answer in Chinese.\n", encoding="utf-8")
+    hook = GlobalMemoryContextHook(workspace=tmp_path, settings=settings, global_root=global_root)
+    messages = [ChatMessage(role="system", content=[TextPart(text="system")], timestamp=0)]
+
+    transformed = hook.transform_context(None, messages)  # type: ignore[arg-type]
+
+    assert "Always answer in Chinese." in transformed[1].content[0].text

@@ -81,11 +81,21 @@ def _write_memory(tmp_path: Path) -> None:
         "Vector retrieval catches semantic paraphrases.\n",
         encoding="utf-8",
     )
+    daily_dir = memory_dir / "daily"
+    daily_dir.mkdir(exist_ok=True)
+    (daily_dir / "2026-05-16.md").write_text(
+        "# Daily Journal\n\n## Smoke passed\n\n2026-05-16 web smoke verification passed.\n",
+        encoding="utf-8",
+    )
 
 
-def _engine(tmp_path: Path, *, embedding=None, vector=None) -> FileMemorySearchEngine:
+def _engine(tmp_path: Path, *, embedding=None, vector=None, global_root: Path | None = None) -> FileMemorySearchEngine:
     return FileMemorySearchEngine(
-        store=FileMemoryIndexStore(workspace=tmp_path, index_path=tmp_path / ".pp-agent" / "file-memory.db"),
+        store=FileMemoryIndexStore(
+            workspace=tmp_path,
+            index_path=tmp_path / ".pp-agent" / "file-memory.db",
+            global_root=global_root,
+        ),
         chunker=MarkdownFileChunker(target_chars=500, overlap_lines=2),
         embedding_provider=embedding or NoopEmbeddingProvider(),
         vector_index=vector or NoopFileMemoryVectorIndex(),
@@ -170,7 +180,7 @@ def test_file_memory_search_finds_auto_written_detailed_memory(tmp_path: Path) -
         kind="lesson",
         title="Embedding collection mismatch",
         content="Fixed issue where embedding model changed collection mismatch broke retrieval.",
-        suggested_target="detailed_memory",
+        suggested_target="detailed",
     )
     store.append_candidates([candidate])
     FileMemoryWriter(
@@ -184,6 +194,38 @@ def test_file_memory_search_finds_auto_written_detailed_memory(tmp_path: Path) -
 
     assert result.results
     assert result.results[0].path == "memory/bugs.md"
+
+
+def test_file_memory_search_scope_and_source_scope(tmp_path: Path) -> None:
+    _write_memory(tmp_path)
+    global_root = tmp_path / ".global"
+    global_root.mkdir()
+    (global_root / "MEMORY.md").write_text("# Global Memory\n\nUser always prefers Chinese plans.\n", encoding="utf-8")
+    engine = _engine(tmp_path, global_root=global_root)
+
+    workspace_result = engine.search(FileMemorySearchRequest(query="smoke verification", top_k=3, mode="bm25", scope="workspace"))
+    global_result = engine.search(FileMemorySearchRequest(query="user always prefers Chinese plans", top_k=3, mode="bm25", scope="global"))
+    all_result = engine.search(FileMemorySearchRequest(query="Chinese plans", top_k=5, mode="bm25", scope="all"))
+
+    assert workspace_result.results
+    assert all(hit.source_scope != "global_bootstrap" for hit in workspace_result.results)
+    assert global_result.results
+    assert all(hit.path == "global/MEMORY.md" for hit in global_result.results)
+    assert all(hit.source_scope == "global_bootstrap" for hit in global_result.results)
+    assert any(hit.source_scope == "global_bootstrap" for hit in all_result.results)
+
+
+def test_file_memory_search_auto_scope_prefers_workspace_for_non_preference_queries(tmp_path: Path) -> None:
+    _write_memory(tmp_path)
+    global_root = tmp_path / ".global"
+    global_root.mkdir()
+    (global_root / "MEMORY.md").write_text("# Global Memory\n\nUser always prefers Chinese plans.\n", encoding="utf-8")
+    engine = _engine(tmp_path, global_root=global_root)
+
+    result = engine.search(FileMemorySearchRequest(query="web smoke verification passed", top_k=5, mode="bm25", scope="auto"))
+
+    assert result.results
+    assert all(hit.path != "global/MEMORY.md" for hit in result.results)
 
 
 def test_file_memory_search_max_per_file_and_top_k(tmp_path: Path) -> None:

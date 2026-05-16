@@ -3,12 +3,17 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from agent_core.types import ModelConfig
+
 from pp_agent.web import server as server_module
+from pp_agent.runtime.control_plane import build_runtime_doctor_report
 from pp_agent.subagents.worktree import WorktreeManager
 from pp_agent.web.server import create_app
 from pp_agent.web.session_manager import WebSessionManager
 from pp_agent.web.workspaces import WebWorkspaceManager
 from pp_agent.tools.registry import ToolRegistry
+from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.sessions import SessionStore
 
 from tests.web.test_session_manager import _factory
 
@@ -177,6 +182,81 @@ def test_web_api_rejects_pending_action_token(tmp_path: Path, monkeypatch) -> No
     assert response.status_code == 200
     assert response.json()["result"] == "rejected"
     assert captured == {"workspace": (tmp_path / "workspace").resolve(), "token": "tok-1", "render": False}
+
+
+def test_web_api_runtime_report_surfaces_patch_artifact_findings(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = server_module.bootstrap.pending_action_store_for(workspace)
+    store.stage(
+        action_type="apply_patch_artifact",
+        target_path=workspace / ".pp-agent" / "artifacts" / "missing.patch",
+        details={
+            "session_id": "session-1",
+            "workflow": "code_change",
+            "artifact_id": "artifact-1",
+            "changed_paths": ["docs/worktree-smoke-web.md"],
+        },
+    )
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    response = client.get("/api/runtime/report")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "warning"
+    assert response.json()["summary"]["pending_artifact_count"] == 1
+    assert any(item["kind"] == "missing_artifact_file" for item in response.json()["findings"])
+
+
+def test_runtime_doctor_report_flags_missing_patch_artifact_file(tmp_path: Path) -> None:
+    session_store = SessionStore(tmp_path / "sessions")
+    record = session_store.create("system", ModelConfig())
+    session_store.save(record)
+    pending_store = PendingActionStore(tmp_path / "pending")
+    payload = pending_store.stage(
+        action_type="apply_patch_artifact",
+        target_path=tmp_path / "artifacts" / "missing.patch",
+        details={
+            "session_id": record.id,
+            "workflow": "code_change",
+            "artifact_id": "artifact-1",
+            "changed_paths": ["docs/worktree-smoke-web.md"],
+        },
+    )
+
+    report = build_runtime_doctor_report(
+        tmp_path,
+        session_store=session_store,
+        pending_store=pending_store,
+    )
+
+    assert report["status"] == "warning"
+    assert report["summary"]["pending_artifact_count"] == 1
+    assert report["findings"][0]["kind"] == "missing_artifact_file"
+    assert report["findings"][0]["token"] == payload["token"]
+
+
+def test_runtime_doctor_report_flags_orphaned_planner_token(tmp_path: Path) -> None:
+    session_store = SessionStore(tmp_path / "sessions")
+    pending_store = PendingActionStore(tmp_path / "pending")
+    payload = pending_store.stage(
+        action_type="planner_approval",
+        details={"session_id": "missing-session"},
+    )
+
+    report = build_runtime_doctor_report(
+        tmp_path,
+        session_store=session_store,
+        pending_store=pending_store,
+    )
+
+    assert report["status"] == "warning"
+    assert any(
+        finding["kind"] == "orphaned_pending_token" and finding["token"] == payload["token"]
+        for finding in report["findings"]
+    )
 
 
 def test_web_api_workspace_open_requires_confirmation_then_switches(tmp_path: Path) -> None:

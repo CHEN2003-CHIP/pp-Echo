@@ -26,7 +26,7 @@ class ProjectMemoryContextHook:
             content = content[-self.settings.project_memory_char_limit :]
         memory_message = ChatMessage(
             role="system",
-            content=[TextPart(text=f"Project memory learned by pp-Echo:\n{content}")],
+            content=[TextPart(text=f"Workspace bootstrap memory learned by pp-Echo:\n{content}")],
             timestamp=time.time(),
         )
         if not messages:
@@ -38,3 +38,32 @@ class ProjectMemoryContextHook:
         if bootstrap:
             return bootstrap
         return self.store.read_project_memory()
+
+
+class GlobalMemoryContextHook:
+    def __init__(self, *, workspace: Path, settings: LearningSettings, global_root: Path) -> None:
+        self.workspace = workspace.resolve()
+        self.settings = settings
+        self.global_root = global_root.resolve()
+
+    def transform_context(self, _state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
+        if not self.settings.enable:
+            return messages
+        path = self.global_root / "MEMORY.md"
+        if not path.exists():
+            return messages
+        try:
+            content = path.read_text(encoding="utf-8-sig").strip()
+        except OSError:
+            return messages
+        if not content:
+            return messages
+        content = content[-min(self.settings.project_memory_char_limit, 2400) :]
+        memory_message = ChatMessage(
+            role="system",
+            content=[TextPart(text=f"Global user memory learned by pp-Echo:\n{content}")],
+            timestamp=time.time(),
+        )
+        if not messages:
+            return [memory_message]
+        return [messages[0], memory_message, *messages[1:]]

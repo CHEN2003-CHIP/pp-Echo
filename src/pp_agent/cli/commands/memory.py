@@ -21,6 +21,7 @@ def memory_search_main(
     *,
     top_k: int = 5,
     mode: str = "auto",
+    scope: str = "auto",
     json_mode: bool = False,
     include_debug: bool = False,
 ) -> None:
@@ -31,6 +32,7 @@ def memory_search_main(
             query=query,
             top_k=top_k,
             mode=mode if mode in {"auto", "hybrid", "bm25", "vector"} else "auto",  # type: ignore[arg-type]
+            scope=scope if scope in {"auto", "workspace", "global", "all"} else "auto",  # type: ignore[arg-type]
             include_debug=include_debug,
         )
     )

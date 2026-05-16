@@ -14,6 +14,7 @@ from pp_agent.memory.file_memory_vector import FileMemoryVectorIndexProtocol
 logger = logging.getLogger(__name__)
 
 SearchMode = Literal["auto", "hybrid", "bm25", "vector"]
+MemoryScope = Literal["auto", "workspace", "global", "all"]
 
 
 @dataclass(frozen=True)
@@ -21,12 +22,14 @@ class FileMemorySearchRequest:
     query: str
     top_k: int = 5
     mode: SearchMode = "auto"
+    scope: MemoryScope = "auto"
     include_debug: bool = False
 
 
 @dataclass(frozen=True)
 class FileMemorySearchHit:
     path: str
+    source_scope: str
     line_start: int
     line_end: int
     score: float
@@ -42,6 +45,7 @@ class FileMemorySearchHit:
     def to_dict(self, *, include_debug: bool = False) -> dict[str, object]:
         payload: dict[str, object] = {
             "path": self.path,
+            "source_scope": self.source_scope,
             "line_start": self.line_start,
             "line_end": self.line_end,
             "score": round(self.score, 6),
@@ -182,6 +186,7 @@ class FileMemorySearchEngine:
             summary = self.sync(embed=request.mode != "bm25")
             warnings.extend(summary.warnings)
         chunks = self.store.list_chunks(active_only=True)
+        chunks = [chunk for chunk in chunks if self._scope_allows(chunk.path, scope=request.scope, query=query)]
         semantic_available = self._semantic_available()
         bm25_available = bool(chunks)
         mode = self._resolve_mode(request.mode, semantic_available=semantic_available, bm25_available=bm25_available)
@@ -310,6 +315,7 @@ class FileMemorySearchEngine:
             selected.append(
                 FileMemorySearchHit(
                     path=chunk.path,
+                    source_scope=self._source_scope(chunk.path),
                     line_start=chunk.line_start,
                     line_end=chunk.line_end,
                     score=final_score,
@@ -333,3 +339,28 @@ class FileMemorySearchEngine:
         if len(compact) <= self.snippet_chars:
             return compact
         return compact[: max(0, self.snippet_chars - 3)].rstrip() + "..."
+
+    @staticmethod
+    def _source_scope(path: str) -> str:
+        normalized = path.replace("\\", "/")
+        if normalized == "global/MEMORY.md":
+            return "global_bootstrap"
+        if normalized == "MEMORY.md":
+            return "workspace_bootstrap"
+        if normalized.startswith("memory/daily/"):
+            return "journal"
+        return "detailed"
+
+    def _scope_allows(self, path: str, *, scope: MemoryScope, query: str) -> bool:
+        source_scope = self._source_scope(path)
+        if scope == "all":
+            return True
+        if scope == "global":
+            return source_scope == "global_bootstrap"
+        if scope == "workspace":
+            return source_scope != "global_bootstrap"
+        if source_scope != "global_bootstrap":
+            return True
+        lowered = query.lower()
+        global_signals = ("preference", "user always", "always", "never", "default", "偏好", "默认", "记住")
+        return any(signal in lowered for signal in global_signals)

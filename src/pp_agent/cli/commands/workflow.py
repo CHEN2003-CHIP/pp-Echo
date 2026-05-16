@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from pp_agent.api import sdk
 from pp_agent.app.bootstrap import create_tool_registry
 from pp_agent.cli.commands.approvals import approve_or_execute_pending_action, approvals_summary_payload
 from pp_agent.cli.render.runtime import console
@@ -61,4 +62,44 @@ def workflow_repo_main(
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-__all__ = ["workflow_repo_main"]
+def workflow_doctor_main(
+    workspace: Path,
+    *,
+    session_id: Optional[str] = None,
+    json_mode: bool = False,
+) -> None:
+    report = sdk.runtime_doctor_report(workspace, session_id=session_id)
+    if json_mode:
+        console.print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    summary = report["summary"]
+    lines = [
+        "== Runtime Doctor ==",
+        f"workspace  {report['workspace']}",
+        f"status     {report['status']}",
+        f"sessions   {summary['session_count']}",
+        f"pending    {summary['pending_action_count']}",
+        f"artifacts  {summary['pending_artifact_count']}",
+        f"findings   {summary['finding_count']}",
+    ]
+    for session in report.get("sessions", [])[:5]:
+        lines.append(
+            f"session    {str(session.get('session_id', ''))[:8]}  "
+            f"status={session.get('status', 'unknown')}  "
+            f"artifacts={session.get('pending_artifact_count', 0)}"
+        )
+    if report.get("findings"):
+        lines.append("")
+        lines.append("Findings")
+        for finding in report["findings"][:10]:
+            token = str(finding.get("token") or "")[:8]
+            kind = str(finding.get("kind") or "unknown")
+            detail = str(finding.get("target_path") or finding.get("session_id") or "").strip()
+            suffix = f"  {detail}" if detail else ""
+            lines.append(f"- {kind}  token={token}{suffix}")
+    else:
+        lines.extend(["", "No control-plane consistency findings."])
+    console.print("\n".join(lines))
+
+
+__all__ = ["workflow_doctor_main", "workflow_repo_main"]

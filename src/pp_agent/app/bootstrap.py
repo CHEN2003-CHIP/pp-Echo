@@ -27,7 +27,7 @@ from pp_agent.extensions.index import extension_search_roots
 from pp_agent.llm.models import ModelConfig, ProviderConfig
 from pp_agent.llm.registry import create_llm_client
 from pp_agent.learning import LearningRuntime, LearningStore
-from pp_agent.learning.context import ProjectMemoryContextHook
+from pp_agent.learning.context import GlobalMemoryContextHook, ProjectMemoryContextHook
 from pp_agent.memory import HistoryIndexer, NoopMemoryProvider, SQLiteHistoryStore, SQLiteMemoryProvider
 from pp_agent.memory.auto_index import AsyncMemoryIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.embedding import DashScopeEmbeddingProvider, NoopEmbeddingProvider
@@ -600,6 +600,17 @@ def project_memory_context_hook_for(workspace: Path) -> ProjectMemoryContextHook
     )
 
 
+def global_memory_context_hook_for(workspace: Path) -> GlobalMemoryContextHook | None:
+    settings = load_settings(workspace)
+    if not settings.learning.enable:
+        return None
+    return GlobalMemoryContextHook(
+        workspace=workspace,
+        settings=settings.learning,
+        global_root=settings.global_dir,
+    )
+
+
 def checkpoint_store_for(workspace: Path) -> CheckpointStore:
     """
     根据工作空间获取检查点存储实例
@@ -985,6 +996,9 @@ def create_runtime_from_record(
         setattr(skill_runtime, "subagent_skill_policy", options.subagent_profile.skill)
     # 注册上下文转换钩子
     if options.enable_memory_hooks:
+        global_memory_hook = global_memory_context_hook_for(workspace)
+        if global_memory_hook is not None:
+            agent.runtime_hooks.add_transform_context_hook("global_memory", "global_memory", global_memory_hook.transform_context)
         project_memory_hook = project_memory_context_hook_for(workspace)
         if project_memory_hook is not None:
             agent.runtime_hooks.add_transform_context_hook("project_memory", "project_memory", project_memory_hook.transform_context)
@@ -1066,6 +1080,9 @@ def reload_runtime_extensions(
         search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
     agent.learning_runtime = learning_runtime_for(workspace, agent.llm_client)
+    global_memory_hook = global_memory_context_hook_for(workspace)
+    if global_memory_hook is not None:
+        agent.runtime_hooks.add_transform_context_hook("global_memory", "global_memory", global_memory_hook.transform_context)
     project_memory_hook = project_memory_context_hook_for(workspace)
     if project_memory_hook is not None:
         agent.runtime_hooks.add_transform_context_hook("project_memory", "project_memory", project_memory_hook.transform_context)
