@@ -23,10 +23,10 @@ CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 @dataclass(frozen=True)
 class FileMemoryWriteResult:
-    candidate_id: str
-    action: str
-    path: Path | None = None
-    warnings: list[str] = field(default_factory=list)
+    candidate_id: str          # 候选项 ID
+    action: str                # 执行的动作：global_bootstrap, workspace_bootstrap, journal, detailed_memory, ignored, skipped, pending_* 等
+    path: Path | None = None   # 写入的文件路径（如果有）
+    warnings: list[str] = field(default_factory=list)  # 非致命警告列表
 
 
 class FileMemoryWriter:
@@ -38,6 +38,7 @@ class FileMemoryWriter:
         self.global_root = Settings.load(self.workspace).global_dir
 
     def auto_apply(self, candidates: list[LearningCandidate]) -> list[FileMemoryWriteResult]:
+        """自动应用一批候选项，并触发后续同步。"""
         results: list[FileMemoryWriteResult] = []
         if not self.settings.auto_apply_memory:
             return results
@@ -60,6 +61,7 @@ class FileMemoryWriter:
         return results
 
     def apply_candidate(self, candidate: LearningCandidate, *, auto: bool = False) -> FileMemoryWriteResult:
+        """核心决策和路由方法，决定每个候选项被写入何处"""
         if candidate.status != "pending":
             return FileMemoryWriteResult(candidate_id=candidate.id, action="skipped")
         if candidate.suggested_target == "ignore":
@@ -99,6 +101,7 @@ class FileMemoryWriter:
         return FileMemoryWriteResult(candidate_id=candidate.id, action="pending_promotion")
 
     def _resolve_target(self, candidate: LearningCandidate) -> str:
+        """根据候选项的建议目标，决定写入何处"""
         if candidate.promoted_target in {"global_bootstrap", "workspace_bootstrap", "journal", "detailed"}:
             return candidate.promoted_target
         if candidate.suggested_target == "bootstrap_memory":
@@ -112,6 +115,7 @@ class FileMemoryWriter:
         return "journal"
 
     def _classify_memory_target(self, candidate: LearningCandidate) -> str:
+        """模糊分别处理 memory 类型候选项"""
         if candidate.kind == "user_preference":
             return "global_bootstrap"
         if candidate.kind == "project_convention":
@@ -142,10 +146,13 @@ class FileMemoryWriter:
 
     def _should_auto_promote(self, candidate: LearningCandidate, *, target: str) -> bool:
         if self._looks_one_off(candidate):
+            #一次性
             return False
         if target == "global_bootstrap":
+            #仅用户偏好
             return candidate.kind == "user_preference"
         if target == "workspace_bootstrap":
+            #仅项目约定
             return (
                 candidate.kind in {"project_convention", "workflow", "lesson"}
                 and not self.store.has_similar_project_memory(self.curator.memory_entry(candidate))

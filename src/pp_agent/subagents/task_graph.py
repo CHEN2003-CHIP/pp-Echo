@@ -24,12 +24,13 @@ class TaskNode(BaseModel):
 
 
 class WorkflowTemplate(BaseModel):
-    name: str
-    nodes: list[TaskNode]
+    name: str          # 模板名称（如 "debug"、"code_change"）
+    nodes: list[TaskNode]   # 该模板包含的所有任务节点
 
 
 def workflow_template(name: str, *, allow_edits: bool = False) -> WorkflowTemplate:
     if name == "debug":
+        # 调试模板，用于快速测试流程
         return WorkflowTemplate(
             name="debug",
             nodes=[
@@ -39,6 +40,13 @@ def workflow_template(name: str, *, allow_edits: bool = False) -> WorkflowTempla
             ],
         )
     if name == "code_change":
+        # 代码变更模板，用于快速测试流程
+        """
+        memory_lookup ──┐
+                        ├──> implementation_plan ──> code_patch ──> change_review
+        repo_research  ─┤
+        api_trace     ──┘
+        """
         return WorkflowTemplate(
             name="code_change",
             nodes=[
@@ -72,6 +80,7 @@ def workflow_template(name: str, *, allow_edits: bool = False) -> WorkflowTempla
                 ),
             ],
         )
+    # 研究模板，用于快速测试流程
     return WorkflowTemplate(
         name="research",
         nodes=[

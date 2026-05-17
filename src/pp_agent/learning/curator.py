@@ -9,11 +9,14 @@ from pp_agent.learning.safety import clean_learning_text
 
 
 class LearningCurator:
+    """用于管理从交互中学习到的知识：
+    将原始学习候选（LearningCandidate）转换为可存储的记忆文本或可执行的技能文档，并负责记忆的合并与长度控制。"""
     def __init__(self, *, workspace: Path, settings: LearningSettings) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings
 
     def memory_entry(self, candidate: LearningCandidate) -> str:
+        """生成一个 Markdown 格式的 记忆条目"""
         title = clean_learning_text(candidate.title, limit=120)
         content = clean_learning_text(candidate.content, limit=1200)
         evidence = clean_learning_text(candidate.evidence, limit=500)
@@ -24,6 +27,7 @@ class LearningCurator:
         return "\n".join(lines)
 
     def skill_path_for(self, candidate: LearningCandidate) -> Path:
+        """确定该学习条目应该保存为 技能文件（SKILL.md） 的路径。"""
         slug = _slugify(candidate.title)
         digest = hashlib.sha1(candidate.id.encode("utf-8")).hexdigest()[:6]
         root = self.workspace / ".pp-agent" / "skills"
@@ -33,6 +37,7 @@ class LearningCurator:
         return candidate_path
 
     def skill_document(self, candidate: LearningCandidate, *, name: str | None = None) -> str:
+        """生成技能文档的完整内容（符合某些 Agent 框架的 SKILL.md 格式，如 Frontmatter + 章节）。"""
         skill_name = name or _slugify(candidate.title)
         description = clean_learning_text(candidate.content, limit=120) or clean_learning_text(candidate.title, limit=120)
         body = clean_learning_text(candidate.content, limit=1600)

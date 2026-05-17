@@ -188,14 +188,18 @@ class SubAgentOrchestrator:
             warnings.append("code_change full workflow requires max_agents >= 6 to run research + planner + worker + reviewer")
         if resolved_workflow == "code_change" and not allow_edits:
             warnings.append("allow_edits=false; code-worker did not receive edit tools.")
+        # 根据工作流类型和是否允许编辑，返回一个 任务图（DAG） 的定义
         template = workflow_template(resolved_workflow, allow_edits=allow_edits)
+        #解析 DAG，按拓扑顺序生成可并行执行的批次
         scheduler = DeterministicScheduler(template)
+        #一个共享数据存储，用于在不同节点间传递结果
         blackboard = Blackboard()
         remaining_budget = agent_budget
         for batch in scheduler.runnable_batches():
             if remaining_budget <= 0:
                 break
             runnable: list[TaskNode] = []
+            ## 1. 过滤并处理跳过节点
             for node in batch:
                 skip, reason = scheduler.should_skip(node, blackboard)
                 if skip:
@@ -214,9 +218,11 @@ class SubAgentOrchestrator:
                     warnings.append(reason)
                     continue
                 runnable.append(node)
+            # 2. 按剩余预算截断
             runnable = runnable[:remaining_budget]
             if not runnable:
                 continue
+            # 3. 处理单节点（顺序执行）或多节点（并行）
             if len(runnable) == 1:
                 node = runnable[0]
                 scheduler.mark_started(node)
@@ -269,6 +275,7 @@ class SubAgentOrchestrator:
                     steps.append(step)
                     blackboard.put(node.id, step.to_manifest())
                     scheduler.mark_completed(node, step.status)
+            #预算减少
             remaining_budget -= len(runnable)
 
         success_count = sum(1 for step in steps if step.status == "success")
@@ -302,12 +309,12 @@ class SubAgentOrchestrator:
     def _run_parallel(
         self,
         *,
-        manager: RunsSubagents,
-        agents: list[str],
-        goal: str,
-        timeout_seconds: int,
-        run_id: str,
-        run_started_at: float,
+        manager: RunsSubagents,      # 实现了 run_sync 等方法的子代理管理器（如 SubAgentManager）
+        agents: list[str],           # 要并行执行的子代理名称列表
+        goal: str,                   # 高层目标（用于构造每个子代理的任务提示）
+        timeout_seconds: int,        # 整个并行批次的超时时间（秒）
+        run_id: str,                 # 编排运行的唯一 ID（用于进度事件）
+        run_started_at: float,       # 整个编排的开始时间戳（用于计算耗时）
     ) -> list[OrchestrationStep]:
         if not agents:
             return []
@@ -327,6 +334,7 @@ class SubAgentOrchestrator:
         last_progress = 0.0
         try:
             while pending:
+                # 处理取消...
                 if self._cancel_requested():
                     for future in pending:
                         future.cancel()
@@ -349,6 +357,7 @@ class SubAgentOrchestrator:
                     )
                     break
                 remaining = deadline - time.time()
+                # 处理超时...
                 if remaining <= 0:
                     for future in pending:
                         agent = future_map[future]
@@ -370,6 +379,7 @@ class SubAgentOrchestrator:
                         started_at=run_started_at,
                     )
                     break
+                # 处理已完成的 future...
                 done, pending = wait(pending, timeout=min(0.5, remaining), return_when=FIRST_COMPLETED)
                 for future in done:
                     agent = future_map[future]
@@ -579,6 +589,7 @@ class SubAgentOrchestrator:
         run_id: str,
         run_started_at: float,
     ) -> OrchestrationStep:
+        #初始化工件树
         worktrees = WorktreeManager(self.workspace)
         last_step: OrchestrationStep | None = None
         for attempt in range(1, max(1, node.max_retries + 1) + 1):
@@ -603,10 +614,12 @@ class SubAgentOrchestrator:
                 run_started_at=run_started_at,
                 tool_workspace=Path(handle.worktree_path),
             )
+            #尝试提取补丁工件
             artifact = worktrees.finalize(handle)
             if artifact is not None:
                 step = self._with_patch_artifact(step, artifact)
                 return step
+            #尝试使用非确定性补丁
             fallback_message = _apply_deterministic_patch_request(goal, Path(handle.worktree_path))
             if fallback_message:
                 artifact = worktrees.finalize(handle)

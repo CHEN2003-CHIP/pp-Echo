@@ -51,6 +51,7 @@ class DeterministicScheduler:
         return False, ""
 
     def task_note(self, node: TaskNode, blackboard: Blackboard) -> str:
+        #目前只为 change_review 节点提供特殊提示：如果 code_patch 失败，提示 Agent 不要假设补丁成功，而是审查失败状态和现有 diff。
         if node.id == "change_review":
             patch = blackboard.get("code_patch")
             if patch is not None and patch.status != "success":

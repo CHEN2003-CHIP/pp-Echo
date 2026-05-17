@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class LearningRuntime:
+    """负责在对话的每个轮次被持久化后，
+    自动从中提取“可学习”的知识（比如用户偏好、项目约定等），并将这些候选内容存储下来，同时尝试自动写入文件形式的记忆。"""
     def __init__(
         self,
         *,
@@ -36,6 +38,7 @@ class LearningRuntime:
         turn_id: str,
         new_messages: list[ChatMessage],
     ) -> list[LearningCandidate]:
+        """当一个新的对话轮次（turn）被持久化（即保存到对话历史）后调用，触发学习流程。"""
         if not self.settings.enable or not self.settings.auto_extract:
             return []
         try:

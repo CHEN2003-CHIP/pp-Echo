@@ -19,15 +19,15 @@ from pp_agent.subagents.capabilities import (
 
 
 class SubAgentSpec(BaseModel):
-    name: str
-    description: str
-    system_prompt: str
-    tool_allowlist: list[str] = Field(default_factory=list)
-    model_override: Optional[str] = None
-    require_plan_approval: bool = False
-    max_turns: int = 4
-    return_format: str = "summary"
-    profile: Optional[SubAgentProfile] = None
+    name: str                          # 子代理的唯一名称（如 "repo-researcher"）
+    description: str                   # 人类可读的描述，用于选择或展示
+    system_prompt: str                 # 系统提示，定义该子代理的角色、行为和限制
+    tool_allowlist: list[str] = Field(default_factory=list)   # 工具白名单（遗留字段）
+    model_override: Optional[str] = None                      # 可选的模型覆盖（如 "gpt-4"）
+    require_plan_approval: bool = False                       # 是否需要用户批准执行计划
+    max_turns: int = 4                                        # 最大交互轮次（对话回合数）
+    return_format: str = "summary"                            # 返回格式（目前只有 "summary"）
+    profile: Optional[SubAgentProfile] = None                 # 能力配置文件（可选）
 
     def resolved_profile(self) -> SubAgentProfile:
         if self.profile is not None:
@@ -36,18 +36,18 @@ class SubAgentSpec(BaseModel):
 
 
 class SubAgentRunResult(BaseModel):
-    spec_name: str
-    session_id: str
-    active_head_id: Optional[str]
-    final_text: str = ""
-    summary: str = ""
-    findings: list[str] = Field(default_factory=list)
-    recommended_next_action: str = ""
-    inspected_paths: list[str] = Field(default_factory=list)
-    confidence: str = "low"
-    tool_calls_used: list[str] = Field(default_factory=list)
-    event_count: int
-    success: bool
+    spec_name: str   #描述
+    session_id: str  #会话ID
+    active_head_id: Optional[str]  #当前头节点ID
+    final_text: str = ""     #最终文本
+    summary: str = ""       #摘要
+    findings: list[str] = Field(default_factory=list)  #发现
+    recommended_next_action: str = ""     #推荐的下一步操作
+    inspected_paths: list[str] = Field(default_factory=list)    #检查过的路径
+    confidence: str = "low"    #置信度
+    tool_calls_used: list[str] = Field(default_factory=list)    #工具调用
+    event_count: int    #事件数量
+    success: bool    #是否成功
     error_message: Optional[str] = None
     failure_kind: Optional[str] = None
     started_at: Optional[float] = None
@@ -75,6 +75,7 @@ def render_subagent_summary_text(
     inspected_paths: list[str],
     confidence: str,
 ) -> str:
+    """结构化的摘要文本"""
     findings_lines = findings or ([summary] if summary else [])
     findings_block = "\n".join(f"- {line}" for line in findings_lines) or "- None"
     next_action = recommended_next_action.strip() or "Review the request or child tool access and try again."
@@ -93,7 +94,9 @@ def render_subagent_summary_text(
 
 
 def parse_subagent_output(text: str) -> dict[str, object]:
+
     raw = text.strip()
+    # If the output is empty, return an empty result
     if not raw:
         return {
             "summary": "",
@@ -102,6 +105,7 @@ def parse_subagent_output(text: str) -> dict[str, object]:
             "inspected_paths": [],
             "confidence": "low",
         }
+    # Try to parse as JSON first
     if raw.startswith("{"):
         try:
             payload = json.loads(raw)
@@ -167,6 +171,7 @@ def failure_result(
     started_at: Optional[float] = None,
     finished_at: Optional[float] = None,
 ) -> SubAgentRunResult:
+    """Create a failure result with the given message and failure kind."""
     finished = finished_at
     duration_ms = None
     if started_at is not None and finished is not None:
@@ -192,6 +197,7 @@ def failure_result(
 
 
 def _coerce_list(value: object) -> list[str]:
+    """Coerce a value to a list of strings, or return an empty list if the value is None."""
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     if value is None:
@@ -203,12 +209,16 @@ def _coerce_list(value: object) -> list[str]:
 def _clean_bullets(lines: list[str]) -> list[str]:
     cleaned: list[str] = []
     for line in lines:
-        stripped = line.strip()
-        while stripped[:2] in {"- ", "* "}:
-            stripped = stripped[2:].strip()
-        if stripped:
+        stripped = line.strip()                     # 1. 去除首尾空白
+        while stripped[:2] in {"- ", "* "}:         # 2. 循环移除项目符号
+            stripped = stripped[2:].strip()         #    每次去掉前两个字符后再次 strip
+        if stripped:                                # 3. 只保留非空行
             cleaned.append(stripped)
     return cleaned
+
+
+def _normalize_section_heading(line: str) -> str:
+    """Normalize a section heading by removing leading hashes and other formatting."""
 
 
 def _normalize_section_heading(line: str) -> str:

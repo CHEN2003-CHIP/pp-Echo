@@ -5,170 +5,111 @@
 </p>
 
 <p align="center">
-  <strong>A Windows-first, CLI-first coding agent you can actually study, run locally, and extend.</strong><br />
-  It shows plans before execution, asks before risky actions, and can rewind both repository state and conversation history.
+  <strong>A Windows-first, CLI-first coding agent you can study, run locally, and extend.</strong><br />
+  It plans before acting, asks before risky execution, and can rewind both repository state and conversation history.
 </p>
 
 <p align="center">
   <a href="#quick-start"><img alt="Quick Start" src="https://img.shields.io/badge/Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
-  <a href="docs/agent-learning-zh.md"><img alt="Chinese Learning Path" src="https://img.shields.io/badge/Chinese_Learning_Path-DC2626?style=for-the-badge&logo=readme&logoColor=white"></a>
-  <a href="#why-this-repo-is-worth-studying"><img alt="Why Study" src="https://img.shields.io/badge/Why_Study-1E293B?style=for-the-badge&logo=bookstack&logoColor=white"></a>
-  <a href="#quick-learning-path"><img alt="Learning Path" src="https://img.shields.io/badge/Learning_Path-2563EB?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
-  <a href="#demo--screenshots"><img alt="Demo" src="https://img.shields.io/badge/Demo-163257?style=for-the-badge&logo=gitlfs&logoColor=white"></a>
+  <a href="#technical-highlights"><img alt="Technical Highlights" src="https://img.shields.io/badge/Technical_Highlights-0F172A?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
+  <a href="#architecture-overview"><img alt="Architecture" src="https://img.shields.io/badge/Architecture-2563EB?style=for-the-badge&logo=mermaid&logoColor=white"></a>
+  <a href="#documentation-guide"><img alt="Docs Guide" src="https://img.shields.io/badge/Docs_Guide-DC2626?style=for-the-badge&logo=bookstack&logoColor=white"></a>
   <a href="https://github.com/CHEN2003-CHIP/pp-Echo/releases"><img alt="Releases" src="https://img.shields.io/badge/Releases-F8D66D?style=for-the-badge&logo=github&logoColor=111827"></a>
 </p>
 
 ![pp-Echo hero](docs/assets/hero.svg)
 
 <p align="center">
-  <img src="docs/assets/windows-first-agent-pixel.png" alt="Pixel art Windows-first agent mascot" width="720" />
+  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Git-backed rewind</code> | <code>Layered memory</code> | <code>Bounded subagents</code> | <code>CLI + TUI + Web UI</code>
 </p>
 
-<p align="center">
-  <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Bounded multi-agent orchestration</code> | <code>Layered memory</code> | <code>CLI + Web UI + TUI</code>
-</p>
-
-pp-Echo is both a practical local coding agent and a learn-by-reading reference project for agent engineering. If you are new to agents, this repo gives you something many projects do not: a real runtime, visible planning, approval gates, memory, session recovery, and a codebase you can follow without needing a giant platform behind it.
-
-pp-Echo 既是一个可以实际运行的本地 coding agent，也是一个适合边读边学的 agent engineering 参考项目。如果你是 agent 初学者，这个仓库提供了很多项目没有的东西：真实可运行的 runtime、可见的 planning、审批门控、memory、session 恢复能力，以及一套不依赖庞大平台也能顺着读懂的代码结构。
+pp-Echo is a practical local coding agent and a readable reference project for agent engineering. It already includes a real runtime loop, a tool and policy layer, session persistence, checkpoints, safe rewind, memory retrieval, bounded subagent orchestration, and multiple user interfaces. The project is best understood today as `Windows-first`: Windows is the clearest supported path, while Linux and macOS should be treated as future compatibility work rather than current parity.
 
 ## Current Status
 
-pp-Echo should currently be understood as a `Windows-first` project.
+- `Windows-first` is the accurate description today.
+- The runtime, approvals, session tree, checkpoint/rewind flow, file memory, and Web UI are real and actively usable.
+- `@subagent` and `orchestrate_agents` are implemented, but the model is still a bounded local orchestration layer rather than a mature autonomous agent team platform.
+- The repo is stable enough to study and extend, but it is still evolving and should be described honestly.
 
-- Windows is the main supported and most tested path today.
-- The helper scripts and the quickest onboarding path are Windows-oriented.
-- The Web UI is part of the normal workflow, including project switching, visible runtime status, approval handling, and isolated patch-artifact application.
-- Linux and macOS should not be assumed to have equal support yet.
-- The runtime, exact-effect approvals, layered file memory, rewind, session tree, and storage model are real and useful today.
-- Multi-agent support is best described as a bounded local orchestration layer with explicit child specs, isolated patch staging, and host-approved application.
+## Why pp-Echo
 
-In other words: this repo already contains real architecture worth studying, but it is still evolving and should not be described as a fully autonomous agent-team platform.
+- It is not just a demo chatbot. The runtime, tool registry, approvals, rewind, and persistence paths are implemented in code and covered by tests.
+- It is easy to read. Core architecture centers on `AgentRuntime`, `ToolRegistry`, and `SessionHost`, with supporting docs that map those paths directly.
+- It is practical. You can run it locally as CLI, TUI, or Web UI, inspect behavior, and reuse design patterns in your own system.
+- It is opinionated where that helps trust: visible planning, approval-first execution, and Git-backed recovery instead of silent mutation.
 
-## Windows-First Scope
+## Technical Highlights
 
-The project is intentionally described as `Windows-first` to avoid confusion.
+| Area | Current implementation | Key technologies / patterns | Primary code path |
+| --- | --- | --- | --- |
+| Runtime core | Turn-based runtime with context building, tool execution, lifecycle events, queued messages, compaction, and persistence | Python, Pydantic models, runtime hooks, event emitter | `src/pp_agent/runtime/runtime.py` |
+| Session orchestration | Session creation, restore, branch, tree navigation, checkpoint integration, and safe rewind coordination | `SessionHost`, session tree store, Git-backed checkpoint manager | `src/pp_agent/runtime/session_host.py` |
+| Tool execution boundary | Unified registration, metadata, policy evaluation, built-in tools, dynamic tools, and subagent tool allowlists | `ToolRegistry`, permission domains, exact-effect staging | `src/pp_agent/tools/registry.py` |
+| Safety and approvals | Planner approval, execution-time policy gate, protected paths, exact-effect approvals, and shell effect review metadata | Policy evaluator, pending-action store, effect digest binding | `src/pp_agent/tools/policy.py`, `src/pp_agent/tools/effects.py` |
+| File and shell tooling | Read/write/edit, search, Git status/diff, and PowerShell execution with staged approvals for risky actions | Built-in repo/file tools, PowerShell wrapper, pending action preview/apply | `src/pp_agent/tools/file_tools.py`, `src/pp_agent/tools/repo_tools.py`, `src/pp_agent/tools/shell_tool.py` |
+| Checkpoint and rewind | Snapshot creation, restore preview, workspace restore, conversation rewind, and combined safe rewind | Git stash/snapshot workflow, checkpoint store, rewind orchestrator | `src/pp_agent/runtime/git_checkpoint.py`, `src/pp_agent/runtime/safe_rewind.py` |
+| Memory system | Bootstrap memory, file memory retrieval, SQLite history, optional vector recall, reranking, and auto-index scheduling | SQLite, ChromaDB, BM25, retrieval hook, layered Markdown memory | `src/pp_agent/memory/*`, `src/pp_agent/learning/*` |
+| Capability expansion | Skills, executable extensions, MCP server integration, resource manifests, and capability discovery catalog | Skills loader, extension runtime, MCP manager, manifest discovery | `src/pp_agent/app/bootstrap.py`, `src/pp_agent/mcp/*`, `src/pp_agent/extensions/*`, `src/pp_agent/skills/*` |
+| Subagent orchestration | Explicit `@subagent` handoff, bounded orchestration fan-out, child capability profiles, and patch artifact staging | `spawn_subagent`, `orchestrate_agents`, isolated child sessions/worktrees | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
+| Interfaces | Plain CLI chat, Textual TUI, and Web UI with approvals, session tree, project switching, and runtime status | Typer, Rich, Textual, FastAPI, React, TypeScript, Vite | `src/pp_agent/cli/*`, `src/pp_agent/tui/*`, `src/pp_agent/web/*`, `web/*` |
+| Evaluation and diagnostics | Live eval cases, deterministic benchmarks, runtime doctor/report, legacy-hint doctor, and capability inspection | Pytest, CLI eval runner, doctor/report commands | `evals/*`, `tests/benchmarks/*`, `src/pp_agent/cli/commands/*` |
+| Configuration and storage | Environment overrides, project config, resource manifests, global state dir, and per-project storage roots | `.pp-agent/config.json`, settings loader, manifest fallback rules | `src/pp_agent/storage/settings.py`, `src/pp_agent/app/resources.py` |
 
-- Use Windows for the clearest supported experience.
-- Treat Linux/macOS compatibility as future work rather than current parity.
-- Read the `.bat` scripts as the primary convenience entrypoints, not as optional historical leftovers.
-- Prefer `start-web.bat` when you want the browser UI with visible approvals, status, sessions, and project switching.
+## Architecture Overview
 
-## Subagent Progress
+```mermaid
+flowchart LR
+  U["User"] --> UI["CLI / TUI / Web UI"]
+  UI --> BOOT["Bootstrap and Settings"]
+  BOOT --> HOST["SessionHost"]
+  BOOT --> REG["ToolRegistry"]
+  BOOT --> CAPS["Skills / Extensions / MCP"]
+  BOOT --> MEM["Memory + Learning"]
 
-The `@subagent` path is real, and `orchestrate_agents` is now part of the normal bounded workflow.
+  HOST --> RT["AgentRuntime"]
+  MEM --> RT
+  CAPS --> REG
+  REG --> RT
 
-What exists now:
+  RT --> LLM["LLM Client"]
+  RT --> PLAN["Planner + Turn Controller"]
+  PLAN --> POLICY{"Policy / Approval gate"}
+  POLICY -->|allow| EXEC["Tool execution"]
+  POLICY -->|ask| PENDING["Pending actions / exact effects"]
+  PENDING --> EXEC
 
-- explicit user-triggered `@subagent` handoff
-- a built-in `spawn_subagent` tool
-- a built-in `orchestrate_agents` tool for parallel repository analysis, bounded planning fan-out, and isolated `code_change` staging
-- seven built-in child specs: `repo-researcher`, `change-reviewer`, `test-investigator`, `api-scout`, `memory-scout`, `implementation-planner`, and `code-worker`
-- child execution that forks a session, narrows tools, runs a constrained prompt, and returns structured results
-- isolated worktree patch artifacts for bounded edit workflows, with host-side approval before the main workspace is mutated
+  EXEC --> BUILTIN["Built-in file / git / shell / memory tools"]
+  EXEC --> SUB["Subagent tools and worktree artifacts"]
+  EXEC --> STATE["Sessions / Timeline / Approvals"]
+  EXEC --> CKPT["Checkpoint + Safe Rewind"]
 
-What does not exist yet:
+  STATE --> UI
+  CKPT --> UI
+```
 
-- full agent-team orchestration
-- rich long-running multi-agent coordination
-- broad autonomous agent-team execution with independent write ownership
+This is the current high-level system shape. The old "CLI -> Runtime -> Tools -> Checkpoint" view is no longer enough because the real runtime now also includes capability discovery, layered memory, exact-effect approvals, Web UI state, and bounded subagent orchestration.
 
-The honest description is: `pp-Echo already has real bounded multi-agent runtime behavior, but it is still approval-first, repo-oriented, and intentionally narrower than a mature autonomous agent-team system`.
+## Evaluation Snapshot
 
-## Layered Memory
+pp-Echo is evaluated as an engineering agent, not only as a prompt demo.
 
-pp-Echo now separates file memory into distinct layers instead of treating everything as one long note.
-
-- `session` state stays in the session store and is used for restore, rewind, and current-turn continuity.
-- workspace bootstrap memory lives in the repo root `MEMORY.md` and carries durable project constraints.
-- global bootstrap memory lives in `$PP_AGENT_HOME/MEMORY.md` and carries durable cross-workspace user preferences.
-- short-lived notes go to `memory/daily/YYYY-MM-DD.md`.
-- durable detailed knowledge goes to themed files such as `memory/architecture.md`, `memory/bugs.md`, and `memory/workflows.md`.
-
-Bootstrap memory is injected automatically at session start. Detailed and journal memory are retrieved through `memory_search` and `memory_get` instead of being blindly injected into every prompt.
-
-## Why This Repo Is Worth Studying
-
-- It is not just a toy chatbot. It contains a real runtime loop, tool registry, session host, memory layer, approvals, rewind, and multiple user interfaces.
-- It is beginner-friendly. The repo includes Chinese and English learning guides plus a source map for reading the code in a sensible order.
-- It is practical. You can run it locally, inspect its behavior, and use it as a reference when building your own agent system.
-- It is opinionated in the right places. Planning is visible, risky actions are reviewable, and the system is designed around repo work instead of generic chat.
-- It is a good bridge project. Beginners can learn architecture here, and experienced builders can borrow patterns for runtime orchestration, tool calling, and safety boundaries.
-
-## Best For
-
-- Beginners who want to understand how an agent project is organized end to end.
-- Developers who want a local coding agent with visible planning and approval flow.
-- Builders who want to learn how runtime, tools, memory, sessions, CLI, and TUI fit together.
-- People comparing agent repos and looking for one that is easier to read, extend, and trust.
-
-## What You Will Learn
-
-- How an agent runtime manages turns, planning, tools, and execution.
-- How tool registration and dispatch work in a repo-aware coding assistant.
-- How session hosting, rewind, and checkpoint ideas can improve agent usability.
-- How layered memory, file retrieval, and vector recall integrate into an agent workflow.
-- How one backend can drive both a CLI chat experience and a richer TUI.
-- How to structure a project so it is usable as both product and learning material.
-
-## Evaluated Agent Behavior
-
-pp-Echo is evaluated as an engineering agent, not only as a chatbot demo. The evaluation stack separates live model behavior from deterministic runtime checks, so failures can be understood as either behavior regressions or infrastructure issues.
-
-<p align="center">
-  <img alt="Live Eval" src="https://img.shields.io/badge/Live_eval-12%2F12_passed-22C55E?style=for-the-badge&logo=checkmarx&logoColor=white">
-  <img alt="Main Suite" src="https://img.shields.io/badge/Main_suite-60_cases-2563EB?style=for-the-badge&logo=pytest&logoColor=white">
-  <img alt="Runtime Benchmark" src="https://img.shields.io/badge/Runtime_benchmark-15_tasks-7C3AED?style=for-the-badge&logo=speedtest&logoColor=white">
-  <img alt="Stress Suite" src="https://img.shields.io/badge/Stress_suite-10_cases-F97316?style=for-the-badge&logo=target&logoColor=white">
-</p>
-
-| Evaluation layer | Size | What it proves | How to run |
+| Evaluation layer | Size | What it proves | Entry |
 | --- | ---: | --- | --- |
-| Live interview demo | 12 cases | Direct answers, repo awareness, tool use, Git awareness, safety, approvals, and explicit subagent handoff | `python -m pp_agent.cli.main eval run example-interview-eval-cases.json --workspace . --preflight` |
-| Main agent eval | 60 cases | Broader evidence across tool restraint, code search, safety, collaboration, memory, and Chinese technical expression | `python -m pp_agent.cli.main eval run evals/datasets/agent-core-60.json --workspace . --preflight` |
-| Deterministic runtime benchmark | 15 tasks | Planner approval, safe rewind, session branching, lazy MCP activation, and context compaction without model randomness | `python -m pytest tests/benchmarks/test_runner.py` |
-| Optional stress suite | 10 cases | Longer context, multi-module search, secret-dump pressure, shell approval, and subagent delegation | `python -m pp_agent.cli.main eval run evals/datasets/agent-stress-10.json --workspace . --preflight` |
+| Live interview demo | 12 cases | Direct answers, repo awareness, tool use, safety, approvals, and explicit subagent handoff | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
+| Main agent eval | 60 cases | Broader evidence across tooling, safety, collaboration, memory, and Chinese technical expression | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
+| Deterministic benchmark | 15 tasks | Planner gating, rewind, lazy MCP activation, and compaction without model randomness | [docs/benchmarks/latest.md](docs/benchmarks/latest.md) |
+| Stress eval | 10 cases | Longer and higher-risk scenarios including shell approval and subagent delegation | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
 
-Most recent recorded local live demo result:
+Most recent recorded local live demo result in the repo docs:
 
 | Run | Cases | Pass rate | Tool calls | Approval gates | Expected policy blocks |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `20260512-234612-6fb26ca4` | 12 | 100% | 14 | 2 | 1 |
 
-The expected policy block is the protected `.env` safety case: the tool layer refuses to expose secrets, and the evaluator counts that as a correct safety outcome. The two approval gates come from write-file and shell-execution scenarios.
-
-```mermaid
-flowchart LR
-  A["Agent evaluation"] --> B["Live eval<br/>12 cases"]
-  A --> C["Main suite<br/>60 cases"]
-  A --> D["Runtime benchmark<br/>15 deterministic tasks"]
-  A --> E["Stress suite<br/>10 cases"]
-
-  B --> B1["100% pass<br/>14 tool calls<br/>2 approvals"]
-  C --> C1["7 capability groups<br/>fixed assertions"]
-  D --> D1["Fake LLM clients<br/>reproducible runtime checks"]
-  E --> E1["Longer and higher-risk scenarios"]
-```
-
-The benchmark report in [docs/benchmarks/latest.md](docs/benchmarks/latest.md) currently highlights:
-
-- Planner approval blocked risky mutations before execution in 100% of gating tasks.
-- Safe rewind recovered requested workspace and conversation state in 100% of rewind tasks.
-- Lazy MCP avoided unnecessary server initialization while still activating the matched fetch path.
-- Context compaction reduced normalized prompt size by about 44% in long-dialogue tasks.
-
-See [docs/evaluation-demo.md](docs/evaluation-demo.md) for the interview talk track and dataset methodology.
-
 ## Quick Start
 
-pp-Echo targets Python 3.9+ and is easiest to try on Windows first.
-
-Before you start:
-
-- Set `PP_AGENT_API_KEY` in your environment.
-- Use `start-agent.bat` for the fastest first run.
-- Use `start-web.bat` for the browser Web UI.
-- If you run from source, set `PYTHONPATH=src`.
+pp-Echo targets Python `3.9+` and is easiest to try on Windows first.
 
 ### Fastest Windows path
 
@@ -177,8 +118,6 @@ set PP_AGENT_API_KEY=your_api_key
 .\start-agent.bat
 ```
 
-This is the shortest path from clone to first conversation.
-
 ### Web UI on Windows
 
 ```powershell
@@ -186,8 +125,7 @@ set PP_AGENT_API_KEY=your_api_key
 .\start-web.bat
 ```
 
-This opens `http://127.0.0.1:8765` automatically, installs missing Web dependencies when needed, and builds the browser UI the first time.
-You can also launch a specific project with `.\start-web.bat "E:\path\to\project"` and switch projects from the Web UI.
+This opens `http://127.0.0.1:8765` and supports project switching, runtime status, approvals, checkpoints, and patch-artifact workflows.
 
 ### TUI on Windows
 
@@ -195,8 +133,6 @@ You can also launch a specific project with `.\start-web.bat "E:\path\to\project
 set PP_AGENT_API_KEY=your_api_key
 .\echo-cli.bat
 ```
-
-Use this when you want the richer terminal UI instead of plain chat output.
 
 ### Run from source
 
@@ -208,84 +144,18 @@ set PYTHONPATH=src
 python -m pp_agent.cli.main chat
 ```
 
-Minimal non-interactive demo:
-
-```powershell
-set PP_AGENT_API_KEY=your_api_key
-set PYTHONPATH=src
-python -m pp_agent.cli.main run "Give me a quick overview of this repo"
-```
-
-Useful local diagnostics:
+Useful diagnostics:
 
 ```powershell
 set PYTHONPATH=src
 python -m pp_agent.cli.main workflow doctor --json
 python -m pp_agent.cli.main memory search "project conventions" --scope workspace
-```
-
-### Installed CLI
-
-```powershell
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
-pp-agent chat
-```
-
-If `pip install -e .` fails on an older environment, use the source-run path first.
-
-## Quick Learning Path
-
-If you are new to this repo, read in this order:
-
-1. Start with the learning docs:
-   [docs/agent-learning-zh.md](docs/agent-learning-zh.md),
-   [docs/agent-learning-en.md](docs/agent-learning-en.md),
-   [docs/source-map.md](docs/source-map.md)
-2. Then read the three core backend files:
-   [src/pp_agent/runtime/runtime.py](src/pp_agent/runtime/runtime.py),
-   [src/pp_agent/tools/registry.py](src/pp_agent/tools/registry.py),
-   [src/pp_agent/runtime/session_host.py](src/pp_agent/runtime/session_host.py)
-3. Then move to the product layers:
-   [src/pp_agent/cli/chat.py](src/pp_agent/cli/chat.py),
-   [src/pp_agent/tui/app.py](src/pp_agent/tui/app.py),
-   [src/pp_agent/app/bootstrap.py](src/pp_agent/app/bootstrap.py)
-
-```mermaid
-flowchart TD
-  A["Start Here"] --> B["Learning Guides"]
-  B --> B1["docs/agent-learning-zh.md"]
-  B --> B2["docs/agent-learning-en.md"]
-  B --> B3["docs/source-map.md"]
-
-  B3 --> C["Core Runtime Path"]
-  C --> C1["runtime/runtime.py"]
-  C1 --> C2["tools/registry.py"]
-  C2 --> C3["runtime/session_host.py"]
-
-  C3 --> D["System Assembly"]
-  D --> D1["app/bootstrap.py"]
-  D1 --> D2["storage/settings.py"]
-
-  C1 --> E["Capability Layers"]
-  E --> E1["memory/*"]
-  E --> E2["skills/*"]
-  E --> E3["extensions/*"]
-  E --> E4["mcp/*"]
-
-  C1 --> F["Product Layers"]
-  F --> F1["cli/chat.py"]
-  F --> F2["tui/app.py"]
-  F --> F3["cli/render/*"]
+python -m pp_agent.cli.main config show --workspace .
 ```
 
 ## Demo / Screenshots
 
 ![pp-Echo demo](docs/assets/demo.gif)
-
-- Launch with `start-agent.bat` for chat or `echo-cli.bat` for the TUI.
-- Ask the agent to inspect a repo task and preview risky work before execution.
-- Review approvals, create checkpoints, and use safe rewind to recover both code and conversation state.
 
 | Interactive chat | Checkpoint + rewind |
 | --- | --- |
@@ -293,383 +163,77 @@ flowchart TD
 
 ![Web UI screenshot](docs/assets/screenshot-web-ui.png)
 
-## Why pp-Echo
+## Documentation Guide
 
-Most coding agents are good at producing output. Fewer are good at making their behavior visible, reviewable, and reversible once a real repository gets messy. pp-Echo is built for that gap.
+### Runtime and architecture
 
-- Planning stays visible before execution, so you can supervise direction instead of reacting after changes land.
-- High-risk operations can pause behind approvals instead of mutating the workspace immediately.
-- Sessions are stored as a tree, making branch, resume, compare, and rewind workflows easier to reason about.
-- Safe rewind is git-backed, so you can restore the conversation, the workspace, or both together.
-- Skills, extensions, and MCP-backed capabilities fit into the same repo-aware runtime rather than feeling bolted on.
-- Subagent delegation is explicit: users can require a child handoff with `@subagent` instead of guessing when the agent will delegate on its own.
+If you want to understand the real execution path, start with `AgentRuntime`, `ToolRegistry`, and `SessionHost`. These files explain how a prompt becomes a planned turn, how tools are gated and executed, and how session state is restored or rewound. The source map and learning guides are the quickest way to build a correct mental model before reading code in depth.
+Docs: [docs/source-map.md](docs/source-map.md), [docs/agent-learning-en.md](docs/agent-learning-en.md), [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
 
-If this repo helps you learn agents faster or gives you a useful starting point for your own system, a Star helps more people discover it.
+### Safety and approvals
 
-## Safety Boundary
+The safety story now spans multiple phases: protected-path gating, exact-effect approvals, shell effect classification, and shared effect analysis for dynamic tools. The README home page now keeps only the overview, while the details live in dedicated docs so the main entry stays readable. This is the best place to understand what is enforced today versus what is still future work.
+Docs: [docs/safety.md](docs/safety.md), [docs/effect-analysis.md](docs/effect-analysis.md), [docs/dynamic-tool-declarations.md](docs/dynamic-tool-declarations.md)
 
-Phase 1 now uses a mandatory policy gate for sensitive execution. This gate is checked at execution time, not only at planner time.
+### Subagents and orchestration
 
-- The policy gate returns `allow`, `ask`, or `deny`.
-- `ask` means the model can stage a proposed effect, but only the host/user side may approve it.
-- Protected paths are enforced through path protection and policy gating.
-- This phase is not a true shell sandbox. The existing shell runner remains in place behind the policy gate and host approval flow.
+`@subagent` is real, but intentionally narrow: explicit handoff, bounded child profiles, restricted tool allowlists, and staged edit artifacts for code-change workflows. The current design is meant for supervised repo analysis and constrained implementation fan-out, not open-ended autonomous agent teams. Use the demo and validation docs to see the current boundary clearly.
+Docs: [docs/multi_agent_demo.md](docs/multi_agent_demo.md), [docs/subagent-validation.md](docs/subagent-validation.md)
 
-Protected paths in Phase 1:
+### Memory and learning
 
-- `.pp-agent/**`
-- `.git/**`
-- `.env`
-- `.env.*`
-- `*.pem`
-- `*.key`
+The memory stack is layered rather than monolithic. Bootstrap memory lives in `MEMORY.md`, short-lived notes can stay in daily files, and retrievable project knowledge is searched through file-memory tools and optional vector recall. Learning runtime modules extract durable conventions and feed them back into workspace or global memory.
+Docs: [MEMORY.md](MEMORY.md), [docs/source-map.md](docs/source-map.md)
 
-Important Phase 1 limit:
+### Configuration and capability loading
 
-- `.pp-agent/**` is logically isolated from model-facing tools, but it is not physically separated from the repository yet.
+Project behavior is controlled by environment variables, `.pp-agent/config.json`, resource manifests, and capability discovery rules for skills, extensions, and MCP. The full sample config and manifest notes have moved out of the README so the homepage stays focused, but they are still documented in one place. This is the right entry if you want to customize runtime behavior or ship extensions.
+Docs: [docs/configuration.md](docs/configuration.md), [docs/dynamic-tool-declarations.md](docs/dynamic-tool-declarations.md), [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)
 
-## Exact-Effect Approvals
+### Evaluation and release readiness
 
-Phase 2A upgrades sensitive approval binding so host approval applies to an exact staged effect, not just a token.
+The repo includes both behavior evals and deterministic runtime checks. It also includes doctor-style commands for runtime status and for migration readiness around legacy tool declaration hints. If you want to verify current health before a release or a public demo, start here rather than scanning the whole README.
+Docs: [docs/evaluation-demo.md](docs/evaluation-demo.md), [docs/benchmarks/latest.md](docs/benchmarks/latest.md), [docs/release-readiness.md](docs/release-readiness.md)
 
-- Sensitive file and shell proposals now produce an effect record before execution.
-- `payload_digest` is the primary approval binding.
-- Human-readable summaries are review output and a secondary consistency check, not the primary security anchor.
-- File effects distinguish whether the target was absent or present at staging time.
-- Shell effects use narrow normalization: whitespace-only differences normalize, but command content, separators, redirection, quotes, parameter order, and timeout changes remain material.
-- Planner approval is still not execution approval.
-- The Web UI mirrors this two-step model: first approve the plan, then apply the concrete staged write/edit/command. After host execution it removes the consumed token and shows a clear success/failure message.
-
-## Shell Effect Classification
-
-Phase 2B keeps exact-effect approval binding, but makes staged shell effects easier to review and reason about.
-
-- Shell effects now include structured fields such as `normalized_command`, `command_head`, `risk_class`, `writes_workspace_files`, `touches_external_paths`, `requests_network`, and `destructive_hint`.
-- Current shell classes are `inspect`, `workspace_mutation`, `external_mutation`, `networked`, and `destructive`.
-- Human-readable shell summaries are stable review output such as `Inspect repository status with git status` or `Fetch remote content with curl`.
-- Classification enriches policy decisions and previews, but it does not bypass host-side approval and it is not a shell sandbox.
-- Normalization remains intentionally narrow: whitespace-only differences normalize to the same effect, while command, parameter, separator, redirection, quote, and timeout changes remain material.
-
-Current Phase 2B limits:
-
-- Shell classification is still conservative heuristic matching, not a full shell parser or AST.
-- The existing shell runner is still used; this phase does not add sandbox infrastructure.
-- Policy still keeps shell execution behind host-side approval even for `inspect` commands.
-
-Planned Phase 2C direction:
-
-- Finer-grained shell semantics and better effect summaries.
-- Broader effect classification across more tool families.
-- Stronger policy differentiation once classification confidence is high enough.
-
-## Shared Effect Analysis
-
-Phase 2C generalizes effect semantics across built-in file tools, shell tools, and dynamic extension or MCP tools.
-
-- Shared analysis records now expose `family`, `risk_class`, `summary`, `confidence_band`, `touches_workspace`, `touches_external`, `requests_network`, `destructive_hint`, and `protected_path_hint`.
-- Policy uses stable confidence bands such as `high`, `medium`, `low`, and `unknown` instead of relying on raw float thresholds in behavior rules.
-- Built-in file reads can still be allowed when the target is a normal workspace path and analysis is high confidence.
-- Shell policy differentiation stays narrow: only a known-safe inspect subset such as `git status`, `git diff`, `rg`, `grep`, `ls`, `dir`, and `Get-ChildItem` may be allowed automatically.
-- Extension and MCP tools now receive shared analysis too, but this does not mean they have shared exact-effect approvals. Without staged exact-effect support, they remain policy-level `ask` or `deny`.
-
-Current Phase 2C limits:
-
-- Shared analysis is still heuristic and conservative.
-- Unknown or weakly understood extension or MCP semantics fail closed.
-- Only security-relevant, stably recomputable analysis fields are included in effect identity.
-
-## Dynamic Tool Declarations
-
-Phase 4A completes the public cutover: explicit declarations are now the only author-facing semantics contract for dynamic extension and MCP tools.
-
-- Dynamic tools declare `exact_effect_mode` as `none`, `auto`, or `required`.
-- `exact_effect_mode` is the primary exact-effect capability declaration. Authors do not set a free `supports_exact_effect_staging` boolean directly.
-- Registration acceptance is intentionally looser than execution eligibility: weakly declared tools may still register, but they fail closed at policy or execution time.
-- `required` never falls back to direct execution. If a call cannot be represented stably enough for exact approval, it fails closed with `approval_unavailable`.
-- `known_safe_inspect` only makes a tool eligible for safe-inspect policy consideration. It never implies `allow` by itself.
-- Runtime/shared analysis now tightens fields conservatively instead of replacing declared semantics wholesale.
-- Author-facing `analysis_hints` are no longer accepted by public registration APIs.
-- A private runtime-internal override path remains available only for conservative risk tightening inside framework code.
-
-Primary declarations:
-
-- `exact_effect_mode`
-- `non_side_effectful`
-- `known_safe_inspect`
-- `requests_network_hint`
-- `touches_external_hint`
-
-Private runtime-only risk overrides may only tighten risk with these keys:
-
-- `requests_network`
-- `touches_external`
-- `destructive_hint`
-- `protected_path_hint`
-- `touches_workspace`
-
-Only the tightening-direction value `True` is accepted for these internal overrides. Safe or widening values such as `False`, `safe`, `allow`, `read_only`, or `inspect_only` are rejected.
-
-Disallowed legacy keys:
-
-- `risk_class`
-- `summary`
-- `confidence_score`
-- `confidence_band`
-- `known_safe_inspect`
-- `exact_effect_mode`
-- `supports_exact_effect_staging`
-
-Representative alias examples that are also rejected as primary-semantics hints:
-
-- `safe`
-- `allow`
-- `read_only`
-- `inspect_only`
-- `stageable`
-- `approval_supported`
-- `exact_effect_supported`
-- `confidence`
-- `safety_score`
-- `display_summary`
-
-Author guidance:
-
-- Prefer `exact_effect_mode="auto"` when unsure.
-- Use `required` only for tools that should enter exact-effect approval whenever the call is policy-sensitive and stably representable.
-- Leave `known_safe_inspect=False` unless the tool is clearly read-only and non-side-effectful.
-- Runtime risk signals win conservatively on a field-by-field basis. A declared safe inspect tool can still be tightened back to `ask`, `approval_unavailable`, or `deny`.
-- See `docs/dynamic-tool-declarations.md` for the versioned deprecation timeline, an old-to-new migration table, and examples of a safe inspect tool, a staged side-effectful tool, an unstable fail-closed tool, and an MCP registration.
-
-## Legacy Hint Doctor
-
-The legacy-hints doctor now doubles as a release gate for the public cutover.
-
-- Use `pp-agent capabilities legacy-hints --workspace <path>` for a human-readable report.
-- Use `pp-agent capabilities legacy-hints --json --workspace <path>` for machine-readable output.
-- Use `pp-agent capabilities legacy-hints --strict --workspace <path>` to fail the command when author-facing legacy usage remains.
-- Runtime metadata is the authoritative readiness source.
-- Static source scanning is advisory only and does not decide readiness by itself.
-- Author-facing legacy `analysis_hints` count as removal blockers. Runtime-internal risk overrides are reported separately.
-- Removal readiness for `v0.4.0` requires zero author-facing legacy `analysis_hints` in runtime metadata.
-
-Current limits:
-
-- Dynamic tool defaults remain tighter than built-in file and shell flows.
-- Direct execution on policy `allow` stays limited to a narrow high-confidence, non-side-effectful inspect subset.
-- Unknown, weakly understood, networked, destructive, or externally touching dynamic calls still fail closed to `ask` or `deny`.
-- This phase still does not add sandboxing, a grant history ledger, or physical control-plane separation.
-
-## Core Workflows
-
-### 1. Chat and run
+## Core Commands
 
 ```powershell
-set PYTHONPATH=src
 python -m pp_agent.cli.main chat
 python -m pp_agent.cli.main run "Audit this repo and summarize risky commands"
-```
-
-### 1A. Explicit subagent handoff
-
-Use `@subagent` when you want the runtime to force a child handoff before the main agent touches other tools.
-
-This is currently a bounded child workflow with an orchestration helper, not a full autonomous agent-team planner. Treat it as explicit delegated inspection and planning fan-out with constrained children, not as mature long-running multi-agent execution.
-
-```text
-@subagent Read README.md and summarize the project
-@subagent Review the current diff and call out the biggest risks
-```
-
-Current built-in subagent specs:
-
-- `repo-researcher`: read-only repository inspection with `read_file`, `list_files`, `search_text`, and `grep_code`
-- `change-reviewer`: change-review flow with `git_status` and `git_diff_worktree` added to the read-only tool set
-- `test-investigator`: inspect failing tests, error output, and related code paths
-- `api-scout`: trace interfaces, types, and call sites across the repository
-- `memory-scout`: search long-term file memory with `memory_search` and `memory_get`
-- `implementation-planner`: turn research findings into a low-risk implementation plan and write-scope split
-- `code-worker`: scoped coding child profile; currently constrained to read/review tools and staged-edit reporting
-
-Behavior notes:
-
-- `@subagent` is required before `spawn_subagent` can run.
-- `orchestrate_agents` can fan out multiple constrained subagents for analysis, debugging, implementation planning, or bounded `code_change` staging.
-- `workflow=code_change` with `allow_edits=true` stages an isolated patch artifact first; the host still has to approve application before the main workspace changes.
-- If the model invents an unknown child name, runtime normalizes it back to a valid built-in subagent spec.
-- In chat mode, `@subagent` requests are forced through `spawn_subagent` instead of silently falling back to direct main-agent file reads.
-- Current child execution is intentionally narrow: fork session, restrict tools, run a constrained prompt, return summary output.
-
-### 2. Sessions and tree navigation
-
-```powershell
-set PYTHONPATH=src
-python -m pp_agent.cli.main sessions list
+python -m pp_agent.cli.main web
 python -m pp_agent.cli.main sessions tree
-```
-
-### 3. Approvals and staged actions
-
-```powershell
-set PYTHONPATH=src
-python -m pp_agent.cli.main approvals list
 python -m pp_agent.cli.main approvals summary
-```
-
-### 4. Checkpoints and safe rewind
-
-```powershell
-set PYTHONPATH=src
 python -m pp_agent.cli.main checkpoint list
 python -m pp_agent.cli.main rewind-safe --session <session_id> --turns 2
+python -m pp_agent.cli.main capabilities legacy-hints --json --workspace .
 ```
 
-### 5. Capabilities, skills, and MCP
+## Honest Scope Notes
 
-```powershell
-set PYTHONPATH=src
-python -m pp_agent.cli.main capabilities list
-python -m pp_agent.cli.main skills list
-```
-
-### 6. Memory and runtime diagnostics
-
-```powershell
-set PYTHONPATH=src
-python -m pp_agent.cli.main memory search "user preferences" --scope global
-python -m pp_agent.cli.main memory get global/MEMORY.md
-python -m pp_agent.cli.main workflow doctor
-```
-
-## Architecture
-
-```mermaid
-flowchart LR
-  U["User Prompt"] --> CLI["CLI / BAT entry"]
-  CLI --> RT["Agent runtime"]
-  RT --> PLAN["Planner"]
-  PLAN --> GATE{"Approval needed?"}
-  GATE -->|"Yes"| AQ["Approval queue"]
-  GATE -->|"No"| EXEC["Executor"]
-  AQ --> EXEC
-  EXEC --> TOOLS["Repo / file / shell / search / MCP tools"]
-  TOOLS --> CKPT["Git-backed checkpoint + safe rewind"]
-  CKPT --> SESS["Session tree + workspace state"]
-  SESS --> CLI
-```
+- Windows is the intended first-class platform today.
+- Safe execution is approval-first, but it is not a full shell sandbox.
+- Subagents are bounded local workers, not an unconstrained agent-team runtime.
+- Dynamic tool declarations are already formalized, but execution still fails closed when semantics are unstable or not stageable.
 
 ## Learning Docs
-
-If you are new to agent engineering or want a guided tour of this codebase:
 
 - Chinese learning guide: [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
 - English learning guide: [docs/agent-learning-en.md](docs/agent-learning-en.md)
 - Source map / module call graph: [docs/source-map.md](docs/source-map.md)
 
-## Configuration
-
-### Environment variables
-
-- `PP_AGENT_API_KEY`
-- `PP_AGENT_BASE_URL`
-- `PP_AGENT_MODEL`
-- `PP_AGENT_ENABLE_THINKING`
-- `PP_AGENT_HOME`
-
-### Project config
-
-Create `.pp-agent/config.json` for per-project overrides:
-
-```json
-{
-  "model": "qwen3.5-plus",
-  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "enable_thinking": false,
-  "shell_timeout_seconds": 30,
-  "capabilities": {
-    "builtin_tools": { "enable": true },
-    "skills": {
-      "enable_project": true,
-      "enable_user": true,
-      "enable_builtin": true,
-      "custom_directories": [],
-      "ignored": [],
-      "include": []
-    },
-    "extensions": {
-      "enable_project": true,
-      "enable_user": true,
-      "enable_builtin": false,
-      "custom_directories": [],
-      "ignored": [],
-      "include": []
-    },
-    "mcp": {
-      "enable": false,
-      "config_paths": [],
-      "server_filters": []
-    }
-  },
-  "tool_confirmation": {
-    "write_file": true,
-    "edit_file": true,
-    "run_shell": true,
-    "high_risk_plan": true
-  },
-  "memory": {
-    "file_memory_enable": true,
-    "file_memory_search_enable": true,
-    "file_memory_root": ".",
-    "file_memory_top_k": 5
-  },
-  "learning": {
-    "enable": true,
-    "auto_extract": true,
-    "auto_apply_memory": true,
-    "auto_apply_min_confidence": "medium",
-    "project_memory_enable": true,
-    "project_memory_char_limit": 4000,
-    "detailed_memory_enable": true,
-    "detailed_memory_char_limit": 12000,
-    "detailed_memory_sync_index_after_write": true
-  }
-}
-```
-
-`tool_confirmation` still exists for planner-era compatibility, but it is no longer the complete safety model on its own. Sensitive execution now also passes through a mandatory execution-time policy gate.
-
-Additional configuration notes:
-
-- `PP_AGENT_HOME` controls global bootstrap memory and user-level runtime state.
-- `memory search --scope workspace|global|all` lets you choose which file-memory layer to query.
-- Workspace `MEMORY.md` is bootstrap memory, not a dumping ground for every short-lived task trace.
-
-### Resources and manifests
-
-Project resources can be declared in `.pp-agent/resources.json` or `.pp-agent/package.json`. If no manifest is present, pp-Echo falls back to conventional directories like `.pp-agent/skills` and `.pp-agent/extensions`, and also supports pi-compatible discovery from `.pi/skills` and `.agents/skills`.
-
 ## Releases
 
-- Release notes for the first formal release live in [releases/v0.2.0.md](releases/v0.2.0.md).
-- A reusable template for future releases lives in [.github/release-template.md](.github/release-template.md).
+- Release notes for the first formal release live in [releases/v0.2.0.md](releases/v0.2.0.md)
 - GitHub Releases page: [github.com/CHEN2003-CHIP/pp-Echo/releases](https://github.com/CHEN2003-CHIP/pp-Echo/releases)
-
-## Benchmarks
-
-- Latest benchmark report: [docs/benchmarks/latest.md](docs/benchmarks/latest.md)
-- Generated benchmark artifacts: [artifacts/benchmarks](artifacts/benchmarks)
-- The suite is deterministic, offline, and focuses on planner gating, safe rewind, MCP lazy activation, session branching, and long-context compaction.
 
 ## Contributing
 
-Contributions are welcome across CLI behavior, docs polish, demo assets, tests, extensions, and release packaging.
-
-Start here:
+Contributions are welcome across runtime behavior, docs polish, demo assets, tests, extensions, and release packaging.
 
 - Read [CONTRIBUTING.md](CONTRIBUTING.md)
-- Run tests with `python -m pytest`
-- Keep documentation and demo assets in sync when user-facing behavior changes
+- Prefer focused changes that fit the existing architecture
+- Keep docs and demo assets in sync when user-facing behavior changes
 
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
-

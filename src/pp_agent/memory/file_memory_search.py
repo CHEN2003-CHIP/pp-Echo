@@ -107,6 +107,13 @@ class FileMemorySyncSummary:
 
 
 class FileMemorySearchEngine:
+    """
+    记忆搜索引擎，它处理存储在本地文件系统中的 Markdown 文件，将它们切分成有结构的文本块（chunk），并为每个块建立两种索引：
+
+    BM25 索引：基于词频和文档频率的稀疏检索，适合精确的关键词匹配。
+
+    向量索引：通过 Embedding 模型将文本块转换为稠密向量，支持语义相似度搜索。
+    """
     def __init__(
         self,
         *,
@@ -135,6 +142,7 @@ class FileMemorySearchEngine:
         self.allow_remote_embedding = bool(allow_remote_embedding)
 
     def sync(self, *, embed: bool = True) -> FileMemorySyncSummary:
+        """该方法负责将文件系统的当前状态与索引存储同步，流程如下："""
         warnings: list[str] = []
         files = self.store.scan_memory_files()
         indexed = self.store.indexed_files()

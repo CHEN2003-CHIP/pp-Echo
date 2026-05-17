@@ -43,11 +43,57 @@ class WorktreeHandle(BaseModel):
 class WorktreeUnavailable(RuntimeError):
     pass
 
+"""
+is_available 检查是否在 Git 仓库内：
 
+    git rev-parse --is-inside-work-tree
+
+create 方法中：
+
+    git rev-parse HEAD → 获取当前 HEAD 提交 hash
+
+    git worktree add --detach <path> <commit> → 创建分离 HEAD 的 worktree
+
+复制 dirty context 时：
+
+    git diff --binary HEAD -- → 获取工作区相对于 HEAD 的二进制 diff（用于复制未提交的变更）
+
+    git apply --binary --whitespace=nowarn - （在 worktree 目录）→ 应用上述 diff 到 worktree
+
+    git ls-files --others --exclude-standard -z → 列出未跟踪文件（以 null 分隔）
+
+创建 baseline 提交时（在 worktree 目录）：
+
+    git add -A → 暂存所有变更
+
+    git commit --allow-empty -m "..."（带 -c user.name 等）→ 提交 baseline
+
+    git rev-parse HEAD → 获取 baseline commit hash
+
+finalize 方法中（在 worktree 目录）：
+
+    git add -N -- . → 为所有文件添加 “intent to add”，使新文件出现在 diff 中
+
+    git diff --binary <baseline_commit> -- → 获取从 baseline 开始的二进制 diff
+
+    git diff --name-only <baseline_commit> -- → 获取变更文件列表
+
+apply_check 方法中（在主仓库）：
+
+    git apply --check <patch_path> → 检查补丁是否能干净应用
+
+apply 方法中（在主仓库）：
+
+    git apply <patch_path> → 尝试应用补丁
+
+如果失败，回退到 git apply --3way <patch_path> → 三路合并应用
+
+"""
 class WorktreeManager:
     """Create isolated local git worktrees and convert their diff into patch artifacts."""
 
     def __init__(self, workspace: Path) -> None:
+        """Initialize a worktree manager with a workspace directory."""
         self.workspace = workspace.resolve()
         self.root = self.workspace / ".pp-agent" / "worktrees"
         self.artifact_root = self.workspace / ".pp-agent" / "patch-artifacts"
@@ -80,6 +126,14 @@ class WorktreeManager:
         )
 
     def finalize(self, handle: WorktreeHandle) -> PatchArtifact | None:
+        #提取出子代理所做的所有变更，生成一个标准的 Git 补丁文件，并附带元数据
+        """
+        git add -N -- . 为所有文件添加“ intent-to-add”标记，确保 git diff 能捕获新文件。
+
+        执行 git diff --binary <baseline_commit> -- 获取变更的二进制 diff。
+
+        执行 git diff --name-only <baseline_commit> -- 获取变更文件列表。
+        """
         worktree_path = Path(handle.worktree_path)
         self._git(["add", "-N", "--", "."], cwd=worktree_path, check=False)
         diff = self._git_output(["diff", "--binary", handle.baseline_commit, "--"], cwd=worktree_path)

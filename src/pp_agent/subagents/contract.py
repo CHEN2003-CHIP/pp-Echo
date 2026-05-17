@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-
+"""
+explicit_orchestrated_edit_request 负责意图检测，确保只有用户明确要求使用编排进行编辑时才触发规范化。
+canonicalize_orchestration_arguments 负责参数纠正，用原始用户消息覆盖模型的 goal，并强制设置工作流类型、编辑权限和合理的代理预算。
+"""
 def explicit_orchestrated_edit_request(text: str) -> bool:
     """Return True when the latest user message creates a strict orchestration edit contract."""
     value = text.strip()

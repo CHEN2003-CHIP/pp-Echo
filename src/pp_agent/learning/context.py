@@ -11,6 +11,8 @@ from pp_agent.runtime.state import AgentState
 
 
 class ProjectMemoryContextHook:
+    """负责向对话上下文中注入项目级记忆。
+    所谓“项目级”，通常指当前工作区（workspace）范围内的知识，例如从项目文档、代码注释或之前的交互中提取的长期事实。"""
     def __init__(self, *, workspace: Path, settings: LearningSettings, store: LearningStore | None = None) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings
@@ -41,6 +43,8 @@ class ProjectMemoryContextHook:
 
 
 class GlobalMemoryContextHook:
+    """注入全局用户记忆。
+    与项目记忆不同，全局记忆存储在用户目录下的固定文件（MEMORY.md）中，跨项目生效，通常包含用户的个人偏好、常用约定等。"""
     def __init__(self, *, workspace: Path, settings: LearningSettings, global_root: Path) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings

@@ -69,6 +69,7 @@ class FileMemoryBM25Index:
         return bool(self.chunks) and self._engine is not None
 
     def search(self, query: str, *, limit: int) -> list[BM25Hit]:
+        """BM25 search for a query string."""
         if not self.is_available or limit <= 0:
             return []
         query_tokens = tokenize_file_memory_text(query)
@@ -96,6 +97,7 @@ class FileMemoryBM25Index:
 
 
 def tokenize_file_memory_text(text: str) -> list[str]:
+    """转为BM25的token"""
     tokens: list[str] = []
     for raw in _TOKEN_RE.findall(text or ""):
         token = raw.lower()

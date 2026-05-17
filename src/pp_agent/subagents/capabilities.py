@@ -6,12 +6,14 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class ToolCapabilityPolicy(BaseModel):
+    """工具能力策略"""
     allowlist: list[str] = Field(default_factory=list)
     denylist: list[str] = Field(default_factory=list)
     allow_dynamic_tools: bool = False
 
 
 class MCPPolicy(BaseModel):
+    """MCP策略"""
     enabled: bool = False
     allowed_servers: list[str] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
@@ -20,6 +22,7 @@ class MCPPolicy(BaseModel):
 
 
 class SkillPolicy(BaseModel):
+    """技能策略"""
     enabled: bool = False
     allowed_skills: list[str] = Field(default_factory=list)
     allow_auto_activation: bool = False
@@ -29,6 +32,7 @@ class SkillPolicy(BaseModel):
 
 
 class MemoryPolicy(BaseModel):
+    """内存策略"""
     allow_memory_search: bool = False
     allow_memory_get: bool = False
     allow_retrieval_hook: bool = False
@@ -36,6 +40,7 @@ class MemoryPolicy(BaseModel):
 
 
 class ContextHookPolicy(BaseModel):
+    """上下文钩子策略"""
     allow_mcp_hook: bool = False
     allow_skill_hook: bool = False
     allow_memory_hooks: bool = False
@@ -53,6 +58,7 @@ class WorkspacePolicy(BaseModel):
 
 
 class SubAgentProfile(BaseModel):
+    """子代理配置"""
     name: str
     tool: ToolCapabilityPolicy = Field(default_factory=ToolCapabilityPolicy)
     mcp: MCPPolicy = Field(default_factory=MCPPolicy)
@@ -73,6 +79,7 @@ class SubAgentProfile(BaseModel):
 
 
 class RuntimeCreationOptions(BaseModel):
+    """创建运行时选项"""
     mode: Literal["main", "subagent"] = "main"
     subagent_profile: Optional[SubAgentProfile] = None
     enable_mcp: bool = True
@@ -97,6 +104,7 @@ class RuntimeCreationOptions(BaseModel):
 
 
 class CapabilityAdmissionGate:
+    """能力准入门槛"""
     WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "execute_safe_rewind"}
     APPROVAL_EXECUTE_TOOLS = {"approve_pending_action", "reject_pending_action"}
 

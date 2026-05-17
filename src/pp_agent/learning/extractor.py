@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 
 class LearningExtractor:
+    """它利用 LLM（大语言模型）从对话记录中识别并提取可持久化的学习内容（约定、工作流、偏好等），
+    并转化为结构化的 LearningCandidate 对象。整个过程包括触发判断、构造提示、调用 LLM、解析 JSON 结果、过滤与清洗。"""
     def __init__(self, llm_client: Any, settings: LearningSettings) -> None:
         self.llm_client = llm_client
         self.settings = settings
@@ -31,8 +33,10 @@ class LearningExtractor:
             ChatMessage(role="user", content=[TextPart(text=self._turn_text(messages))], timestamp=time.time()),
         ]
         text = ""
+        #调用LLM，获取JSON结果
         for event in self.llm_client.stream_chat(prompt_messages, tools=None):
             text += str(event.get("text") or "")
+        #解析JSON结果，构造LearningCandidate对象
         payload = self._parse_json_array(text)
         candidates: list[LearningCandidate] = []
         for item in payload[: self.settings.candidate_limit_per_turn]:

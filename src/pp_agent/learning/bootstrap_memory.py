@@ -19,7 +19,8 @@ class BootstrapMemorySyncResult:
 
 class BootstrapMemoryManager:
     """Maintains pp-Echo's managed section inside a bootstrap MEMORY.md file."""
-
+    #Learned Notes：从项目学习系统提取的简洁记忆（例如用户偏好、项目约定）。
+    #Detailed Memory Index：自动扫描 workspace/memory/ 目录下的所有 *.md 文件，生成一个带标题的链接列表，方便 AI 或用户快速定位详细笔记。
     def __init__(
         self,
         *,
@@ -44,6 +45,8 @@ class BootstrapMemoryManager:
             return ""
 
     def sync(self, project_memory: str) -> BootstrapMemorySyncResult:
+        """将传入的 project_memory（一个包含项目级记忆的文本，通常来自 LearningStore.read_project_memory()）
+        同步到 MEMORY.md 文件的受管理区域。"""
         managed = self._managed_section(project_memory)
         existing = self.read()
         content = self._replace_managed_section(existing, managed)
@@ -51,6 +54,7 @@ class BootstrapMemoryManager:
         return BootstrapMemorySyncResult(path=self.path, chars=len(content), managed_chars=len(managed))
 
     def _managed_section(self, project_memory: str) -> str:
+        """生成受管理区域的完整 Markdown 文本。"""
         notes = _compact_bullets(project_memory, limit=max(400, self.settings.project_memory_char_limit - 900))
         navigation = self._memory_navigation(limit=1200)
         parts = [
@@ -93,6 +97,7 @@ class BootstrapMemoryManager:
         ).strip() + "\n"
 
     def _memory_navigation(self, *, limit: int) -> str:
+        """扫描 workspace/memory/ 目录，生成一个 Markdown 无序列表，每一项格式为 - \相对路径` - 标题`。"""
         memory_dir = self.workspace / "memory"
         if not memory_dir.exists():
             return ""
@@ -114,6 +119,8 @@ class BootstrapMemoryManager:
         return "\n".join(lines)[:limit].rstrip()
 
     def learned_notes(self) -> str:
+        """从当前 MEMORY.md 文件中提取出 ### Learned Notes 与 ### Detailed Memory Index（或 MANAGED_END）之间的内容，
+        即上一次同步时写入的“Learned Notes”部分。可用于读取当前已存储的项目记忆。"""
         content = self.read()
         start = content.find("### Learned Notes")
         if start == -1:
@@ -149,6 +156,7 @@ class GlobalBootstrapMemoryManager(BootstrapMemoryManager):
 
 
 def management_shell(navigation: str, *, label: str = "Project") -> str:
+    """返回一个“空壳”受管理区域的 Markdown 字符串"""
     return "\n".join(
         [
             MANAGED_BEGIN,
