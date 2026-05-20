@@ -22,6 +22,7 @@ import {
   X
 } from "lucide-react";
 import { api, ApprovalActionResponse, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeDoctorReport, RuntimeEvent, SessionEntry, SessionSnapshot, WorkspaceEntry, WorkspacesState } from "./api";
+import { extractMessageBody, RichMessageBody, RichMessageContent } from "./rich-text";
 
 type Tab =
   | { id: string; type: "chat"; title: string; sessionId: string }
@@ -30,7 +31,7 @@ type Tab =
 type TranscriptItem = {
   id: string;
   role: string;
-  text: string;
+  body: RichMessageBody;
   muted?: boolean;
   streaming?: boolean;
 };
@@ -54,6 +55,9 @@ const navItems = [
   { type: "settings" as const, label: "Settings", icon: Settings }
 ];
 
+const MAX_SESSION_EVENTS = 2000;
+const ACTIONABLE_APPROVAL_STATES = new Set(["", "staged_not_granted", "grant_attached"]);
+
 export function App() {
   const [workspace, setWorkspace] = useState({ name: "pp-Echo", path: "" });
   const [workspaces, setWorkspaces] = useState<WorkspacesState>({ active: { name: "pp-Echo", path: "", exists: true, is_dir: true }, recent: [] });
@@ -70,6 +74,7 @@ export function App() {
   const [approvalFeedback, setApprovalFeedback] = useState("");
   const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [pendingWorkspace, setPendingWorkspace] = useState<OpenWorkspaceResponse | null>(null);
+  const [promptSubmitting, setPromptSubmitting] = useState(false);
   const pollers = useRef<Record<string, number>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
 
@@ -98,7 +103,7 @@ export function App() {
     if (target) {
       target.scrollTop = target.scrollHeight;
     }
-  }, [transcript.length, transcript[transcript.length - 1]?.text]);
+  }, [transcript.length, transcript[transcript.length - 1]?.body.text, transcript[transcript.length - 1]?.body.attachments.length]);
 
   async function refreshAll() {
     const [workspaceState, sessionList, approvals] = await Promise.all([api.workspaces(), api.sessions(), api.approvals()]);
@@ -113,12 +118,19 @@ export function App() {
   }
 
   async function openSession(sessionId: string) {
-    const snapshot = await api.snapshot(sessionId).catch(async () => {
-      const created = await api.createSession();
-      return created;
-    });
+    let snapshot: SessionSnapshot;
+    try {
+      snapshot = await api.snapshot(sessionId);
+    } catch (error) {
+      stopPollingExcept("");
+      setStatus(`Failed to open session ${shortId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     setSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
-    ensureEventPolling(snapshot.session_id);
+    stopPollingExcept(snapshot.session_id);
+    if (snapshot.history?.source !== "stored") {
+      ensureEventPolling(snapshot.session_id);
+    }
     const tab: Tab = { id: `chat:${snapshot.session_id}`, type: "chat", title: shortId(snapshot.session_id), sessionId: snapshot.session_id };
     setTabs((current) => (current.some((item) => item.id === tab.id) ? current : [...current, tab]));
     setActiveTabId(tab.id);
@@ -134,23 +146,46 @@ export function App() {
     if (pollers.current[sessionId]) return;
     setStatus("Live events connected");
     const poll = async () => {
-      const payload = await api.events(sessionId).catch(() => ({ events: [] as RuntimeEvent[] }));
-      payload.events.forEach((event) => appendEvent(sessionId, event));
-      refreshSessionState(sessionId);
+      try {
+        const payload = await api.events(sessionId);
+        payload.events.forEach((event) => appendEvent(sessionId, event));
+        const refreshed = await refreshSessionState(sessionId);
+        if (!refreshed) {
+          stopSessionPolling(sessionId);
+        }
+      } catch (error) {
+        stopSessionPolling(sessionId);
+        setStatus(`Stopped polling ${shortId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     };
     poll();
     pollers.current[sessionId] = window.setInterval(poll, 700);
   }
 
   function appendEvent(sessionId: string, event: RuntimeEvent) {
-    setEvents((current) => ({ ...current, [sessionId]: [...(current[sessionId] || []), event] }));
+    setEvents((current) => {
+      const existing = current[sessionId] || [];
+      const key = runtimeEventKey(event);
+      if (key && existing.some((item) => runtimeEventKey(item) === key)) {
+        return current;
+      }
+      const next = [...existing, event].slice(-MAX_SESSION_EVENTS);
+      return { ...current, [sessionId]: next };
+    });
     setStatus(event.message || event.type);
   }
 
-  function refreshSessionState(sessionId: string) {
-    api.snapshot(sessionId).then((snapshot) => setSnapshots((current) => ({ ...current, [sessionId]: snapshot }))).catch(() => undefined);
+  async function refreshSessionState(sessionId: string) {
+    try {
+      const snapshot = await api.snapshot(sessionId);
+      setSnapshots((current) => ({ ...current, [sessionId]: snapshot }));
+    } catch (error) {
+      setStatus(`Session ${shortId(sessionId)} refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
     api.sessions().then((payload) => setSessions(sortSessionsByUpdatedAt(payload.sessions))).catch(() => undefined);
     refreshApprovals();
+    return true;
   }
 
   function refreshApprovals() {
@@ -181,6 +216,21 @@ export function App() {
   function stopPolling() {
     Object.values(pollers.current).forEach((poller) => window.clearInterval(poller));
     pollers.current = {};
+  }
+
+  function stopSessionPolling(sessionId: string) {
+    const poller = pollers.current[sessionId];
+    if (!poller) return;
+    window.clearInterval(poller);
+    delete pollers.current[sessionId];
+  }
+
+  function stopPollingExcept(sessionId: string) {
+    Object.entries(pollers.current).forEach(([key, poller]) => {
+      if (key === sessionId) return;
+      window.clearInterval(poller);
+      delete pollers.current[key];
+    });
   }
 
   function resetWorkspaceUi() {
@@ -227,12 +277,21 @@ export function App() {
   }
 
   async function sendPrompt() {
-    if (!activeSessionId || !prompt.trim()) return;
+    if (!activeSessionId || !prompt.trim() || promptSubmitting || busy || activeApproval) return;
     const text = prompt;
+    setPromptSubmitting(true);
     setPrompt("");
     appendEvent(activeSessionId, { type: "local_user_prompt", session_id: activeSessionId, message: text });
-    await api.prompt(activeSessionId, text);
-    refreshSessionState(activeSessionId);
+    try {
+      await api.prompt(activeSessionId, text);
+      ensureEventPolling(activeSessionId);
+      await refreshSessionState(activeSessionId);
+    } catch (error) {
+      setPrompt(text);
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPromptSubmitting(false);
+    }
   }
 
   async function cancelActiveSession() {
@@ -244,6 +303,7 @@ export function App() {
       details: { cancel_requested: true }
     });
     await api.cancel(activeSessionId);
+    ensureEventPolling(activeSessionId);
     refreshSessionState(activeSessionId);
   }
 
@@ -258,6 +318,7 @@ export function App() {
         clearPlannerToken(activeSessionId);
         setStatus("Plan approved");
         setApprovalFeedback("Plan approved. Waiting for the concrete action.");
+        ensureEventPolling(activeSessionId);
       } else {
         const result = await api.approvePending(approval.token);
         removeApproval(approval.token);
@@ -265,8 +326,8 @@ export function App() {
         setStatus(message);
         setApprovalFeedback(message);
       }
-      if (activeSessionId) refreshSessionState(activeSessionId);
       await refreshApprovals();
+      if (activeSessionId) await refreshSessionState(activeSessionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatus(message);
@@ -285,14 +346,15 @@ export function App() {
       if (approval.kind === "planner" && activeSessionId) {
         await api.reject(activeSessionId);
         clearPlannerToken(activeSessionId);
+        ensureEventPolling(activeSessionId);
       } else {
         await api.rejectPending(approval.token);
         removeApproval(approval.token);
       }
       setStatus("Approval rejected");
       setApprovalFeedback("Approval rejected.");
-      if (activeSessionId) refreshSessionState(activeSessionId);
       await refreshApprovals();
+      if (activeSessionId) await refreshSessionState(activeSessionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatus(message);
@@ -406,7 +468,12 @@ export function App() {
                     <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : <MessageSquare size={15} />}</div>
                     <div className="bubble">
                       <span>{item.role}</span>
-                      <p>{item.text}{item.streaming && <i className="stream-cursor" />}</p>
+                      <RichMessageContent
+                        text={item.body.text}
+                        attachments={item.body.attachments}
+                        streaming={item.streaming}
+                        plain={activeSnapshot?.history?.source === "stored" && !item.streaming}
+                      />
                     </div>
                   </article>
                 ))}
@@ -458,8 +525,13 @@ export function App() {
               </aside>
 
               <div className="composer">
-                <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask pp-Echo what to do next" />
-                <button disabled={!activeSessionId || !prompt.trim() || Boolean(activeApproval)} onClick={sendPrompt}>
+                <textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="Ask pp-Echo what to do next"
+                  disabled={promptSubmitting || busy || Boolean(activeApproval)}
+                />
+                <button disabled={!activeSessionId || !prompt.trim() || Boolean(activeApproval) || busy || promptSubmitting} onClick={sendPrompt}>
                   <Play size={17} />
                 </button>
               </div>
@@ -615,26 +687,26 @@ function PanelView({ type, data, onReload }: { type: string; data: unknown; onRe
   );
 }
 
-function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []): TranscriptItem[] {
+export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []): TranscriptItem[] {
   const committedMessages = snapshot?.messages || [];
   const stored: TranscriptItem[] = committedMessages
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message, index) => ({
       id: `stored:${index}`,
       role: message.role,
-      text: messageText(message)
+      body: extractMessageBody(message)
     }))
-    .filter((item) => item.text.trim());
+    .filter((item) => item.body.text.trim() || item.body.attachments.length > 0);
 
   const committedUsers = new Set(
     committedMessages
       .filter((message) => message.role === "user")
-      .map((message) => normalizeText(messageText(message)))
+      .map((message) => normalizeText(extractMessageBody(message).text))
       .filter(Boolean)
   );
   const committedAssistants = committedMessages
     .filter((message) => message.role === "assistant")
-    .map((message) => normalizeText(messageText(message)))
+    .map((message) => normalizeText(extractMessageBody(message).text))
     .filter(Boolean);
 
   const runtime: TranscriptItem[] = [];
@@ -648,7 +720,7 @@ function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []
     const normalized = normalizeText(text);
     const alreadyCommitted = committedAssistants.some((committed) => committed.includes(normalized) || normalized.includes(committed));
     if (!alreadyCommitted) {
-      runtime.push({ id: `stream:${streamIndex++}`, role: "assistant", text, streaming: true });
+      runtime.push({ id: `stream:${streamIndex++}`, role: "assistant", body: { text, attachments: [] }, streaming: true });
     }
   };
 
@@ -661,7 +733,7 @@ function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []
       flushStream();
       const text = (event.message || "").trim();
       if (text && !committedUsers.has(normalizeText(text))) {
-        runtime.push({ id: `local-user:${runtime.length}`, role: "user", text });
+        runtime.push({ id: `local-user:${runtime.length}`, role: "user", body: { text, attachments: [] } });
       }
       continue;
     }
@@ -671,7 +743,7 @@ function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []
     }
     if (event.is_error && event.message) {
       flushStream();
-      runtime.push({ id: `error:${runtime.length}`, role: "error", text: event.message });
+      runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: event.message, attachments: [] } });
       continue;
     }
     if (event.type.includes("tool")) {
@@ -681,24 +753,40 @@ function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []
   flushStream();
   const items = [...stored, ...runtime];
   if (shouldShowThinking(items, events)) {
-    items.push({ id: "thinking", role: "assistant", text: "Thinking", streaming: true });
+    items.push({ id: "thinking", role: "assistant", body: { text: "Thinking", attachments: [] }, streaming: true });
   }
   return items;
-}
-
-function messageText(message: SessionSnapshot["messages"][number]) {
-  return message.content.map((part) => part.text || part.name || "").filter(Boolean).join("\n");
 }
 
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function runtimeEventKey(event: RuntimeEvent) {
+  const detailKey =
+    event.details?.event_id ||
+    event.details?.id ||
+    event.details?.tool_call_id ||
+    event.details?.token ||
+    event.details?.artifact_id ||
+    "";
+  return [
+    event.type,
+    event.turn_id ?? "",
+    event.phase ?? "",
+    event.timestamp ?? "",
+    event.tool_name ?? "",
+    event.message ?? "",
+    event.delta ?? "",
+    typeof detailKey === "string" || typeof detailKey === "number" ? detailKey : ""
+  ].join("\u001f");
+}
+
 function shouldShowThinking(items: TranscriptItem[], events: RuntimeEvent[]) {
   if (!isTurnInFlight(events)) return false;
   const latestUserIndex = findLastIndex(items, (item) => item.role === "user");
   if (latestUserIndex < 0) return true;
-  return !items.slice(latestUserIndex + 1).some((item) => item.role === "assistant" && item.text.trim() && item.id !== "thinking");
+  return !items.slice(latestUserIndex + 1).some((item) => item.role === "assistant" && item.body.text.trim() && item.id !== "thinking");
 }
 
 export function runtimeIsBusy(snapshot: SessionSnapshot | undefined, events: RuntimeEvent[]) {
@@ -846,7 +934,9 @@ function buildActiveApproval(snapshot: SessionSnapshot | undefined, events: Runt
   }
   const sessionId = snapshot?.session_id || "";
   const eventTokens = eventPendingTokens(events);
-  const pending = summary.items.find((item) => item.action_type !== "planner_approval" && approvalBelongsToSession(item, sessionId, eventTokens));
+  const pending = summary.items.find(
+    (item) => item.action_type !== "planner_approval" && isActionableApproval(item) && approvalBelongsToSession(item, sessionId, eventTokens)
+  );
   if (!pending) return null;
   return {
     kind: "pending",
@@ -872,6 +962,11 @@ function approvalBelongsToSession(item: PendingAction, sessionId: string, eventT
   const itemSession = item.details?.session_id;
   if (typeof itemSession === "string" && itemSession) return itemSession === sessionId;
   return eventTokens.has(item.token);
+}
+
+function isActionableApproval(item: PendingAction) {
+  const state = item.lifecycle?.state || "";
+  return ACTIONABLE_APPROVAL_STATES.has(state);
 }
 
 function approvalEmptyText(busy: boolean, workspaceApprovalCount: number) {

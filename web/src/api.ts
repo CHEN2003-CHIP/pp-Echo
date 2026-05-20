@@ -1,3 +1,30 @@
+export type MessageAttachment = {
+  url: string;
+  alt?: string;
+  title?: string;
+  mime_type?: string;
+  kind?: "image" | "file";
+  name?: string;
+};
+
+export type MessageContentPart =
+  | { type: "text"; text: string }
+  | { type: "tool_call"; id: string; name: string; arguments?: Record<string, unknown> }
+  | { type: "image"; url: string; alt?: string; title?: string; mime_type?: string }
+  | { type: string; [key: string]: unknown };
+
+export type SnapshotMessage = {
+  role: string;
+  content: MessageContentPart[];
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  metadata?: {
+    attachments?: Array<string | MessageAttachment | Record<string, unknown>>;
+    images?: Array<string | MessageAttachment | Record<string, unknown>>;
+    [key: string]: unknown;
+  };
+};
+
 export type SessionEntry = {
   id: string;
   parent_id?: string | null;
@@ -43,12 +70,21 @@ export type SessionSnapshot = {
     changed_paths?: string[];
     lifecycle_state?: string;
   }>;
+  history?: {
+    source?: "active" | "stored";
+    message_count?: number;
+    visible_message_count?: number;
+    returned_message_count?: number;
+    truncated?: boolean;
+    max_messages?: number;
+    max_total_text_chars?: number;
+  };
   runtime_control?: {
     status?: string;
     pending_artifact_count?: number;
     pending_artifacts?: Array<{ token: string; changed_paths?: string[] }>;
   };
-  messages: Array<{ role: string; content: Array<{ type: string; text?: string; name?: string }> }>;
+  messages: SnapshotMessage[];
 };
 
 export type PendingAction = {
