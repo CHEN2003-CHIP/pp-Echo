@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.browser import BrowserRuntime
 from pp_agent.extensions import (
     ExtensionCommandRegistry,
     ExtensionDescriptor,
@@ -501,10 +502,13 @@ class ExecutableExtensions:
     resource_discovery_handlers: dict[str, list[Callable[[dict[str, Any]], Optional[dict[str, list[str]]]]]] = field(default_factory=dict)
     cleanup_callbacks: list[Callable[[], object]] = field(default_factory=list)
     mcp_runtime: MCPRuntime | None = None
+    browser_runtime: BrowserRuntime | None = None
 
     def close(self) -> None:
         if self.mcp_runtime is not None:
             self.mcp_runtime.close()
+        if self.browser_runtime is not None:
+            self.browser_runtime.close()
         while self.cleanup_callbacks:
             callback = self.cleanup_callbacks.pop()
             callback()
@@ -518,6 +522,7 @@ def load_executable_extensions(
     runtime_hooks: RuntimeHooks,
     search_roots: Optional[list[object]] = None,
     include_mcp: Optional[bool] = None,
+    browser_controller_factory=None,
     include_extensions: bool = True,
     transport_factory=None,
     time_fn=None,
@@ -544,6 +549,13 @@ def load_executable_extensions(
             time_fn=time_fn,
         )
         runtime_hooks.add_transform_context_hook("mcp_runtime", "mcp", runtime.mcp_runtime.transform_context)
+    if settings.capabilities.browser.enable:
+        runtime.browser_runtime = BrowserRuntime(
+            workspace=workspace.resolve(),
+            settings=settings,
+            tool_registry=tool_registry,
+            controller_factory=browser_controller_factory,
+        )
     return runtime
 
 

@@ -1,16 +1,13 @@
 # Project Memory
 
 <!-- pp-echo-memory:begin -->
-## pp-Echo Bootstrap Memory
+## pp-Echo Workspace Bootstrap Memory
 
 Short-lived prompt memory for durable preferences, project decisions, and navigation.
 Use `memory_search` and `memory_get` for detailed notes in `memory/**/*.md`.
 
 ### Learned Notes
-Source: session=8c695242-be85-4232-aab5-093b1d973659 turn=turn-4
-  Source: session=8c695242-be85-4232-aab5-093b1d973659 turn=turn-5
-- **Memory Management Location**: Project-specific learning and memory are maintained in dedicated files: MEMORY.md for core state and PROJECT_LEARNING.md for accumulated insights, alongside a 'memory' folder for detailed context.
-  Evidence: Existence of MEMORY.md, PROJECT_LEARNING.md, and a 'memory' directory in the root.
+Evidence: Existence of MEMORY.md, PROJECT_LEARNING.md, and a 'memory' directory in the root.
 - **Smoke Test Documentation Naming**: Use the naming convention 'docs/worktree-smoke-[component].md' for isolated smoke test documentation files.
   Evidence: The task explicitly requested creating 'docs/worktree-smoke-web.md' with a specific content line indicating an isolated worktree smoke test.
   Source: session=8778eb07-2fa5-4bc2-8529-d8028df354d9 turn=turn-1
@@ -32,6 +29,9 @@ Source: session=8c695242-be85-4232-aab5-093b1d973659 turn=turn-4
 - **Web Smoke Check Documentation File**: The project uses a file named `docs/web-smoke-check.md` to record the status of web smoke checks, containing a single line indicating success (e.g., 'web smoke ok').
   Evidence: User requested creation of `docs/web-smoke-check.md` with content 'web smoke ok' via `orchestrate_agents`.
   Source: session=9f436abf-e99f-4a47-b62c-39dbd25f7602 turn=turn-2
+- **Browser Testing Procedure**: When testing browser tools, avoid using approve_pending_action and do not request user interaction. Use direct tool calls like navigate, read_state, type, click, and screenshot.
+  Evidence: User instructions: '只使用 browser 工具完成，不要使用 approve_pending_action，不要请求我点击 Approve。'
+  Source: session=1734d14d-9803-4fae-903a-c6800b780bad turn=turn-1
 
 ### Detailed Memory Index
 - `memory/architecture.md` - Architecture

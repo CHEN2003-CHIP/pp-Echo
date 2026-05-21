@@ -153,6 +153,17 @@ class ExtensionCapabilityConfig(BaseModel):
         return True
 
 
+class BrowserCapabilityConfig(BaseModel):
+    """
+    Local browser bridge configuration.
+    """
+    enable: bool = False
+    browser_executable: str = ""
+    user_data_dir: str = ""
+    screenshot_dir: str = ""
+    launch_flags: list[str] = Field(default_factory=list)
+
+
 class CapabilitySettings(BaseModel):
     """
     【AI Agent 能力配置总入口】
@@ -163,6 +174,7 @@ class CapabilitySettings(BaseModel):
     skills: SkillCapabilityConfig = Field(default_factory=SkillCapabilityConfig)
     mcp: MCPCapabilityConfig = Field(default_factory=MCPCapabilityConfig)
     extensions: ExtensionCapabilityConfig = Field(default_factory=ExtensionCapabilityConfig)
+    browser: BrowserCapabilityConfig = Field(default_factory=BrowserCapabilityConfig)
 
 
 class StorageSettings(BaseModel):
@@ -417,6 +429,18 @@ class Settings(BaseModel):
             self.capabilities.extensions.ignored = [str(value) for value in extension_config["ignored"]]
         if "include" in extension_config:
             self.capabilities.extensions.include = [str(value) for value in extension_config["include"]]
+
+        browser_config = capability_config.get("browser", {})
+        if "enable" in browser_config:
+            self.capabilities.browser.enable = bool(browser_config["enable"])
+        if "browser_executable" in browser_config:
+            self.capabilities.browser.browser_executable = str(browser_config["browser_executable"])
+        if "user_data_dir" in browser_config:
+            self.capabilities.browser.user_data_dir = str(browser_config["user_data_dir"])
+        if "screenshot_dir" in browser_config:
+            self.capabilities.browser.screenshot_dir = str(browser_config["screenshot_dir"])
+        if "launch_flags" in browser_config:
+            self.capabilities.browser.launch_flags = [str(value) for value in browser_config["launch_flags"]]
 
     def _apply_memory_config(self, memory_config: dict) -> None:
         if "enable" in memory_config:

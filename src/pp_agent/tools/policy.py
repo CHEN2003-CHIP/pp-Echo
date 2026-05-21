@@ -109,6 +109,15 @@ class ToolPolicyEvaluator:
         if mode_decision is not None:
             return mode_decision
 
+        if tool_family == "browser":
+            return PolicyDecision(
+                action=ALLOW,
+                permission_domain=permission_domain,
+                reason="Local isolated browser automation is allowed by current policy.",
+                target=target,
+                details=details,
+            )
+
         if permission_domain == PermissionDomain.EDIT:
             return PolicyDecision(
                 action=ASK,

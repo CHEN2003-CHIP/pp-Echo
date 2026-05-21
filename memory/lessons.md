@@ -1,13 +1,7 @@
 # Lessons
 
 <!-- pp-echo-detail-memory:begin -->
-mplementation-planner manifest incorrectly concluded write tools were unavailable, while the current capability profile explicitly lists `write_file` as available, allowing successful file creation.
-
-Source: session=bc69db56-9bba-41d7-affd-06d668405b74 turn=turn-1
-
-### Toolset Availability Verification
-
-Prior agents may incorrectly assume write capabilities are unavailable. Always verify the actual toolset (e.g., `write_file`) before concluding a task is impossible due to constraints.
+ior agents may incorrectly assume write capabilities are unavailable. Always verify the actual toolset (e.g., `write_file`) before concluding a task is impossible due to constraints.
 
 Evidence: The prior agent manifest claimed no write tools were available, but the current session successfully used `write_file` to create the target file.
 
@@ -163,6 +157,14 @@ Prior agents may incorrectly assume a workspace is read-only or that specific or
 Evidence: The prior 'implementation-planner' manifest claimed the workspace was read-only and 'orchestrate_agents' was missing, preventing the task. The current 'code-worker' successfully used 'write_file' to create the target file directly.
 
 Source: session=d2530464-2306-40e1-b0fa-5c459f10557e turn=turn-2
+
+### Browser Tool Timeout on Data URLs
+
+Using browser.navigate with a data: URL may cause a timeout if the browser fails to resolve or load the target immediately.
+
+Evidence: tool:browser.navigate: Timed out waiting for browser page target.
+
+Source: session=1734d14d-9803-4fae-903a-c6800b780bad turn=turn-1
 <!-- pp-echo-detail-memory:end -->
 t... memory confusion'. Recommended actions 1 and 4.
 

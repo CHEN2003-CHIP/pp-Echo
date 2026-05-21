@@ -54,6 +54,19 @@
 
       "_comment_high_risk_plan": "高风险计划是否需要 planner approval。",
       "high_risk_plan": true
+    },
+
+    "browser": {
+      "_comment_enable": "Enable the local browser bridge.",
+      "enable": false,
+      "_comment_browser_executable": "Chrome/Edge executable path. Leave empty to auto-detect.",
+      "browser_executable": "",
+      "_comment_user_data_dir": "Browser profile directory for the local bridge.",
+      "user_data_dir": "",
+      "_comment_screenshot_dir": "Screenshot output directory.",
+      "screenshot_dir": "",
+      "_comment_launch_flags": "Additional browser launch flags for the local bridge.",
+      "launch_flags": []
     }
   },
 

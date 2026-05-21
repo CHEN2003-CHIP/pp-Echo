@@ -90,7 +90,7 @@ def test_capability_settings_are_loaded_from_project_config(tmp_path: Path) -> N
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)
     (project_dir / "config.json").write_text(
-        '{"capabilities":{"builtin_tools":{"enable":false},"skills":{"enable_builtin":false,"custom_directories":["C:/skills"],"include":["review*"],"ignored":["review-draft"]},"mcp":{"enable":true,"config_paths":["C:/mcp.json"],"server_filters":["github*"]},"extensions":{"enable_builtin":true,"custom_directories":["C:/ext"],"include":["adapter*"],"ignored":["draft*"]}}}',
+        '{"capabilities":{"builtin_tools":{"enable":false},"skills":{"enable_builtin":false,"custom_directories":["C:/skills"],"include":["review*"],"ignored":["review-draft"]},"mcp":{"enable":true,"config_paths":["C:/mcp.json"],"server_filters":["github*"]},"extensions":{"enable_builtin":true,"custom_directories":["C:/ext"],"include":["adapter*"],"ignored":["draft*"]},"browser":{"enable":true,"browser_executable":"C:/Chrome/chrome.exe","user_data_dir":"C:/browser-profile","screenshot_dir":"C:/browser-shots","launch_flags":["--headless=new"]}}}',
         encoding="utf-8",
     )
 
@@ -108,6 +108,11 @@ def test_capability_settings_are_loaded_from_project_config(tmp_path: Path) -> N
     assert settings.capabilities.extensions.custom_directories == ["C:/ext"]
     assert settings.capabilities.extensions.include == ["adapter*"]
     assert settings.capabilities.extensions.ignored == ["draft*"]
+    assert settings.capabilities.browser.enable is True
+    assert settings.capabilities.browser.browser_executable == "C:/Chrome/chrome.exe"
+    assert settings.capabilities.browser.user_data_dir == "C:/browser-profile"
+    assert settings.capabilities.browser.screenshot_dir == "C:/browser-shots"
+    assert settings.capabilities.browser.launch_flags == ["--headless=new"]
 
 
 def test_memory_settings_are_loaded_from_project_config(tmp_path: Path) -> None:

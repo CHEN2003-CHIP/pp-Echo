@@ -103,7 +103,7 @@ def create_app(
 
     @app.get("/api/sessions")
     def list_sessions() -> dict:
-        return {"sessions": sdk.list_sessions(active_workspace())}
+        return {"sessions": session_manager().list_sessions()}
 
     @app.post("/api/sessions")
     def create_session() -> dict:
@@ -112,14 +112,15 @@ def create_app(
     @app.get("/api/sessions/{session_id}")
     def session_snapshot(session_id: str) -> dict:
         try:
-            return session_manager().get_handle(session_id).snapshot()
+            return session_manager().snapshot(session_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/sessions/{session_id}/events")
     def session_events(session_id: str) -> dict:
         try:
-            return {"events": session_manager().get_handle(session_id).drain_events()}
+            handle = session_manager().get_active_handle(session_id)
+            return {"events": handle.drain_events() if handle is not None else []}
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -250,7 +251,10 @@ def create_app(
     async def events(websocket: WebSocket, session_id: str) -> None:
         await websocket.accept()
         try:
-            handle = session_manager().get_handle(session_id)
+            handle = session_manager().get_active_handle(session_id)
+            if handle is None:
+                await websocket.close(code=4404)
+                return
             while True:
                 for event in handle.drain_events():
                     await websocket.send_json(event)

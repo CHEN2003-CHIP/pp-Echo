@@ -1,15 +1,7 @@
 # Workflows
 
 <!-- pp-echo-detail-memory:begin -->
-aks after subagent exit. 3) Low priority: Implement `test_permission_enforcement.py` to validate interception of unauthorized system resource access by Skill modules.
-
-Evidence: Derived from code audit findings identifying specific gaps in `SubagentRuntime` lifecycle management and MCP context passing logic.
-
-Source: session=10e059a2-70cd-40f6-838b-cec658782355 turn=turn-2
-
-### Isolation Test Implementation Strategy
-
-Implement isolation tests in `tests/isolation/test_subagent_isolation.py` following a phased approach: Phase 1 (P0) covers cross-session state isolation and resource cleanup; Phase 2 (P0) covers permission boundaries; Phase 3 (P1) covers concurrent scenarios. Use mock objects to isolate dependencies and establish CI gates for these tests.
+nt_isolation.py` following a phased approach: Phase 1 (P0) covers cross-session state isolation and resource cleanup; Phase 2 (P0) covers permission boundaries; Phase 3 (P1) covers concurrent scenarios. Use mock objects to isolate dependencies and establish CI gates for these tests.
 
 Evidence: The generated plan outlines specific test classes (TestCrossSessionIsolation, TestPermissionBoundaries) and a dependency graph prioritizing P0 security checks before integration testing.
 
@@ -166,4 +158,12 @@ When using `orchestrate_agents` for code changes, the system may produce a stage
 Evidence: Summary indicates 'Status: staged only, not applied to the main workspace' and instructions to use Approval panel or `approve_pending_action`.
 
 Source: session=9f436abf-e99f-4a47-b62c-39dbd25f7602 turn=turn-2
+
+### Browser Tool Verification Procedure
+
+A standardized procedure to verify browser tool availability using a data URL, input simulation, click interaction, and screenshot capture without requiring user approval.
+
+Evidence: The turn demonstrates a complete workflow: navigating a data URL, reading state, typing text, clicking a button to trigger an event, verifying the DOM change, and capturing a screenshot.
+
+Source: session=7a1a9663-d84a-4273-833e-3530e3162560 turn=turn-1
 <!-- pp-echo-detail-memory:end -->

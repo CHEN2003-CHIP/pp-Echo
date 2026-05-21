@@ -14,6 +14,8 @@ from pp_agent.web.workspaces import WebWorkspaceManager
 from pp_agent.tools.registry import ToolRegistry
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.sessions import SessionStore
+from pp_agent.storage.models import StoredModelConfig
+from pp_agent.domain import ChatMessage, TextPart
 
 from tests.web.test_session_manager import _factory
 
@@ -60,6 +62,26 @@ def test_web_api_prompt_endpoint(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["queued"] is False
     assert manager.get_handle(session_id).drain_events()[0]["type"] == "message_delta"
+
+
+def test_web_api_session_list_uses_lightweight_web_summary(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = SessionStore(workspace / ".pp-agent" / "sessions")
+    record = store.create("system prompt", StoredModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="hello")], timestamp=1.0),
+        ChatMessage(role="tool", content=[TextPart(text="x" * 500_000)], tool_name="read_file", timestamp=1.5),
+    ]
+    store.save(record)
+
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+    response = client.get("/api/sessions")
+
+    assert response.status_code == 200
+    assert response.json()["sessions"][0]["id"] == record.id
 
 
 def test_web_api_events_polling_endpoint(tmp_path: Path) -> None:

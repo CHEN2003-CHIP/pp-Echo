@@ -48,26 +48,23 @@ def register_file_memory_tools(registry: ToolRegistry, *, settings: Settings | N
     settings = settings or Settings.load(registry.workspace)
     if not settings.memory.file_memory_enable or not settings.memory.file_memory_search_enable:
         return
-    requests_network = bool(
-        settings.memory.file_memory_allow_remote_embedding
-        and settings.memory.embedding_enable
-        and settings.memory.vector_enable
-    )
+    search_settings = settings.model_copy(deep=True)
+    search_settings.memory.file_memory_allow_remote_embedding = False
     registry.register_function_tool(
         name="memory_search",
         description=(
-            "Search Markdown long-term memory files (MEMORY.md and memory/**/*.md) with hybrid BM25 and vector recall. "
+            "Search Markdown long-term memory files (MEMORY.md and memory/**/*.md) with local BM25 recall. "
             "Use before answering prior preferences, previous project decisions, old bugs, long-running tasks, or remembered facts."
         ),
         parameters=MEMORY_SEARCH_SCHEMA,
-        executor=lambda workspace, arguments: memory_search_executor(workspace, arguments, settings=settings),
+        executor=lambda workspace, arguments: memory_search_executor(workspace, arguments, settings=search_settings),
         category="memory",
         permission_domain=PermissionDomain.READ,
         tool_family="extension",
         exact_effect_mode="auto",
         non_side_effectful=True,
-        known_safe_inspect=not requests_network,
-        requests_network_hint=requests_network,
+        known_safe_inspect=True,
+        requests_network_hint=False,
     )
     registry.register_function_tool(
         name="memory_get",

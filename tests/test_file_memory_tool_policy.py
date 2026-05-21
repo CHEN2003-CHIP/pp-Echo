@@ -20,7 +20,7 @@ def test_file_memory_tools_are_registered_and_policy_gated(tmp_path: Path) -> No
     assert decision.action == "allow"
 
 
-def test_memory_search_with_remote_embedding_declares_network_when_configured(tmp_path: Path) -> None:
+def test_memory_search_uses_local_recall_for_runtime_policy_when_remote_embedding_configured(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir()
     (project_dir / "config.json").write_text(
@@ -32,5 +32,6 @@ def test_memory_search_with_remote_embedding_declares_network_when_configured(tm
     metadata = registry.metadata()["memory_search"]
     decision = registry.evaluate_call("memory_search", {"query": "pytest"})
 
-    assert metadata.requests_network_hint is True
-    assert decision.action == "ask"
+    assert metadata.requests_network_hint is False
+    assert metadata.known_safe_inspect is True
+    assert decision.action == "allow"

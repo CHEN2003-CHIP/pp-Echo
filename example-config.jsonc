@@ -58,6 +58,19 @@
 
       // 高风险计划是否需要 planner approval。
       "high_risk_plan": true
+    },
+
+    "browser": {
+      // Enable the local browser bridge.
+      "enable": false,
+      // Chrome/Edge executable path. Leave empty to auto-detect.
+      "browser_executable": "",
+      // Browser profile directory for the local bridge.
+      "user_data_dir": "",
+      // Screenshot output directory.
+      "screenshot_dir": "",
+      // Additional browser launch flags for the local bridge.
+      "launch_flags": []
     }
   },
 

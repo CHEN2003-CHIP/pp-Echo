@@ -427,7 +427,11 @@ def memory_provider_for(workspace: Path):
     memory_settings = settings.memory
     if not memory_settings.enable or memory_settings.backend != "sqlite":
         return NoopMemoryProvider()
-    store = SQLiteHistoryStore(settings.history_db_path(), busy_timeout_ms=memory_settings.sqlite_busy_timeout_ms)
+    try:
+        store = SQLiteHistoryStore(settings.history_db_path(), busy_timeout_ms=memory_settings.sqlite_busy_timeout_ms)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Falling back to noop memory provider; SQLite history store is unavailable: %s", exc)
+        return NoopMemoryProvider()
     indexer = HistoryIndexer(
         chunk_target_tokens=memory_settings.chunk_target_tokens,
         chunk_max_tokens=memory_settings.chunk_max_tokens,
@@ -506,10 +510,12 @@ def auto_index_scheduler_for(workspace: Path):
         and settings.memory.indexing_enable
     ):
         return NoopAutoIndexScheduler()
-    return AsyncMemoryIndexScheduler(
-        pipeline=memory_index_pipeline_for(workspace),
-        limit=settings.memory.indexing_batch_size,
-    )
+    try:
+        pipeline = memory_index_pipeline_for(workspace)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Auto memory indexing disabled because the history store is unavailable: %s", exc)
+        return NoopAutoIndexScheduler()
+    return AsyncMemoryIndexScheduler(pipeline=pipeline, limit=settings.memory.indexing_batch_size)
 
 
 def history_retriever_for(workspace: Path, *, session_id: str | None = None) -> HistoryRetriever | None:
@@ -521,8 +527,13 @@ def history_retriever_for(workspace: Path, *, session_id: str | None = None) -> 
         and settings.memory.vector_enable
     ):
         return None
+    try:
+        store = history_store_for(workspace)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Memory retrieval disabled because the history store is unavailable: %s", exc)
+        return None
     return HistoryRetriever(
-        store=history_store_for(workspace),
+        store=store,
         embedding_provider=embedding_provider_for(workspace),
         vector_index=vector_index_for(workspace),
         same_session_bias=settings.memory.retrieval_same_session_bias,
@@ -593,22 +604,30 @@ def project_memory_context_hook_for(workspace: Path) -> ProjectMemoryContextHook
     settings = load_settings(workspace)
     if not settings.learning.enable or not settings.learning.project_memory_enable:
         return None
-    return ProjectMemoryContextHook(
-        workspace=workspace,
-        settings=settings.learning,
-        store=LearningStore(settings.project_dir / "learning"),
-    )
+    try:
+        return ProjectMemoryContextHook(
+            workspace=workspace,
+            settings=settings.learning,
+            store=LearningStore(settings.project_dir / "learning"),
+        )
+    except OSError as exc:
+        logger.warning("Project memory context disabled because its storage is unavailable: %s", exc)
+        return None
 
 
 def global_memory_context_hook_for(workspace: Path) -> GlobalMemoryContextHook | None:
     settings = load_settings(workspace)
     if not settings.learning.enable:
         return None
-    return GlobalMemoryContextHook(
-        workspace=workspace,
-        settings=settings.learning,
-        global_root=settings.global_dir,
-    )
+    try:
+        return GlobalMemoryContextHook(
+            workspace=workspace,
+            settings=settings.learning,
+            global_root=settings.global_dir,
+        )
+    except OSError as exc:
+        logger.warning("Global memory context disabled because its storage is unavailable: %s", exc)
+        return None
 
 
 def checkpoint_store_for(workspace: Path) -> CheckpointStore:
@@ -652,6 +671,7 @@ def create_tool_registry(
         )
         if extension_runtime.mcp_runtime is not None:
             extension_runtime.mcp_runtime.ensure_discovered()
+        setattr(registry, "_extension_runtime", extension_runtime)
     return registry
 
 

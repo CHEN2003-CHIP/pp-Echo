@@ -79,6 +79,13 @@ Create `.pp-agent/config.json` for per-project overrides.
       "enable": false,
       "config_paths": [],
       "server_filters": []
+    },
+    "browser": {
+      "enable": false,
+      "browser_executable": "",
+      "user_data_dir": "",
+      "screenshot_dir": "",
+      "launch_flags": []
     }
   },
   "subagents": {
