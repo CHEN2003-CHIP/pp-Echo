@@ -54,19 +54,6 @@
 
       "_comment_high_risk_plan": "高风险计划是否需要 planner approval。",
       "high_risk_plan": true
-    },
-
-    "browser": {
-      "_comment_enable": "Enable the local browser bridge.",
-      "enable": false,
-      "_comment_browser_executable": "Chrome/Edge executable path. Leave empty to auto-detect.",
-      "browser_executable": "",
-      "_comment_user_data_dir": "Browser profile directory for the local bridge.",
-      "user_data_dir": "",
-      "_comment_screenshot_dir": "Screenshot output directory.",
-      "screenshot_dir": "",
-      "_comment_launch_flags": "Additional browser launch flags for the local bridge.",
-      "launch_flags": []
     }
   },
 
@@ -147,6 +134,42 @@
       "server_filters": [
         "*"
       ]
+    },
+
+    "browser": {
+      "_comment_enable": "Enable the unified browser tool. The model-facing tool name is browser; use action fields such as status, profiles, tabs.open, snapshot, navigate, screenshot, and act.",
+      "enable": false,
+      "_comment_browser_executable": "Chrome/Edge executable path. Leave empty to auto-detect.",
+      "browser_executable": "",
+      "_comment_user_data_dir": "Browser profile directory for the local CDP bridge.",
+      "user_data_dir": "",
+      "_comment_screenshot_dir": "Screenshot output directory.",
+      "screenshot_dir": "",
+      "_comment_launch_flags": "Additional browser launch flags for the local bridge.",
+      "launch_flags": [],
+      "_comment_default_profile": "Default profile for browser actions. Supported now: isolated/default. Reserved: user/remote.",
+      "default_profile": "isolated",
+      "_comment_allow_private_network": "SSRF protection: private/internal IPs and localhost are blocked unless this is true.",
+      "allow_private_network": false,
+      "_comment_allowed_hostnames": "Optional hostname allowlist. Supports fnmatch-style patterns such as *.example.com.",
+      "allowed_hostnames": [],
+      "_comment_deny_hostnames": "Optional hostname denylist. Supports fnmatch-style patterns.",
+      "deny_hostnames": [],
+      "_comment_allow_user_profile": "User profiles and existing sessions must be explicitly enabled.",
+      "allow_user_profile": false,
+      "_comment_allow_remote_profile": "Remote CDP profiles must be explicitly enabled.",
+      "allow_remote_profile": false,
+      "_comment_allow_high_risk_actions": "High-risk clicks/submits and sensitive form fields are blocked unless explicitly enabled.",
+      "allow_high_risk_actions": false,
+      "_comment_evaluate_enabled": "JS evaluate and wait-function style automation are disabled by default.",
+      "evaluate_enabled": false,
+      "_comment_snapshot_defaults": "Default snapshot behavior. Snapshot content is always treated as untrusted_web_content.",
+      "snapshot_defaults": {
+        "refs": true,
+        "interactive": true,
+        "compact": true,
+        "max_chars": 4000
+      }
     }
   },
 

@@ -162,6 +162,15 @@ class BrowserCapabilityConfig(BaseModel):
     user_data_dir: str = ""
     screenshot_dir: str = ""
     launch_flags: list[str] = Field(default_factory=list)
+    default_profile: str = "isolated"
+    allow_private_network: bool = False
+    allowed_hostnames: list[str] = Field(default_factory=list)
+    deny_hostnames: list[str] = Field(default_factory=list)
+    allow_user_profile: bool = False
+    allow_remote_profile: bool = False
+    allow_high_risk_actions: bool = False
+    evaluate_enabled: bool = False
+    snapshot_defaults: dict[str, object] = Field(default_factory=dict)
 
 
 class CapabilitySettings(BaseModel):
@@ -441,6 +450,24 @@ class Settings(BaseModel):
             self.capabilities.browser.screenshot_dir = str(browser_config["screenshot_dir"])
         if "launch_flags" in browser_config:
             self.capabilities.browser.launch_flags = [str(value) for value in browser_config["launch_flags"]]
+        if "default_profile" in browser_config:
+            self.capabilities.browser.default_profile = str(browser_config["default_profile"])
+        if "allow_private_network" in browser_config:
+            self.capabilities.browser.allow_private_network = bool(browser_config["allow_private_network"])
+        if "allowed_hostnames" in browser_config:
+            self.capabilities.browser.allowed_hostnames = [str(value).lower() for value in browser_config["allowed_hostnames"]]
+        if "deny_hostnames" in browser_config:
+            self.capabilities.browser.deny_hostnames = [str(value).lower() for value in browser_config["deny_hostnames"]]
+        if "allow_user_profile" in browser_config:
+            self.capabilities.browser.allow_user_profile = bool(browser_config["allow_user_profile"])
+        if "allow_remote_profile" in browser_config:
+            self.capabilities.browser.allow_remote_profile = bool(browser_config["allow_remote_profile"])
+        if "allow_high_risk_actions" in browser_config:
+            self.capabilities.browser.allow_high_risk_actions = bool(browser_config["allow_high_risk_actions"])
+        if "evaluate_enabled" in browser_config:
+            self.capabilities.browser.evaluate_enabled = bool(browser_config["evaluate_enabled"])
+        if "snapshot_defaults" in browser_config:
+            self.capabilities.browser.snapshot_defaults = dict(browser_config["snapshot_defaults"])
 
     def _apply_memory_config(self, memory_config: dict) -> None:
         if "enable" in memory_config:

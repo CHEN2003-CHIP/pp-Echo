@@ -5,36 +5,62 @@ import json
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 
-
-@dataclass
-class BrowserSnapshot:
-    url: str
-    title: str
-    ready_state: str
-    body_text: str
-    html: str | None = None
+from pp_agent.browser.models import (
+    BrowserActRequest,
+    BrowserActResult,
+    BrowserBounds,
+    BrowserNode,
+    BrowserProfile,
+    BrowserSnapshot,
+    BrowserSnapshotOptions,
+    BrowserTab,
+)
 
 
 class BrowserController(Protocol):
-    def read_state(self) -> BrowserSnapshot:
+    def doctor(self) -> dict[str, Any]:
         ...
 
-    def navigate(self, url: str, *, wait_ms: int = 5000) -> BrowserSnapshot:
+    def status(self) -> dict[str, Any]:
         ...
 
-    def click(self, selector: str, *, wait_ms: int = 1500) -> BrowserSnapshot:
+    def start(self) -> dict[str, Any]:
         ...
 
-    def type(self, selector: str, text: str, *, press_enter: bool = False, wait_ms: int = 1500) -> BrowserSnapshot:
+    def stop(self) -> dict[str, Any]:
         ...
 
-    def screenshot(self, *, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
+    def profiles(self) -> list[BrowserProfile]:
+        ...
+
+    def list_tabs(self) -> list[BrowserTab]:
+        ...
+
+    def open_tab(self, url: str, *, label: str = "") -> BrowserTab:
+        ...
+
+    def focus_tab(self, target_id: str) -> BrowserTab:
+        ...
+
+    def close_tab(self, target_id: str) -> dict[str, Any]:
+        ...
+
+    def navigate(self, url: str, *, target_id: str | None = None, wait_ms: int = 5000) -> BrowserSnapshot:
+        ...
+
+    def snapshot(self, *, target_id: str | None = None, options: BrowserSnapshotOptions | None = None) -> BrowserSnapshot:
+        ...
+
+    def act(self, request: BrowserActRequest, *, target_id: str | None = None) -> BrowserActResult:
+        ...
+
+    def screenshot(self, *, target_id: str | None = None, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
         ...
 
     def close(self) -> None:
@@ -43,7 +69,7 @@ class BrowserController(Protocol):
 
 class LocalCDPBrowserController:
     """
-    Minimal local Chrome/Edge bridge via the DevTools protocol.
+    Local Chrome/Edge bridge via the DevTools protocol.
     """
 
     def __init__(
@@ -63,76 +89,174 @@ class LocalCDPBrowserController:
         self.launch_flags = list(launch_flags or [])
         self.connect_timeout_seconds = max(5, int(connect_timeout_seconds))
         self._process: subprocess.Popen[str] | None = None
-        self._client: Any = None
+        self._clients: dict[str, Any] = {}
         self._browser_ws_url: str | None = None
         self._page_ws_url: str | None = None
+        self._devtools_port: int | None = None
         self._request_id = 0
+        self._tab_labels: dict[str, str] = {}
+        self._ref_maps: dict[str, dict[str, BrowserNode]] = {}
+        self._snapshot_ids: dict[str, str] = {}
+        self._stale_targets: set[str] = set()
+        self._last_error = ""
 
-    def read_state(self) -> BrowserSnapshot:
-        client = self._ensure_client()
-        payload = self._evaluate(
-            client,
-            "(() => ({"
-            "url: location.href,"
-            "title: document.title,"
-            "readyState: document.readyState,"
-            "bodyText: document.body ? document.body.innerText : '',"
-            "html: document.documentElement ? document.documentElement.outerHTML : null"
-            "}))()",
-        )
+    def doctor(self) -> dict[str, Any]:
+        status = self.status()
+        status["user_data_dir"] = str(self.user_data_dir)
+        status["screenshot_dir"] = str(self.screenshot_dir)
+        status["browser_executable_configured"] = bool(self.browser_executable)
+        return status
+
+    def status(self) -> dict[str, Any]:
+        tabs: list[BrowserTab] = []
+        try:
+            if self._devtools_port is not None:
+                tabs = self.list_tabs()
+        except Exception as exc:
+            self._last_error = str(exc)
+        return {
+            "controller": "local_cdp",
+            "running": self._process is not None and self._process.poll() is None,
+            "controller_ready": bool(self._page_ws_url),
+            "cdp_port": self._devtools_port,
+            "tabs_count": len(tabs),
+            "last_error": self._last_error,
+        }
+
+    def start(self) -> dict[str, Any]:
+        self._start_browser_if_needed()
+        return self.status()
+
+    def stop(self) -> dict[str, Any]:
+        self.close()
+        return self.status()
+
+    def profiles(self) -> list[BrowserProfile]:
+        return [
+            BrowserProfile(name="default", mode="host", user_data_dir=str(self.user_data_dir), enabled=True, explicitly_enabled=True),
+            BrowserProfile(name="isolated", mode="host", user_data_dir=str(self.user_data_dir), enabled=True, explicitly_enabled=True),
+            BrowserProfile(name="user", mode="host", user_data_dir="", enabled=False, explicitly_enabled=False),
+            BrowserProfile(name="remote", mode="host", cdp_url="", attach_only=True, enabled=False, explicitly_enabled=False),
+        ]
+
+    def list_tabs(self) -> list[BrowserTab]:
+        self._start_browser_if_needed()
+        targets = self._list_page_targets()
+        active_target = self._target_id_from_ws(self._page_ws_url or "")
+        tabs: list[BrowserTab] = []
+        for target in targets:
+            target_id = str(target.get("id") or "")
+            tabs.append(
+                BrowserTab(
+                    tab_id=target_id,
+                    target_id=target_id,
+                    label=self._tab_labels.get(target_id, ""),
+                    url=str(target.get("url") or ""),
+                    title=str(target.get("title") or ""),
+                    active=target_id == active_target,
+                )
+            )
+        return tabs
+
+    def open_tab(self, url: str, *, label: str = "") -> BrowserTab:
+        self._start_browser_if_needed()
+        browser_client = self._connect_browser_client(self._browser_ws_url or "")
+        try:
+            payload = self._call(browser_client, "Target.createTarget", {"url": url})
+            target_id = str(payload.get("result", {}).get("targetId") or "")
+        finally:
+            browser_client.close()
+        if label:
+            self._tab_labels[target_id] = label
+        self._stale_targets.add(target_id)
+        self.focus_tab(target_id)
+        self._wait_ready(self._client_for_target(target_id), wait_ms=5000)
+        return self._tab_for_target(target_id)
+
+    def focus_tab(self, target_id: str) -> BrowserTab:
+        self._start_browser_if_needed()
+        resolved = self._resolve_target_id(target_id)
+        browser_client = self._connect_browser_client(self._browser_ws_url or "")
+        try:
+            self._call(browser_client, "Target.activateTarget", {"targetId": resolved})
+        finally:
+            browser_client.close()
+        self._page_ws_url = self._ws_url_for_target(resolved)
+        self._stale_targets.add(resolved)
+        return self._tab_for_target(resolved)
+
+    def close_tab(self, target_id: str) -> dict[str, Any]:
+        self._start_browser_if_needed()
+        resolved = self._resolve_target_id(target_id)
+        browser_client = self._connect_browser_client(self._browser_ws_url or "")
+        try:
+            self._call(browser_client, "Target.closeTarget", {"targetId": resolved})
+        finally:
+            browser_client.close()
+        self._clients.pop(resolved, None)
+        self._tab_labels.pop(resolved, None)
+        self._ref_maps.pop(resolved, None)
+        self._snapshot_ids.pop(resolved, None)
+        self._stale_targets.discard(resolved)
+        if self._page_ws_url and self._target_id_from_ws(self._page_ws_url) == resolved:
+            self._page_ws_url = self._discover_page_ws_url(self._devtools_port or 0)
+        return {"closed": True, "target_id": resolved}
+
+    def navigate(self, url: str, *, target_id: str | None = None, wait_ms: int = 5000) -> BrowserSnapshot:
+        client = self._client_for_target_id(target_id)
+        self._call(client, "Page.navigate", {"url": url})
+        self._wait_ready(client, wait_ms=wait_ms)
+        resolved = self._target_id_for_client(client, target_id)
+        self._stale_targets.add(resolved)
+        return self.snapshot(target_id=resolved)
+
+    def snapshot(self, *, target_id: str | None = None, options: BrowserSnapshotOptions | None = None) -> BrowserSnapshot:
+        options = options or BrowserSnapshotOptions()
+        client = self._client_for_target_id(target_id)
+        target = self._target_id_for_client(client, target_id)
+        payload = self._evaluate(client, self._snapshot_expression(options))
         value = self._response_value(payload)
+        nodes = [self._node_from_payload(index + 1, item) for index, item in enumerate(value.get("nodes", []) or [])]
+        snapshot_id = str(uuid.uuid4())
+        self._ref_maps[target] = {node.ref: node for node in nodes}
+        self._snapshot_ids[target] = snapshot_id
+        self._stale_targets.discard(target)
         return BrowserSnapshot(
+            snapshot_id=snapshot_id,
+            target_id=target,
             url=str(value.get("url", "")),
             title=str(value.get("title", "")),
             ready_state=str(value.get("readyState", "")),
-            body_text=str(value.get("bodyText", "")),
-            html=value.get("html"),
+            body_text=str(value.get("bodyText", ""))[: options.max_chars],
+            html=None,
+            nodes=nodes,
+            stats={"node_count": len(nodes), "compact": options.compact, "interactive": options.interactive},
         )
 
-    def navigate(self, url: str, *, wait_ms: int = 5000) -> BrowserSnapshot:
-        client = self._ensure_client()
-        self._call(client, "Page.navigate", {"url": url})
-        self._wait_ready(client, wait_ms=wait_ms)
-        return self.read_state()
+    def act(self, request: BrowserActRequest, *, target_id: str | None = None) -> BrowserActResult:
+        client = self._client_for_target_id(target_id)
+        target = self._target_id_for_client(client, target_id)
+        if request.kind in {"resize", "close", "wait"}:
+            self._act_without_ref(client, target, request)
+            snapshot = self.snapshot(target_id=target)
+            return BrowserActResult(snapshot=snapshot, action=request.kind, requires_resnapshot=request.kind != "wait")
+        if not request.ref:
+            raise ValueError(f"browser.act kind '{request.kind}' requires ref from browser.snapshot.")
+        if target in self._stale_targets:
+            stale = self.snapshot(target_id=target)
+            return BrowserActResult(snapshot=stale, action=request.kind, requires_resnapshot=True, stale_ref=True)
+        node = self._ref_maps.get(target, {}).get(request.ref)
+        if node is None:
+            stale = self.snapshot(target_id=target)
+            return BrowserActResult(snapshot=stale, action=request.kind, requires_resnapshot=True, stale_ref=True)
+        self._evaluate(client, self._act_expression(node.selector, request))
+        self._wait_ready(client, wait_ms=request.timeout_ms or 1500)
+        self._stale_targets.add(target)
+        snapshot = self.snapshot(target_id=target)
+        return BrowserActResult(snapshot=snapshot, action=request.kind, requires_resnapshot=request.kind in {"click", "type", "select", "fill", "press"})
 
-    def click(self, selector: str, *, wait_ms: int = 1500) -> BrowserSnapshot:
-        client = self._ensure_client()
-        self._evaluate(
-            client,
-            "(() => {"
-            f"const selector = {json.dumps(selector)};"
-            "const el = document.querySelector(selector);"
-            "if (!el) throw new Error('Selector not found: ' + selector);"
-            "el.click();"
-            "return true;"
-            "})()",
-        )
-        self._wait_ready(client, wait_ms=wait_ms)
-        return self.read_state()
-
-    def type(self, selector: str, text: str, *, press_enter: bool = False, wait_ms: int = 1500) -> BrowserSnapshot:
-        client = self._ensure_client()
-        self._evaluate(
-            client,
-            "(() => {"
-            f"const selector = {json.dumps(selector)};"
-            "const el = document.querySelector(selector);"
-            "if (!el) throw new Error('Selector not found: ' + selector);"
-            f"const value = {json.dumps(text)};"
-            "if ('value' in el) { el.value = value; } else { el.textContent = value; }"
-            "el.dispatchEvent(new Event('input', { bubbles: true }));"
-            "el.dispatchEvent(new Event('change', { bubbles: true }));"
-            "return true;"
-            "})()",
-        )
-        if press_enter:
-            self._call(client, "Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13, "key": "Enter", "code": "Enter", "text": "\r"})
-            self._call(client, "Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13, "key": "Enter", "code": "Enter"})
-        self._wait_ready(client, wait_ms=wait_ms)
-        return self.read_state()
-
-    def screenshot(self, *, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
-        client = self._ensure_client()
+    def screenshot(self, *, target_id: str | None = None, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
+        client = self._client_for_target_id(target_id)
         payload = self._call(
             client,
             "Page.captureScreenshot",
@@ -146,14 +270,15 @@ class LocalCDPBrowserController:
         return {"path": str(path), "bytes": len(raw), "full_page": bool(full_page)}
 
     def close(self) -> None:
-        if self._client is not None:
+        for client in list(self._clients.values()):
             try:
-                self._client.close()
+                client.close()
             except Exception:
                 pass
-        self._client = None
+        self._clients = {}
         self._page_ws_url = None
         self._browser_ws_url = None
+        self._devtools_port = None
         if self._process is not None:
             try:
                 self._process.terminate()
@@ -165,19 +290,53 @@ class LocalCDPBrowserController:
                     pass
         self._process = None
 
-    def _ensure_client(self):
-        if self._client is not None:
-            return self._client
+    def _act_without_ref(self, client, target: str, request: BrowserActRequest) -> None:
+        if request.kind == "resize":
+            width = int(request.width or 1280)
+            height = int(request.height or 720)
+            self._call(client, "Emulation.setDeviceMetricsOverride", {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
+            return
+        if request.kind == "close":
+            self.close_tab(target)
+            return
+        if request.kind == "wait":
+            time.sleep(max(0, request.timeout_ms or 1000) / 1000.0)
+            return
+        raise ValueError(f"Unsupported browser.act kind without ref: {request.kind}")
+
+    def _client_for_target_id(self, target_id: str | None):
+        if target_id:
+            return self._client_for_target(self._resolve_target_id(target_id))
+        return self._ensure_active_client()
+
+    def _ensure_active_client(self):
         self._start_browser_if_needed()
-        self._client = self._connect_page_client()
-        self._call(self._client, "Page.enable", {})
-        self._call(self._client, "Runtime.enable", {})
-        self._call(self._client, "DOM.enable", {})
-        self._call(self._client, "Network.enable", {})
-        return self._client
+        target = self._target_id_from_ws(self._page_ws_url or "")
+        return self._client_for_target(target)
+
+    def _client_for_target(self, target_id: str):
+        if target_id in self._clients:
+            return self._clients[target_id]
+        ws_url = self._ws_url_for_target(target_id)
+        client = self._connect_page_client(ws_url)
+        self._call(client, "Page.enable", {})
+        self._call(client, "Runtime.enable", {})
+        self._call(client, "DOM.enable", {})
+        self._call(client, "Network.enable", {})
+        self._clients[target_id] = client
+        return client
+
+    def _target_id_for_client(self, client, target_id: str | None) -> str:
+        if target_id:
+            return self._resolve_target_id(target_id)
+        for candidate, candidate_client in self._clients.items():
+            if candidate_client is client:
+                return candidate
+        active = self._target_id_from_ws(self._page_ws_url or "")
+        return active
 
     def _start_browser_if_needed(self) -> None:
-        if self._page_ws_url is not None:
+        if self._page_ws_url is not None and self._devtools_port is not None:
             return
         browser_executable = self._resolve_browser_executable()
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -202,18 +361,27 @@ class LocalCDPBrowserController:
         try:
             self._process = subprocess.Popen(args, cwd=str(self.workspace), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
             port, browser_ws_path = self._wait_for_devtools_port()
+            self._devtools_port = port
             self._browser_ws_url = f"ws://127.0.0.1:{port}{browser_ws_path}"
             self._page_ws_url = self._discover_page_ws_url(port)
-        except Exception:
+        except Exception as exc:
+            self._last_error = str(exc)
             self.close()
             raise
 
-    def _connect_page_client(self):
+    def _connect_page_client(self, ws_url: str):
         import websocket
 
-        if not self._page_ws_url:
+        if not ws_url:
             raise RuntimeError("Browser target websocket is unavailable.")
-        return websocket.create_connection(self._page_ws_url, timeout=self.connect_timeout_seconds, suppress_origin=True)
+        return websocket.create_connection(ws_url, timeout=self.connect_timeout_seconds, suppress_origin=True)
+
+    def _connect_browser_client(self, ws_url: str):
+        import websocket
+
+        if not ws_url:
+            raise RuntimeError("Browser websocket is unavailable.")
+        return websocket.create_connection(ws_url, timeout=self.connect_timeout_seconds, suppress_origin=True)
 
     def _wait_for_devtools_port(self) -> tuple[int, str]:
         devtools_file = self.user_data_dir / "DevToolsActivePort"
@@ -237,23 +405,20 @@ class LocalCDPBrowserController:
     def _discover_page_ws_url(self, port: int) -> str:
         deadline = time.time() + self.connect_timeout_seconds
         version_url = f"http://127.0.0.1:{port}/json/version"
-        list_url = f"http://127.0.0.1:{port}/json/list"
         browser_ws = self._browser_ws_url
         created_target_id: str | None = None
         create_attempted = False
         last_error = ""
         while time.time() < deadline:
             try:
-                with httpx.Client(timeout=3) as client:
-                    page_targets = client.get(list_url).json()
-                    for target in page_targets:
-                        if not (target.get("type") in {"page", "tab"} and target.get("webSocketDebuggerUrl")):
-                            continue
-                        if created_target_id and target.get("id") != created_target_id:
-                            continue
-                        if target.get("url") != "chrome://newtab/":
-                            return str(target["webSocketDebuggerUrl"])
-                    if browser_ws is None:
+                page_targets = self._list_page_targets(port=port)
+                for target in page_targets:
+                    if created_target_id and target.get("id") != created_target_id:
+                        continue
+                    if target.get("url") != "chrome://newtab/":
+                        return str(target["webSocketDebuggerUrl"])
+                if browser_ws is None:
+                    with httpx.Client(timeout=3) as client:
                         browser_ws = str(client.get(version_url).json()["webSocketDebuggerUrl"])
             except Exception as exc:
                 last_error = str(exc)
@@ -274,10 +439,40 @@ class LocalCDPBrowserController:
         suffix = f" Last error: {last_error}" if last_error else ""
         raise RuntimeError(f"Timed out waiting for browser page target.{suffix}")
 
-    def _connect_browser_client(self, ws_url: str):
-        import websocket
+    def _list_page_targets(self, *, port: int | None = None) -> list[dict[str, Any]]:
+        port = port or self._devtools_port
+        if port is None:
+            return []
+        list_url = f"http://127.0.0.1:{port}/json/list"
+        with httpx.Client(timeout=3) as client:
+            page_targets = client.get(list_url).json()
+        return [
+            target
+            for target in page_targets
+            if target.get("type") in {"page", "tab"} and target.get("webSocketDebuggerUrl")
+        ]
 
-        return websocket.create_connection(ws_url, timeout=self.connect_timeout_seconds, suppress_origin=True)
+    def _ws_url_for_target(self, target_id: str) -> str:
+        for target in self._list_page_targets():
+            if str(target.get("id") or "") == target_id:
+                return str(target["webSocketDebuggerUrl"])
+        raise RuntimeError(f"Browser tab not found: {target_id}")
+
+    def _tab_for_target(self, target_id: str) -> BrowserTab:
+        for tab in self.list_tabs():
+            if tab.target_id == target_id:
+                return tab
+        return BrowserTab(tab_id=target_id, target_id=target_id, label=self._tab_labels.get(target_id, ""))
+
+    def _resolve_target_id(self, target_id: str) -> str:
+        for tab in self.list_tabs():
+            if target_id in {tab.label, tab.tab_id, tab.target_id}:
+                return tab.target_id
+        raise RuntimeError(f"Browser tab not found: {target_id}")
+
+    @staticmethod
+    def _target_id_from_ws(ws_url: str) -> str:
+        return ws_url.rstrip("/").split("/")[-1]
 
     def _resolve_browser_executable(self) -> str:
         if self.browser_executable:
@@ -321,13 +516,13 @@ class LocalCDPBrowserController:
 
     def _call(self, client, method: str, params: dict[str, Any]) -> dict[str, Any]:
         self._request_id += 1
-        message = json.dumps({"id": self._request_id, "method": method, "params": params})
-        client.send(message)
+        request_id = self._request_id
+        client.send(json.dumps({"id": request_id, "method": method, "params": params}))
         deadline = time.time() + self.connect_timeout_seconds
         while time.time() < deadline:
             raw = client.recv()
             payload = json.loads(raw)
-            if payload.get("id") != self._request_id:
+            if payload.get("id") != request_id:
                 continue
             if "error" in payload:
                 raise RuntimeError(f"CDP {method} failed: {payload['error']}")
@@ -335,7 +530,7 @@ class LocalCDPBrowserController:
         raise TimeoutError(f"Timed out waiting for CDP response to {method}")
 
     def _evaluate(self, client, expression: str) -> dict[str, Any]:
-        payload = self._call(
+        return self._call(
             client,
             "Runtime.evaluate",
             {
@@ -345,10 +540,11 @@ class LocalCDPBrowserController:
                 "userGesture": True,
             },
         )
-        return payload
 
     def _response_value(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = payload.get("result", {}).get("result", {})
+        if result.get("subtype") == "error":
+            raise RuntimeError(str(result.get("description") or result.get("value") or "Browser evaluation failed."))
         value = result.get("value")
         if not isinstance(value, dict):
             raise RuntimeError("Browser evaluation did not return an object by value.")
@@ -366,10 +562,71 @@ class LocalCDPBrowserController:
                 pass
             time.sleep(0.15)
 
+    def _snapshot_expression(self, options: BrowserSnapshotOptions) -> str:
+        interactive_only = "true" if options.interactive else "false"
+        max_chars = int(options.max_chars)
+        return (
+            "(() => {"
+            "const interactiveOnly = " + interactive_only + ";"
+            "const roleFor = (el) => el.getAttribute('role') || ({A:'link',BUTTON:'button',INPUT:'textbox',TEXTAREA:'textbox',SELECT:'combobox'}[el.tagName] || el.tagName.toLowerCase());"
+            "const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return !!(r.width && r.height) && s.visibility !== 'hidden' && s.display !== 'none'; };"
+            "const cssPath = (el) => { if (el.id) return '#' + CSS.escape(el.id); const parts = []; while (el && el.nodeType === 1 && el !== document.body) { let part = el.tagName.toLowerCase(); const parent = el.parentElement; if (parent) { const same = Array.from(parent.children).filter(x => x.tagName === el.tagName); if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(el) + 1) + ')'; } parts.unshift(part); el = parent; } return parts.length ? parts.join(' > ') : 'body'; };"
+            "const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],summary,[contenteditable=true],[tabindex]'));"
+            "const nodes = candidates.filter(el => !interactiveOnly || visible(el)).slice(0, 200).map(el => { const r = el.getBoundingClientRect(); const labels = el.id ? Array.from(document.querySelectorAll('label[for=\"' + CSS.escape(el.id) + '\"]')).map(l => l.innerText.trim()).join(' ') : ''; return { role: roleFor(el), text: (el.innerText || el.value || '').trim().slice(0, 240), name: (el.getAttribute('aria-label') || el.getAttribute('name') || '').trim(), label: labels || (el.closest('label') ? el.closest('label').innerText.trim() : ''), placeholder: el.getAttribute('placeholder') || '', href: el.href || '', visible: visible(el), bounds: {x:r.x,y:r.y,width:r.width,height:r.height}, selector: cssPath(el) }; });"
+            f"return {{url: location.href, title: document.title, readyState: document.readyState, bodyText: (document.body ? document.body.innerText : '').slice(0, {max_chars}), nodes}};"
+            "})()"
+        )
+
+    def _act_expression(self, selector: str, request: BrowserActRequest) -> str:
+        selector_json = json.dumps(selector)
+        text_json = json.dumps(request.text or "")
+        key_json = json.dumps(request.key or "")
+        values_json = json.dumps(request.values)
+        kind = request.kind
+        return (
+            "(() => {"
+            f"const el = document.querySelector({selector_json});"
+            "if (!el) throw new Error('Ref target not found');"
+            f"const kind = {json.dumps(kind)};"
+            f"const text = {text_json};"
+            f"const key = {key_json};"
+            f"const values = {values_json};"
+            "el.scrollIntoView({block:'center', inline:'center'});"
+            "if (kind === 'click') { el.click(); return {ok:true}; }"
+            "if (kind === 'hover') { el.dispatchEvent(new MouseEvent('mouseover', {bubbles:true})); return {ok:true}; }"
+            "if (kind === 'type' || kind === 'fill') { if ('value' in el) { el.value = kind === 'fill' ? text : String(el.value || '') + text; } else { el.textContent = text; } el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); return {ok:true}; }"
+            "if (kind === 'select') { if ('value' in el && values.length) el.value = values[0]; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); return {ok:true}; }"
+            "if (kind === 'press') { el.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles:true})); el.dispatchEvent(new KeyboardEvent('keyup', {key, bubbles:true})); return {ok:true}; }"
+            "if (kind === 'drag') { throw new Error('browser.act drag is reserved for a future controller implementation'); }"
+            "throw new Error('Unsupported browser.act kind: ' + kind);"
+            "})()"
+        )
+
+    @staticmethod
+    def _node_from_payload(index: int, payload: dict[str, Any]) -> BrowserNode:
+        bounds = payload.get("bounds") if isinstance(payload.get("bounds"), dict) else {}
+        return BrowserNode(
+            ref=f"e{index}",
+            role=str(payload.get("role") or ""),
+            text=str(payload.get("text") or ""),
+            name=str(payload.get("name") or ""),
+            label=str(payload.get("label") or ""),
+            placeholder=str(payload.get("placeholder") or ""),
+            href=str(payload.get("href") or ""),
+            visible=bool(payload.get("visible", True)),
+            bounds=BrowserBounds(
+                x=float(bounds.get("x") or 0),
+                y=float(bounds.get("y") or 0),
+                width=float(bounds.get("width") or 0),
+                height=float(bounds.get("height") or 0),
+            ),
+            selector=str(payload.get("selector") or ""),
+        )
+
 
 class FakeBrowserController:
     """
-    Small in-memory controller for tests.
+    In-memory controller for focused tests.
     """
 
     def __init__(self) -> None:
@@ -377,34 +634,126 @@ class FakeBrowserController:
         self.title = "Blank"
         self.ready_state = "complete"
         self.body_text = ""
-        self.html = "<html><body></body></html>"
+        self.html = "<html><body><button id='submit'>Submit</button><input id='query' placeholder='Search'></body></html>"
         self.clicks: list[str] = []
         self.types: list[tuple[str, str, bool]] = []
         self.screenshots: list[str] = []
+        self.tabs: dict[str, BrowserTab] = {"tab-1": BrowserTab(tab_id="tab-1", target_id="tab-1", label="default", url=self.url, title=self.title, active=True)}
+        self.ref_maps: dict[str, dict[str, BrowserNode]] = {}
+        self.stale_targets: set[str] = set()
 
-    def read_state(self) -> BrowserSnapshot:
-        return BrowserSnapshot(self.url, self.title, self.ready_state, self.body_text, self.html)
+    def doctor(self) -> dict[str, Any]:
+        return {**self.status(), "controller": "fake"}
 
-    def navigate(self, url: str, *, wait_ms: int = 5000) -> BrowserSnapshot:
+    def status(self) -> dict[str, Any]:
+        return {"controller": "fake", "running": True, "controller_ready": True, "tabs_count": len(self.tabs), "last_error": ""}
+
+    def start(self) -> dict[str, Any]:
+        return self.status()
+
+    def stop(self) -> dict[str, Any]:
+        return {"controller": "fake", "running": False, "controller_ready": False, "tabs_count": 0, "last_error": ""}
+
+    def profiles(self) -> list[BrowserProfile]:
+        return [
+            BrowserProfile(name="default", mode="host", enabled=True, explicitly_enabled=True),
+            BrowserProfile(name="isolated", mode="host", enabled=True, explicitly_enabled=True),
+            BrowserProfile(name="user", mode="host", enabled=False),
+            BrowserProfile(name="remote", mode="host", enabled=False, attach_only=True),
+        ]
+
+    def list_tabs(self) -> list[BrowserTab]:
+        return list(self.tabs.values())
+
+    def open_tab(self, url: str, *, label: str = "") -> BrowserTab:
+        target = f"tab-{len(self.tabs) + 1}"
+        for tab in self.tabs.values():
+            tab.active = False
+        tab = BrowserTab(tab_id=target, target_id=target, label=label, url=url, title=f"Page: {url}", active=True)
+        self.tabs[target] = tab
         self.url = url
-        self.title = f"Page: {url}"
+        self.title = tab.title
         self.body_text = f"Visited {url}"
-        return self.read_state()
+        return tab
 
-    def click(self, selector: str, *, wait_ms: int = 1500) -> BrowserSnapshot:
-        self.clicks.append(selector)
-        self.body_text = f"Clicked {selector}"
-        return self.read_state()
+    def focus_tab(self, target_id: str) -> BrowserTab:
+        resolved = self._resolve_tab(target_id).target_id
+        for tab in self.tabs.values():
+            tab.active = tab.target_id == resolved
+        return self.tabs[resolved]
 
-    def type(self, selector: str, text: str, *, press_enter: bool = False, wait_ms: int = 1500) -> BrowserSnapshot:
-        self.types.append((selector, text, press_enter))
-        self.body_text = f"Typed into {selector}: {text}"
-        return self.read_state()
+    def close_tab(self, target_id: str) -> dict[str, Any]:
+        resolved = self._resolve_tab(target_id).target_id
+        self.tabs.pop(resolved, None)
+        return {"closed": True, "target_id": resolved}
 
-    def screenshot(self, *, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
+    def navigate(self, url: str, *, target_id: str | None = None, wait_ms: int = 5000) -> BrowserSnapshot:
+        tab = self._resolve_tab(target_id) if target_id else self._active_tab()
+        tab.url = url
+        tab.title = f"Page: {url}"
+        self.url = url
+        self.title = tab.title
+        self.body_text = f"Visited {url}"
+        self.stale_targets.add(tab.target_id)
+        return self.snapshot(target_id=tab.target_id)
+
+    def snapshot(self, *, target_id: str | None = None, options: BrowserSnapshotOptions | None = None) -> BrowserSnapshot:
+        tab = self._resolve_tab(target_id) if target_id else self._active_tab()
+        nodes = [
+            BrowserNode(ref="e1", role="textbox", text="", name="query", placeholder="Search", bounds=BrowserBounds(width=120, height=20), selector="#query"),
+            BrowserNode(ref="e2", role="button", text="Submit", name="submit", bounds=BrowserBounds(width=80, height=24), selector="#submit"),
+        ]
+        self.ref_maps[tab.target_id] = {node.ref: node for node in nodes}
+        self.stale_targets.discard(tab.target_id)
+        return BrowserSnapshot(
+            snapshot_id=str(uuid.uuid4()),
+            target_id=tab.target_id,
+            url=tab.url,
+            title=tab.title,
+            ready_state=self.ready_state,
+            body_text=self.body_text,
+            html=None,
+            nodes=nodes,
+            stats={"node_count": len(nodes)},
+        )
+
+    def act(self, request: BrowserActRequest, *, target_id: str | None = None) -> BrowserActResult:
+        tab = self._resolve_tab(target_id) if target_id else self._active_tab()
+        if request.kind in {"resize", "close", "wait"}:
+            snapshot = self.snapshot(target_id=tab.target_id)
+            return BrowserActResult(snapshot=snapshot, action=request.kind, requires_resnapshot=request.kind != "wait")
+        if not request.ref:
+            raise ValueError(f"browser.act kind '{request.kind}' requires ref from browser.snapshot.")
+        if tab.target_id in self.stale_targets or request.ref not in self.ref_maps.get(tab.target_id, {}):
+            return BrowserActResult(snapshot=self.snapshot(target_id=tab.target_id), action=request.kind, stale_ref=True, requires_resnapshot=True)
+        node = self.ref_maps[tab.target_id][request.ref]
+        if request.kind == "click":
+            self.clicks.append(node.selector)
+            self.body_text = f"Clicked {node.selector}"
+        if request.kind in {"type", "fill"}:
+            self.types.append((node.selector, request.text or "", False))
+            self.body_text = f"Typed into {node.selector}: {request.text or ''}"
+        self.stale_targets.add(tab.target_id)
+        return BrowserActResult(snapshot=self.snapshot(target_id=tab.target_id), action=request.kind, requires_resnapshot=request.kind in {"click", "type", "select", "fill"})
+
+    def screenshot(self, *, target_id: str | None = None, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
         name = filename or f"shot-{len(self.screenshots) + 1}.png"
         self.screenshots.append(name)
         return {"path": str(Path("fake-browser") / name), "bytes": 1, "full_page": bool(full_page)}
 
     def close(self) -> None:
         return None
+
+    def _active_tab(self) -> BrowserTab:
+        for tab in self.tabs.values():
+            if tab.active:
+                return tab
+        return next(iter(self.tabs.values()))
+
+    def _resolve_tab(self, target_id: str | None) -> BrowserTab:
+        if not target_id:
+            return self._active_tab()
+        for tab in self.tabs.values():
+            if target_id in {tab.label, tab.tab_id, tab.target_id}:
+                return tab
+        raise RuntimeError(f"Browser tab not found: {target_id}")

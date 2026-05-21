@@ -115,6 +115,30 @@ def test_capability_settings_are_loaded_from_project_config(tmp_path: Path) -> N
     assert settings.capabilities.browser.launch_flags == ["--headless=new"]
 
 
+def test_browser_policy_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True)
+    (project_dir / "config.json").write_text(
+        '{"capabilities":{"browser":{"enable":true,"default_profile":"default","allow_private_network":true,'
+        '"allowed_hostnames":["example.com"],"deny_hostnames":["*.internal"],"allow_user_profile":true,'
+        '"allow_remote_profile":true,"allow_high_risk_actions":true,"evaluate_enabled":true,'
+        '"snapshot_defaults":{"compact":true}}}}',
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.capabilities.browser.default_profile == "default"
+    assert settings.capabilities.browser.allow_private_network is True
+    assert settings.capabilities.browser.allowed_hostnames == ["example.com"]
+    assert settings.capabilities.browser.deny_hostnames == ["*.internal"]
+    assert settings.capabilities.browser.allow_user_profile is True
+    assert settings.capabilities.browser.allow_remote_profile is True
+    assert settings.capabilities.browser.allow_high_risk_actions is True
+    assert settings.capabilities.browser.evaluate_enabled is True
+    assert settings.capabilities.browser.snapshot_defaults == {"compact": True}
+
+
 def test_memory_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)

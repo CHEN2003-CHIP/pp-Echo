@@ -36,6 +36,7 @@ Evidence: Existence of MEMORY.md, PROJECT_LEARNING.md, and a 'memory' directory 
 ### Detailed Memory Index
 - `memory/architecture.md` - Architecture
 - `memory/bugs.md` - Bugs
+- `memory/daily/2026-05-21.md` - Daily Journal
 - `memory/lessons.md` - Lessons
 - `memory/workflows.md` - Workflows
 <!-- pp-echo-memory:end -->

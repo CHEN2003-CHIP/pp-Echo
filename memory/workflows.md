@@ -1,11 +1,7 @@
 # Workflows
 
 <!-- pp-echo-detail-memory:begin -->
-nt_isolation.py` following a phased approach: Phase 1 (P0) covers cross-session state isolation and resource cleanup; Phase 2 (P0) covers permission boundaries; Phase 3 (P1) covers concurrent scenarios. Use mock objects to isolate dependencies and establish CI gates for these tests.
-
-Evidence: The generated plan outlines specific test classes (TestCrossSessionIsolation, TestPermissionBoundaries) and a dependency graph prioritizing P0 security checks before integration testing.
-
-Source: session=e5e64576-5c84-48e9-96ec-d910f764b7a1 turn=turn-3
+9-96ec-d910f764b7a1 turn=turn-3
 
 ### Subagent orchestration workflow
 
@@ -166,4 +162,12 @@ A standardized procedure to verify browser tool availability using a data URL, i
 Evidence: The turn demonstrates a complete workflow: navigating a data URL, reading state, typing text, clicking a button to trigger an event, verifying the DOM change, and capturing a screenshot.
 
 Source: session=7a1a9663-d84a-4273-833e-3530e3162560 turn=turn-1
+
+### MCP Integration for Coding Agents
+
+There is a strong trend towards integrating Model Context Protocol (MCP) into coding agents. Projects like 'ChromeDevTools/chrome-devtools-mcp' and 'HKUDS/CLI-Anything' demonstrate the shift towards making all software agent-native through standardized context protocols.
+
+Evidence: Trending items explicitly mention 'MCP Registry', 'Chrome DevTools for coding agents', and 'Making ALL Software Agent-Native'.
+
+Source: session=99f5237f-850b-4b14-a5f2-fe2cf15b7de1 turn=turn-7
 <!-- pp-echo-detail-memory:end -->

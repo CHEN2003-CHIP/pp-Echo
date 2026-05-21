@@ -330,7 +330,7 @@ class ToolRegistry:
                 metadata = self_registry._registrations[name].metadata
                 if decision.action == "deny":
                     raise PermissionError(decision.reason)
-                if decision.action == ALLOW and metadata.tool_family == "browser":
+                if decision.action == ALLOW and metadata.tool_family in {"browser", "web"}:
                     return self.execute_host_approved(arguments)
                 if decision.action == ALLOW and metadata.exact_effect_mode == "required":
                     return self_registry._stage_or_fail_dynamic_call(

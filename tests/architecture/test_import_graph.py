@@ -12,13 +12,14 @@ ALLOWED = {
     'llm': {'llm', 'domain'},
     'domain': {'domain'},
     'tools': {'tools', 'domain', 'storage'},
-    'app': {'app', 'runtime', 'storage', 'llm', 'tools', 'domain', 'prompts', 'skills', 'extensions', 'capabilities', 'mcp'},
+    'app': {'app', 'runtime', 'storage', 'llm', 'tools', 'domain', 'prompts', 'skills', 'extensions', 'capabilities', 'mcp', 'web_tools'},
     'api': {'api', 'runtime', 'storage', 'domain'},
     'prompts': {'prompts'},
     'skills': {'skills'},
     'capabilities': {'capabilities', 'skills', 'tools', 'domain'},
     'mcp': {'mcp'},
     'extensions': {'extensions', 'domain', 'runtime'},
+    'web_tools': {'web_tools', 'tools'},
 }
 EXCLUDED = {
     PACKAGE_ROOT / 'cli' / '_legacy_main_impl.py',

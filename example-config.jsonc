@@ -58,19 +58,6 @@
 
       // 高风险计划是否需要 planner approval。
       "high_risk_plan": true
-    },
-
-    "browser": {
-      // Enable the local browser bridge.
-      "enable": false,
-      // Chrome/Edge executable path. Leave empty to auto-detect.
-      "browser_executable": "",
-      // Browser profile directory for the local bridge.
-      "user_data_dir": "",
-      // Screenshot output directory.
-      "screenshot_dir": "",
-      // Additional browser launch flags for the local bridge.
-      "launch_flags": []
     }
   },
 
@@ -151,6 +138,52 @@
       "server_filters": [
         "*"
       ]
+    },
+
+    "browser": {
+      // Enable the unified browser tool. The model-facing tool name is `browser`; use action fields such as
+      // status, profiles, tabs.open, snapshot, navigate, screenshot, and act.
+      "enable": false,
+
+      // Chrome/Edge executable path. Leave empty to auto-detect.
+      "browser_executable": "",
+
+      // Browser profile directory for the local CDP bridge.
+      "user_data_dir": "",
+
+      // Screenshot output directory.
+      "screenshot_dir": "",
+
+      // Additional browser launch flags for the local bridge.
+      "launch_flags": [],
+
+      // Default profile for browser actions. Supported now: isolated/default. Reserved: user/remote.
+      "default_profile": "isolated",
+
+      // SSRF protection: private/internal IPs and localhost are blocked unless this is true.
+      "allow_private_network": false,
+
+      // Optional hostname allow/deny lists. Supports fnmatch-style patterns such as "*.example.com".
+      "allowed_hostnames": [],
+      "deny_hostnames": [],
+
+      // User/remote profiles and existing sessions must be explicitly enabled.
+      "allow_user_profile": false,
+      "allow_remote_profile": false,
+
+      // High-risk clicks/submits and sensitive form fields are blocked unless explicitly enabled.
+      "allow_high_risk_actions": false,
+
+      // JS evaluate and wait-function style automation are disabled by default.
+      "evaluate_enabled": false,
+
+      // Default snapshot behavior. Snapshot content is always treated as untrusted_web_content.
+      "snapshot_defaults": {
+        "refs": true,
+        "interactive": true,
+        "compact": true,
+        "max_chars": 4000
+      }
     }
   },
 

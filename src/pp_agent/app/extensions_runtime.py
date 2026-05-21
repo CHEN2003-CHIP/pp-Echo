@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional
 
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.browser import BrowserRuntime
+from pp_agent.web_tools import WebRuntime
 from pp_agent.extensions import (
     ExtensionCommandRegistry,
     ExtensionDescriptor,
@@ -503,6 +504,7 @@ class ExecutableExtensions:
     cleanup_callbacks: list[Callable[[], object]] = field(default_factory=list)
     mcp_runtime: MCPRuntime | None = None
     browser_runtime: BrowserRuntime | None = None
+    web_runtime: WebRuntime | None = None
 
     def close(self) -> None:
         if self.mcp_runtime is not None:
@@ -556,6 +558,10 @@ def load_executable_extensions(
             tool_registry=tool_registry,
             controller_factory=browser_controller_factory,
         )
+    runtime.web_runtime = WebRuntime(
+        workspace=workspace.resolve(),
+        tool_registry=tool_registry,
+    )
     return runtime
 
 

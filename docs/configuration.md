@@ -85,7 +85,21 @@ Create `.pp-agent/config.json` for per-project overrides.
       "browser_executable": "",
       "user_data_dir": "",
       "screenshot_dir": "",
-      "launch_flags": []
+      "launch_flags": [],
+      "default_profile": "isolated",
+      "allow_private_network": false,
+      "allowed_hostnames": [],
+      "deny_hostnames": [],
+      "allow_user_profile": false,
+      "allow_remote_profile": false,
+      "allow_high_risk_actions": false,
+      "evaluate_enabled": false,
+      "snapshot_defaults": {
+        "refs": true,
+        "interactive": true,
+        "compact": true,
+        "max_chars": 4000
+      }
     }
   },
   "subagents": {
@@ -184,6 +198,20 @@ Create `.pp-agent/config.json` for per-project overrides.
   }
 }
 ```
+
+## Browser and web tools
+
+The model-facing browser API is a single `browser` tool. It is selected by an `action` field rather than separate tool names:
+
+- Lifecycle and discovery: `status`, `doctor`, `start`, `stop`, `profiles`, `tabs.list`
+- Tab control: `tabs.open`, `tabs.focus`, `tabs.close`
+- Page read/control: `snapshot`, `screenshot`, `navigate`, `act`
+
+Browser snapshots return a structured UI tree and stable refs such as `e1`, `e2`, and `e3`. Follow-up actions should use those refs through `browser` with `action=act`; raw CSS selectors are internal controller details and should not be used by the model. Snapshot content is marked as `untrusted_web_content`.
+
+Use `web.search` and `web.fetch` for static web research. `web.fetch` performs HTTP GET plus readable extraction and does not execute JavaScript or use browser login state. Use `browser` only for JS-heavy, logged-in, or interactive tasks.
+
+Browser policy defaults are conservative: private/internal IP navigation is blocked, `user` and `remote` profiles require explicit enablement, high-risk submits/clicks and sensitive fields are gated, and JavaScript `evaluate` is disabled unless configured.
 
 ## Notes on compatibility
 
