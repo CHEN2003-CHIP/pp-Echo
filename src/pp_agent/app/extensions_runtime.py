@@ -561,7 +561,9 @@ def load_executable_extensions(
     runtime.web_runtime = WebRuntime(
         workspace=workspace.resolve(),
         tool_registry=tool_registry,
+        settings=settings,
     )
+    runtime_hooks.add_transform_context_hook("web_runtime", "web", runtime.web_runtime.transform_context)
     return runtime
 
 

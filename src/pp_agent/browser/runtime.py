@@ -84,6 +84,12 @@ class BrowserRuntime:
             user_data_dir=config.user_data_dir,
             screenshot_dir=config.screenshot_dir,
             launch_flags=list(config.launch_flags),
+            connect_timeout_seconds=config.connect_timeout_seconds,
+            navigation_timeout_ms=config.navigation_timeout_ms,
+            cdp_http_timeout_seconds=config.cdp_http_timeout_seconds,
+            cdp_response_timeout_seconds=config.cdp_response_timeout_seconds,
+            action_timeout_ms=config.action_timeout_ms,
+            shutdown_timeout_seconds=config.shutdown_timeout_seconds,
         )
 
     def _execute_browser(self, workspace: Path, arguments: dict[str, Any]) -> ToolExecutionResult:
@@ -93,9 +99,9 @@ class BrowserRuntime:
             result = self._dispatch(args)
             return self._tool_result(result["content"], result["details"], is_error=bool(result.get("is_error", False)))
         except ValidationError as exc:
-            return self._tool_result("browser error: invalid arguments", {"error": str(exc)}, is_error=True)
+            return self._tool_result("browser error: invalid arguments", self._error_details(arguments, exc), is_error=True)
         except Exception as exc:
-            return self._tool_result(f"browser error: {exc}", {"error": str(exc)}, is_error=True)
+            return self._tool_result(f"browser error: {exc}", self._error_details(arguments, exc), is_error=True)
 
     def _dispatch(self, args: BrowserToolArgs) -> dict[str, Any]:
         controller = self._controller()
@@ -130,7 +136,11 @@ class BrowserRuntime:
             decision = BrowserPolicy(self.settings.capabilities.browser).check_url(args.url or "")
             if not decision.allowed:
                 return self._blocked(decision.reason)
-            snapshot = controller.navigate(args.url or "about:blank", target_id=args.target_id, wait_ms=int(args.wait_ms or 5000))
+            snapshot = controller.navigate(
+                args.url or "about:blank",
+                target_id=args.target_id,
+                wait_ms=int(args.wait_ms or self.settings.capabilities.browser.navigation_timeout_ms),
+            )
             return self._snapshot_payload("browser navigate", snapshot)
         if action == "snapshot":
             if args.snapshot_options.selector or args.snapshot_options.frame:
@@ -214,6 +224,36 @@ class BrowserRuntime:
 
     def _tool_result(self, content: str, details: dict[str, Any], *, is_error: bool = False) -> ToolExecutionResult:
         return ToolExecutionResult(tool_call_id="", tool_name="", content=content, details=details, is_error=is_error)
+
+    def _error_details(self, arguments: dict[str, Any], exc: Exception) -> dict[str, Any]:
+        action = str(arguments.get("action") or "")
+        diagnostics: dict[str, Any] = {
+            "runtime": self.status(),
+            "controller": {},
+        }
+        if self._browser_controller is not None:
+            try:
+                diagnostics["controller"] = self._browser_controller.doctor()
+            except Exception as doctor_exc:  # noqa: BLE001
+                diagnostics["controller"] = {"doctor_error": str(doctor_exc), "status": self._browser_controller.status()}
+        return {
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "action": action,
+            "arguments_preview": self._arguments_preview(arguments),
+            "diagnostics": diagnostics,
+            "untrusted_web_content": False,
+        }
+
+    @staticmethod
+    def _arguments_preview(arguments: dict[str, Any]) -> dict[str, Any]:
+        preview: dict[str, Any] = {}
+        for key, value in arguments.items():
+            if isinstance(value, str) and len(value) > 200:
+                preview[key] = value[:197] + "..."
+            else:
+                preview[key] = value
+        return preview
 
     @staticmethod
     def _require_url(url: str | None) -> None:

@@ -171,6 +171,23 @@ class BrowserCapabilityConfig(BaseModel):
     allow_high_risk_actions: bool = False
     evaluate_enabled: bool = False
     snapshot_defaults: dict[str, object] = Field(default_factory=dict)
+    connect_timeout_seconds: int = 20
+    navigation_timeout_ms: int = 5000
+    cdp_http_timeout_seconds: int = 3
+    cdp_response_timeout_seconds: int = 20
+    action_timeout_ms: int = 1500
+    shutdown_timeout_seconds: int = 5
+
+
+class WebCapabilityConfig(BaseModel):
+    """
+    Static web search/fetch configuration.
+    """
+    search_providers: list[str] = Field(default_factory=lambda: ["baidu", "zhipu", "bing", "duckduckgo"])
+    search_timeout_seconds: int = 10
+    fetch_timeout_seconds: int = 10
+    zhipu_api_key_env: str = "ZHIPUAI_API_KEY"
+    zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4/tools"
 
 
 class CapabilitySettings(BaseModel):
@@ -184,6 +201,7 @@ class CapabilitySettings(BaseModel):
     mcp: MCPCapabilityConfig = Field(default_factory=MCPCapabilityConfig)
     extensions: ExtensionCapabilityConfig = Field(default_factory=ExtensionCapabilityConfig)
     browser: BrowserCapabilityConfig = Field(default_factory=BrowserCapabilityConfig)
+    web: WebCapabilityConfig = Field(default_factory=WebCapabilityConfig)
 
 
 class StorageSettings(BaseModel):
@@ -468,6 +486,30 @@ class Settings(BaseModel):
             self.capabilities.browser.evaluate_enabled = bool(browser_config["evaluate_enabled"])
         if "snapshot_defaults" in browser_config:
             self.capabilities.browser.snapshot_defaults = dict(browser_config["snapshot_defaults"])
+        if "connect_timeout_seconds" in browser_config:
+            self.capabilities.browser.connect_timeout_seconds = max(1, int(browser_config["connect_timeout_seconds"]))
+        if "navigation_timeout_ms" in browser_config:
+            self.capabilities.browser.navigation_timeout_ms = max(0, int(browser_config["navigation_timeout_ms"]))
+        if "cdp_http_timeout_seconds" in browser_config:
+            self.capabilities.browser.cdp_http_timeout_seconds = max(1, int(browser_config["cdp_http_timeout_seconds"]))
+        if "cdp_response_timeout_seconds" in browser_config:
+            self.capabilities.browser.cdp_response_timeout_seconds = max(1, int(browser_config["cdp_response_timeout_seconds"]))
+        if "action_timeout_ms" in browser_config:
+            self.capabilities.browser.action_timeout_ms = max(0, int(browser_config["action_timeout_ms"]))
+        if "shutdown_timeout_seconds" in browser_config:
+            self.capabilities.browser.shutdown_timeout_seconds = max(1, int(browser_config["shutdown_timeout_seconds"]))
+
+        web_config = capability_config.get("web", {})
+        if "search_providers" in web_config:
+            self.capabilities.web.search_providers = [str(value).lower() for value in web_config["search_providers"]]
+        if "search_timeout_seconds" in web_config:
+            self.capabilities.web.search_timeout_seconds = max(1, int(web_config["search_timeout_seconds"]))
+        if "fetch_timeout_seconds" in web_config:
+            self.capabilities.web.fetch_timeout_seconds = max(1, int(web_config["fetch_timeout_seconds"]))
+        if "zhipu_api_key_env" in web_config:
+            self.capabilities.web.zhipu_api_key_env = str(web_config["zhipu_api_key_env"])
+        if "zhipu_base_url" in web_config:
+            self.capabilities.web.zhipu_base_url = str(web_config["zhipu_base_url"])
 
     def _apply_memory_config(self, memory_config: dict) -> None:
         if "enable" in memory_config:

@@ -94,12 +94,25 @@ Create `.pp-agent/config.json` for per-project overrides.
       "allow_remote_profile": false,
       "allow_high_risk_actions": false,
       "evaluate_enabled": false,
+      "connect_timeout_seconds": 20,
+      "navigation_timeout_ms": 5000,
+      "cdp_http_timeout_seconds": 3,
+      "cdp_response_timeout_seconds": 20,
+      "action_timeout_ms": 1500,
+      "shutdown_timeout_seconds": 5,
       "snapshot_defaults": {
         "refs": true,
         "interactive": true,
         "compact": true,
         "max_chars": 4000
       }
+    },
+    "web": {
+      "search_providers": ["baidu", "zhipu", "bing", "duckduckgo"],
+      "search_timeout_seconds": 10,
+      "fetch_timeout_seconds": 10,
+      "zhipu_api_key_env": "ZHIPUAI_API_KEY",
+      "zhipu_base_url": "https://open.bigmodel.cn/api/paas/v4/tools"
     }
   },
   "subagents": {
@@ -210,6 +223,8 @@ The model-facing browser API is a single `browser` tool. It is selected by an `a
 Browser snapshots return a structured UI tree and stable refs such as `e1`, `e2`, and `e3`. Follow-up actions should use those refs through `browser` with `action=act`; raw CSS selectors are internal controller details and should not be used by the model. Snapshot content is marked as `untrusted_web_content`.
 
 Use `web.search` and `web.fetch` for static web research. `web.fetch` performs HTTP GET plus readable extraction and does not execute JavaScript or use browser login state. Use `browser` only for JS-heavy, logged-in, or interactive tasks.
+
+`web.search` defaults to `provider=auto`, which tries providers in `capabilities.web.search_providers` order. The default order prefers China-friendly providers (`baidu`, `zhipu`, `bing`) before falling back to `duckduckgo`. Zhipu search requires the configured API key environment variable; if it is missing or a provider times out, auto mode records the failed attempt and continues to the next provider.
 
 Browser policy defaults are conservative: private/internal IP navigation is blocked, `user` and `remote` profiles require explicit enablement, high-risk submits/clicks and sensitive fields are gated, and JavaScript `evaluate` is disabled unless configured.
 

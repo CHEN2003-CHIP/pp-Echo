@@ -1,39 +1,65 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Activity,
-  AlertTriangle,
   Bot,
+  BookOpen,
   Boxes,
   Check,
   ChevronRight,
   Clock3,
   Code2,
+  Database,
+  FileText,
   FolderOpen,
-  GitBranch,
   LayoutDashboard,
   MessageSquare,
-  Play,
+  Monitor,
   Plus,
   RefreshCw,
+  Search,
   Settings,
   ShieldCheck,
   Sparkles,
   Square,
+  Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeDoctorReport, RuntimeEvent, SessionEntry, SessionSnapshot, WorkspaceEntry, WorkspacesState } from "./api";
-import { extractMessageBody, RichMessageBody, RichMessageContent } from "./rich-text";
+import { api, ApprovalActionResponse, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspacesState } from "./api";
+import { extractMessageBody, RichMessageContent } from "./rich-text";
 
-type Tab =
-  | { id: string; type: "chat"; title: string; sessionId: string }
-  | { id: string; type: "projects" | "agents" | "mcp" | "usage" | "settings" | "timeline"; title: string };
+type ViewKey =
+  | "chat"
+  | "history"
+  | "search"
+  | "group"
+  | "workspace"
+  | "tasks"
+  | "board"
+  | "channels"
+  | "plugins"
+  | "memory"
+  | "model"
+  | "logs"
+  | "usage"
+  | "skills"
+  | "users";
+
+type InspectorTab = "status" | "tools" | "approvals";
+type ThemeMode = "dark" | "light";
+type NoticeTone = "info" | "success" | "warning";
 
 type TranscriptItem = {
   id: string;
   role: string;
-  body: RichMessageBody;
-  muted?: boolean;
+  body: ReturnType<typeof extractMessageBody>;
   streaming?: boolean;
+  timestamp?: number;
+};
+
+type Notice = {
+  id: string;
+  tone: NoticeTone;
+  message: string;
 };
 
 type ActiveApproval = {
@@ -46,100 +72,192 @@ type ActiveApproval = {
   meta?: string;
 };
 
-const navItems = [
-  { type: "projects" as const, label: "Projects", icon: FolderOpen },
-  { type: "agents" as const, label: "Agents / Subagents", icon: Bot },
-  { type: "mcp" as const, label: "MCP Manager", icon: Boxes },
-  { type: "usage" as const, label: "Usage", icon: LayoutDashboard },
-  { type: "timeline" as const, label: "Timeline", icon: GitBranch },
-  { type: "settings" as const, label: "Settings", icon: Settings }
-];
+type DirectoryPickerHandle = {
+  name: string;
+  path?: string;
+  fullPath?: string;
+  nativePath?: string;
+  __path?: string;
+};
+
+type DirectoryPickerWindow = Window & {
+  showDirectoryPicker?: () => Promise<DirectoryPickerHandle>;
+};
 
 const MAX_SESSION_EVENTS = 2000;
 const ACTIONABLE_APPROVAL_STATES = new Set(["", "staged_not_granted", "grant_attached"]);
+const STORAGE_THEME_KEY = "pp-echo-web-theme";
+const STORAGE_ACTIVE_VIEW_KEY = "pp-echo-web-view";
+const STORAGE_ACTIVE_SESSION_KEY = "pp-echo-web-session";
+
+const navItems: Array<{
+  view: ViewKey;
+  label: string;
+  icon: typeof MessageSquare;
+  description: string;
+}> = [
+  { view: "chat", label: "会话", icon: MessageSquare, description: "聊天与当前会话" },
+  { view: "history", label: "历史", icon: Clock3, description: "会话历史与回看" },
+  { view: "group", label: "群聊", icon: Users, description: "多会话协作" },
+  { view: "search", label: "搜索", icon: Search, description: "会话检索" },
+  { view: "workspace", label: "工作区", icon: FolderOpen, description: "工作区切换" },
+  { view: "tasks", label: "任务", icon: LayoutDashboard, description: "审批与待办" },
+  { view: "board", label: "看板", icon: Boxes, description: "运行概览" },
+  { view: "channels", label: "频道", icon: Bot, description: "MCP 与通道" },
+  { view: "plugins", label: "插件", icon: Sparkles, description: "能力扩展" },
+  { view: "memory", label: "记忆", icon: BookOpen, description: "记忆视图" },
+  { view: "model", label: "模型", icon: Monitor, description: "模型与环境" },
+  { view: "logs", label: "日志", icon: FileText, description: "时间线与日志" },
+  { view: "usage", label: "用量", icon: Database, description: "运行统计" },
+  { view: "skills", label: "技能", icon: ShieldCheck, description: "技能与规则" },
+  { view: "users", label: "设置", icon: Settings, description: "系统设置" }
+];
+
+const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
+  { title: "对话", views: ["chat", "history", "group", "search"] },
+  { title: "执行", views: ["workspace", "tasks", "board", "channels"] },
+  { title: "扩展", views: ["plugins", "memory", "model"] },
+  { title: "监控", views: ["logs", "usage", "skills", "users"] }
+];
+
+const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activity }> = [
+  { id: "status", label: "状态", icon: Activity },
+  { id: "tools", label: "工具", icon: Code2 },
+  { id: "approvals", label: "审批", icon: ShieldCheck }
+];
 
 export function App() {
-  const [workspace, setWorkspace] = useState({ name: "pp-Echo", path: "" });
-  const [workspaces, setWorkspaces] = useState<WorkspacesState>({ active: { name: "pp-Echo", path: "", exists: true, is_dir: true }, recent: [] });
+  const [theme, setTheme] = useState<ThemeMode>(() => readTheme());
+  const [workspace, setWorkspace] = useState<WorkspacesState>({ active: { name: "pp-Echo", path: "", exists: true, is_dir: true }, recent: [] });
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeTabId, setActiveTabId] = useState("");
+  const [activeView, setActiveView] = useState<ViewKey>(() => readStoredView());
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => window.localStorage.getItem(STORAGE_ACTIVE_SESSION_KEY) || "");
   const [snapshots, setSnapshots] = useState<Record<string, SessionSnapshot>>({});
   const [events, setEvents] = useState<Record<string, RuntimeEvent[]>>({});
   const [prompt, setPrompt] = useState("");
   const [status, setStatus] = useState("Ready");
-  const [sideData, setSideData] = useState<Record<string, unknown>>({});
   const [approvalSummary, setApprovalSummary] = useState<ApprovalsSummary>({ count: 0, items: [] });
   const [approvalAction, setApprovalAction] = useState<{ token: string; action: "approve" | "reject" } | null>(null);
   const [approvalFeedback, setApprovalFeedback] = useState("");
   const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [pendingWorkspace, setPendingWorkspace] = useState<OpenWorkspaceResponse | null>(null);
   const [promptSubmitting, setPromptSubmitting] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("status");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+
   const pollers = useRef<Record<string, number>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
+  const noticeTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    refreshAll();
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem(STORAGE_THEME_KEY, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    refreshAll().catch(() => undefined);
     return () => {
-      Object.values(pollers.current).forEach((poller) => window.clearInterval(poller));
+      stopPolling();
+      if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     };
   }, []);
 
-  const activeTab = tabs.find((tab) => tab.id === activeTabId);
-  const activeSessionId = activeTab?.type === "chat" ? activeTab.sessionId : "";
+  useEffect(() => {
+    if (!activeView) return;
+    window.localStorage.setItem(STORAGE_ACTIVE_VIEW_KEY, activeView);
+  }, [activeView]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    window.localStorage.setItem(STORAGE_ACTIVE_SESSION_KEY, activeSessionId);
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (activeView !== "logs") return;
+    refreshTimeline().catch(() => undefined);
+  }, [activeView, activeSessionId]);
+
+  useEffect(() => {
+    const target = transcriptRef.current;
+    if (target) target.scrollTop = target.scrollHeight;
+  }, [activeSessionId, sessions.length, notice?.id]);
+
   const activeSnapshot = activeSessionId ? snapshots[activeSessionId] : undefined;
   const activeEvents = activeSessionId ? events[activeSessionId] || [] : [];
   const transcript = useMemo(() => buildTranscript(activeSnapshot, activeEvents), [activeSnapshot, activeEvents]);
   const activityItems = useMemo(() => buildActivityItems(activeEvents), [activeEvents]);
-  const activeApproval = useMemo(
-    () => buildActiveApproval(activeSnapshot, activeEvents, approvalSummary),
-    [activeSnapshot, activeEvents, approvalSummary]
-  );
+  const activeApproval = useMemo(() => buildActiveApproval(activeSnapshot, activeEvents, approvalSummary), [activeSnapshot, activeEvents, approvalSummary]);
   const busy = runtimeIsBusy(activeSnapshot, activeEvents);
   const displayStatus = runtimeDisplayStatus(status, activeSnapshot, activeEvents);
-
-  useEffect(() => {
-    const target = transcriptRef.current;
-    if (target) {
-      target.scrollTop = target.scrollHeight;
-    }
-  }, [transcript.length, transcript[transcript.length - 1]?.body.text, transcript[transcript.length - 1]?.body.attachments.length]);
+  const filteredSessions = useMemo(() => filterSessions(sessions, searchQuery), [sessions, searchQuery]);
+  const sessionStats = useMemo(() => computeSessionStats(sessions), [sessions]);
+  const viewLabel = navItems.find((item) => item.view === activeView)?.label || "会话";
+  const viewMeta = navItems.find((item) => item.view === activeView);
+  const middleMode = activeView === "history" ? "sessions" : activeView === "board" ? "observer" : null;
 
   async function refreshAll() {
     const [workspaceState, sessionList, approvals] = await Promise.all([api.workspaces(), api.sessions(), api.approvals()]);
-    setWorkspaces(workspaceState);
-    setWorkspace(workspaceState.active);
+    setWorkspace(workspaceState);
     setSessions(sortSessionsByUpdatedAt(sessionList.sessions));
     setApprovalSummary(approvals);
     setStatus("Connected");
-    if (sessionList.sessions[0] && tabs.length === 0) {
-      openSession(sessionList.sessions[0].id);
+
+    const restoredSessionId = window.localStorage.getItem(STORAGE_ACTIVE_SESSION_KEY) || "";
+    const nextSessionId = sessionList.sessions.some((session) => session.id === restoredSessionId)
+      ? restoredSessionId
+      : sessionList.sessions[0]?.id || "";
+
+    if (activeView === "chat") {
+      if (nextSessionId) {
+        await openSession(nextSessionId);
+      }
+      return;
+    }
+
+    if (nextSessionId && !activeSessionId) {
+      await hydrateSession(nextSessionId);
+    } else if (activeSessionId && !sessionList.sessions.some((session) => session.id === activeSessionId)) {
+      setActiveSessionId(nextSessionId);
     }
   }
 
+  async function refreshTimeline() {
+    const payload = await api.timeline(activeSessionId || undefined, 120);
+    setTimeline(payload.timeline);
+  }
+
   async function openSession(sessionId: string) {
+    setActiveView("chat");
+    await hydrateSession(sessionId);
+    setNotice(null);
+  }
+
+  async function hydrateSession(sessionId: string) {
     let snapshot: SessionSnapshot;
     try {
       snapshot = await api.snapshot(sessionId);
     } catch (error) {
-      stopPollingExcept("");
+      stopPollingExcept(sessionId);
       setStatus(`Failed to open session ${shortId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
+
+    setActiveSessionId(snapshot.session_id);
     setSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
     stopPollingExcept(snapshot.session_id);
     if (snapshot.history?.source !== "stored") {
       ensureEventPolling(snapshot.session_id);
     }
-    const tab: Tab = { id: `chat:${snapshot.session_id}`, type: "chat", title: shortId(snapshot.session_id), sessionId: snapshot.session_id };
-    setTabs((current) => (current.some((item) => item.id === tab.id) ? current : [...current, tab]));
-    setActiveTabId(tab.id);
   }
 
   async function createSession() {
     const created = await api.createSession();
     await refreshAll();
-    openSession(created.session_id);
+    await openSession(created.session_id);
   }
 
   function ensureEventPolling(sessionId: string) {
@@ -150,9 +268,7 @@ export function App() {
         const payload = await api.events(sessionId);
         payload.events.forEach((event) => appendEvent(sessionId, event));
         const refreshed = await refreshSessionState(sessionId);
-        if (!refreshed) {
-          stopSessionPolling(sessionId);
-        }
+        if (!refreshed) stopSessionPolling(sessionId);
       } catch (error) {
         stopSessionPolling(sessionId);
         setStatus(`Stopped polling ${shortId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`);
@@ -166,11 +282,8 @@ export function App() {
     setEvents((current) => {
       const existing = current[sessionId] || [];
       const key = runtimeEventKey(event);
-      if (key && existing.some((item) => runtimeEventKey(item) === key)) {
-        return current;
-      }
-      const next = [...existing, event].slice(-MAX_SESSION_EVENTS);
-      return { ...current, [sessionId]: next };
+      if (key && existing.some((item) => runtimeEventKey(item) === key)) return current;
+      return { ...current, [sessionId]: [...existing, event].slice(-MAX_SESSION_EVENTS) };
     });
     setStatus(event.message || event.type);
   }
@@ -192,25 +305,52 @@ export function App() {
     return api.approvals().then(setApprovalSummary).catch(() => undefined);
   }
 
-  function openPanel(type: Exclude<Tab["type"], "chat">) {
-    const title = navItems.find((item) => item.type === type)?.label || type;
-    const tab: Tab = { id: `panel:${type}`, type, title };
-    setTabs((current) => (current.some((item) => item.id === tab.id) ? current : [...current, tab]));
-    setActiveTabId(tab.id);
-    loadPanel(type);
-  }
+  function openView(view: ViewKey) {
+    if (view === "workspace") {
+      setWorkspaceDialogOpen(true);
+      setWorkspaceDraft(workspace.active.path || "");
+      return;
+    }
+    if (view === "history") {
+      if (activeView === "history") {
+        setActiveView("chat");
+        setInspectorOpen(false);
+        return;
+      }
+      setActiveView("history");
+      setInspectorOpen(false);
+      if (!activeSessionId) {
+        const firstSession = sessions[0]?.id;
+        if (firstSession) hydrateSession(firstSession).catch(() => undefined);
+      }
+      return;
+    }
+    if (view === "board") {
+      if (activeView === "board") {
+        setActiveView("chat");
+        setInspectorOpen(false);
+        return;
+      }
+      setActiveView("board");
+      setInspectorOpen(true);
+      return;
+    }
+    setActiveView(view);
+    if (view === "chat") {
+      if (activeSessionId) return;
+      const firstSession = sessions[0]?.id;
+      if (firstSession) {
+        openSession(firstSession).catch(() => undefined);
+        return;
+      }
+      showNotice("还没有会话，先新建一个吧", "info");
+      return;
+    }
 
-  async function loadPanel(type: string) {
-    const loader =
-      type === "projects" ? api.workspaces :
-      type === "agents" ? api.capabilities :
-      type === "mcp" ? api.mcp :
-      type === "settings" ? api.settings :
-      type === "usage" ? () => api.runtimeReport(activeSessionId || undefined) :
-      type === "timeline" && activeSessionId ? () => api.tree(activeSessionId) :
-      async () => ({});
-    const data = await loader().catch((error) => ({ error: String(error) }));
-    setSideData((current) => ({ ...current, [type]: data }));
+    const item: any = navItems.find((entry) => entry.view === view);
+    if (item) {
+      showNotice(`${item.label} 功能开发中，敬请期待`, "info");
+    }
   }
 
   function stopPolling() {
@@ -233,46 +373,44 @@ export function App() {
     });
   }
 
-  function resetWorkspaceUi() {
+  async function reloadWorkspaceAfterSwitch(workspaceState: WorkspacesState) {
     stopPolling();
-    setTabs([]);
-    setActiveTabId("");
+    setWorkspace(workspaceState);
+    setActiveView("chat");
+    setActiveSessionId("");
     setSnapshots({});
     setEvents({});
+    setTimeline([]);
     setPrompt("");
-    setSideData({});
     setApprovalSummary({ count: 0, items: [] });
-  }
-
-  async function reloadWorkspaceAfterSwitch(workspaceState: WorkspacesState) {
-    resetWorkspaceUi();
-    setWorkspaces(workspaceState);
-    setWorkspace(workspaceState.active);
-    setStatus(`Workspace: ${workspaceState.active.name}`);
     const [sessionList, approvals] = await Promise.all([api.sessions(), api.approvals()]);
     const sorted = sortSessionsByUpdatedAt(sessionList.sessions);
     setSessions(sorted);
     setApprovalSummary(approvals);
     if (sorted[0]) {
-      openSession(sorted[0].id);
+      await hydrateSession(sorted[0].id);
     }
   }
 
   async function openWorkspace(path: string, confirmed = false) {
     const target = path.trim();
-    if (!target) return;
+    if (!target) {
+      showNotice("请输入工作区路径", "warning");
+      return;
+    }
     try {
       const response = await api.openWorkspace(target, confirmed);
       if (response.requires_confirmation) {
         setPendingWorkspace(response);
-        setStatus("Workspace confirmation required");
         return;
       }
       setPendingWorkspace(null);
       setWorkspaceDraft("");
+      setWorkspaceDialogOpen(false);
       await reloadWorkspaceAfterSwitch(response);
+      showNotice("工作区已切换", "success");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      showNotice(workspaceErrorMessage(error, target), "warning");
     }
   }
 
@@ -281,14 +419,14 @@ export function App() {
     const text = prompt;
     setPromptSubmitting(true);
     setPrompt("");
-    appendEvent(activeSessionId, { type: "local_user_prompt", session_id: activeSessionId, message: text });
+    appendEvent(activeSessionId, { type: "local_user_prompt", session_id: activeSessionId, message: text, timestamp: Date.now() / 1000 });
     try {
       await api.prompt(activeSessionId, text);
       ensureEventPolling(activeSessionId);
       await refreshSessionState(activeSessionId);
     } catch (error) {
       setPrompt(text);
-      setStatus(error instanceof Error ? error.message : String(error));
+      showNotice(error instanceof Error ? error.message : String(error), "warning");
     } finally {
       setPromptSubmitting(false);
     }
@@ -300,11 +438,13 @@ export function App() {
       type: "cancel_requested",
       session_id: activeSessionId,
       message: "Cancel requested for the running turn.",
+      timestamp: Date.now() / 1000,
       details: { cancel_requested: true }
     });
     await api.cancel(activeSessionId);
     ensureEventPolling(activeSessionId);
     refreshSessionState(activeSessionId);
+    showNotice("已请求停止当前会话", "info");
   }
 
   async function approve() {
@@ -316,22 +456,23 @@ export function App() {
       if (approval.kind === "planner" && activeSessionId) {
         await api.approve(activeSessionId);
         clearPlannerToken(activeSessionId);
-        setStatus("Plan approved");
         setApprovalFeedback("Plan approved. Waiting for the concrete action.");
         ensureEventPolling(activeSessionId);
       } else {
         const result = await api.approvePending(approval.token);
         removeApproval(approval.token);
         const message = approvalSuccessMessage(approval.actionType || "", result);
-        setStatus(message);
         setApprovalFeedback(message);
+        setStatus(message);
       }
       await refreshApprovals();
       if (activeSessionId) await refreshSessionState(activeSessionId);
+      showNotice("审批已通过", "success");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus(message);
       setApprovalFeedback(message);
+      setStatus(message);
+      showNotice(message, "warning");
     } finally {
       setApprovalAction(null);
     }
@@ -351,14 +492,16 @@ export function App() {
         await api.rejectPending(approval.token);
         removeApproval(approval.token);
       }
-      setStatus("Approval rejected");
       setApprovalFeedback("Approval rejected.");
+      setStatus("Approval rejected");
       await refreshApprovals();
       if (activeSessionId) await refreshSessionState(activeSessionId);
+      showNotice("审批已拒绝", "info");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus(message);
       setApprovalFeedback(message);
+      setStatus(message);
+      showNotice(message, "warning");
     } finally {
       setApprovalAction(null);
     }
@@ -375,316 +518,728 @@ export function App() {
     setApprovalSummary((current) => ({
       ...current,
       count: Math.max(0, current.count - 1),
-      tokens: current.tokens?.filter((item) => item !== token),
       items: current.items.filter((item) => item.token !== token)
     }));
   }
 
-  function closeTab(tabId: string) {
-    setTabs((current) => current.filter((tab) => tab.id !== tabId));
-    if (activeTabId === tabId) {
-      const remaining = tabs.filter((tab) => tab.id !== tabId);
-      setActiveTabId(remaining[remaining.length - 1]?.id || "");
-    }
+  function showNotice(message: string, tone: NoticeTone = "info") {
+    setNotice({ id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, message, tone });
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 2200);
+  }
+
+  function handleComingSoon(label: string) {
+    showNotice(`${label} 功能开发中，敬请期待`, "info");
   }
 
   return (
-    <div className="shell">
-      <header className="titlebar">
-        <div className="brand">
-          <div className="brand-mark"><Sparkles size={17} /></div>
-          <div>
-            <strong>pp-Echo</strong>
-            <span>{workspace.path}</span>
-          </div>
+    <div className={`app-shell theme-${theme} ${middleMode ? `mode-${middleMode}` : "mode-chat"}`}>
+      <aside className="app-nav">
+        <div className="app-brand">
+          <button className="brand-button" onClick={() => openView("chat")} title="pp-Echo">
+            <div className="brand-mark">
+              <Sparkles size={17} />
+            </div>
+            <div className="brand-copy">
+              <strong>pp-Echo</strong>
+              <span>{workspace.active.path || "本地工作区"}</span>
+            </div>
+          </button>
+          <button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="切换主题">
+            <Monitor size={16} />
+          </button>
         </div>
-        <div className="title-actions">
-          <button title="Refresh" onClick={refreshAll}><RefreshCw size={16} /></button>
-          <button title="New session" onClick={createSession}><Plus size={16} /></button>
-          <button title="Stop" disabled={!activeSessionId || !busy} onClick={cancelActiveSession}><Square size={15} /></button>
-        </div>
-      </header>
 
-      <aside className="sidebar">
-        <button className="workspace-card" onClick={() => openPanel("projects")}>
-          <div className="workspace-icon"><Code2 size={20} /></div>
-          <div>
-            <h1>{workspace.name}</h1>
-            <p>Local workspace</p>
-          </div>
-          <ChevronRight size={14} />
-        </button>
-
-        <nav className="nav-list">
-          {navItems.map((item) => (
-            <button key={item.type} onClick={() => openPanel(item.type)}>
-              <item.icon size={16} />
-              <span>{item.label}</span>
-              <ChevronRight size={14} />
-            </button>
+        <nav className="nav-groups">
+          {shellNavGroups.map((group) => (
+            <section className="nav-group" key={group.title}>
+              <div className="nav-group-label">{group.title}</div>
+              <div className="nav-group-items">
+                {group.views.map((view) => {
+                  const item = navItems.find((entry) => entry.view === view)!;
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.view}
+                      className={activeView === item.view ? "nav-entry active" : "nav-entry"}
+                      title={item.description}
+                      onClick={() => openView(item.view)}
+                    >
+                      <Icon size={16} />
+                      <span>{item.label}</span>
+                      <ChevronRight size={13} />
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           ))}
         </nav>
 
-        <section className="session-list">
-          <div className="section-title">
-            <span>Sessions</span>
-            <button onClick={createSession} title="New session"><Plus size={14} /></button>
+        <div className="app-nav-footer">
+          <button className="footer-line" onClick={refreshAll}>
+            <RefreshCw size={15} />
+            <span>刷新</span>
+          </button>
+          <button className="footer-line" onClick={createSession}>
+            <Plus size={15} />
+            <span>新会话</span>
+          </button>
+          <div className="footer-meta">
+            <span>{sessionStats.total} 会话</span>
+            <span>{sessionStats.active} 活跃</span>
           </div>
-          {sessions.map((session) => (
-            <button className="session-row" key={session.id} onClick={() => openSession(session.id)}>
+        </div>
+      </aside>
+
+      <section className="session-rail">
+        <div className="session-rail-head">
+          <div>
+            <small>SESSIONS</small>
+            <h2>会话列表</h2>
+          </div>
+          <button className="icon-button" onClick={() => openView("search")} title="搜索">
+            <Search size={16} />
+          </button>
+        </div>
+
+        <div className="session-rail-toolbar">
+          <button className="session-toolbar-btn" onClick={createSession}>
+            <Plus size={14} />
+            <span>新建</span>
+          </button>
+          <button className="session-toolbar-btn" onClick={refreshAll}>
+            <RefreshCw size={14} />
+            <span>刷新</span>
+          </button>
+        </div>
+
+        <label className="session-search">
+          <Search size={15} />
+          <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索会话" />
+        </label>
+
+        <div className="session-meta">
+          <span>{sessionStats.total} 会话</span>
+          <span>{sessionStats.active} 活跃</span>
+        </div>
+
+        <div className="session-stack">
+          {filteredSessions.slice(0, 14).map((session) => (
+            <button className={activeSessionId === session.id ? "session-row active" : "session-row"} key={session.id} onClick={() => hydrateSession(session.id)}>
               <MessageSquare size={15} />
               <div>
                 <strong>{session.last_user_preview || session.summary_preview || shortId(session.id)}</strong>
                 <span>{session.turn_count} turns · {session.model}</span>
               </div>
-            </button>
-          ))}
-        </section>
-      </aside>
-
-      <main className="main">
-        <div className="tabs">
-          {tabs.map((tab) => (
-            <button className={tab.id === activeTabId ? "tab active" : "tab"} key={tab.id} onClick={() => setActiveTabId(tab.id)}>
-              <span>{tab.title}</span>
-              <X size={13} onClick={(event) => { event.stopPropagation(); closeTab(tab.id); }} />
+              {session.pending_plan_token ? <em>审批中</em> : null}
             </button>
           ))}
         </div>
+      </section>
 
-        <div className="content">
-          {activeTab?.type === "chat" ? (
-            <>
-              <section className="transcript" ref={transcriptRef}>
-                {transcript.length === 0 && (
-                  <div className="empty">
-                    <Sparkles size={26} />
-                    <h2>Start a pp-Echo session</h2>
-                    <p>Ask for repo inspection, implementation planning, or a safe change.</p>
-                  </div>
-                )}
-                {transcript.map((item) => (
-                  <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id}>
-                    <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : <MessageSquare size={15} />}</div>
-                    <div className="bubble">
-                      <span>{item.role}</span>
-                      <RichMessageContent
-                        text={item.body.text}
-                        attachments={item.body.attachments}
-                        streaming={item.streaming}
-                        plain={activeSnapshot?.history?.source === "stored" && !item.streaming}
-                      />
-                    </div>
-                  </article>
-                ))}
-              </section>
+      <main className="content-canvas">
+        <header className="canvas-header">
+          <div className="canvas-header-copy">
+            <div className="canvas-crumbs">
+              <span>PP-ECHO / {viewLabel.toUpperCase()}</span>
+              <span>{activeSessionId ? shortId(activeSessionId) : "session"}</span>
+            </div>
+            <h1>{viewLabel}</h1>
+            <p>{viewMeta?.description || workspace.active.path || "功能开发中，敬请期待"}</p>
+          </div>
 
-              <aside className="detail-panel">
-                <div className="panel-card">
-                  <h3><Activity size={16} /> Runtime</h3>
-                  <dl>
-                    <dt>Status</dt><dd>{displayStatus}</dd>
-                    <dt>Session</dt><dd>{shortId(activeSessionId)}</dd>
-                    <dt>Phase</dt><dd>{activeSnapshot?.runtime_control?.status || activeSnapshot?.turn?.phase || "idle"}</dd>
-                    <dt>Queue</dt><dd>{activeSnapshot?.queued_message_count || 0}</dd>
-                    <dt>Artifacts</dt><dd>{activeSnapshot?.runtime_control?.pending_artifact_count || 0}</dd>
-                    <dt>Mode</dt><dd>{activeSnapshot?.cancel_requested ? "Canceling" : busy ? "Working" : "Idle"}</dd>
-                  </dl>
-                </div>
-                <div className="panel-card">
-                  <h3><ShieldCheck size={16} /> Approval</h3>
-                  {activeApproval ? (
-                    <>
-                      <p className="approval-kind">{activeApproval.title}</p>
-                      <p className="muted">{activeApproval.description}</p>
-                      {activeApproval.meta && <small className="approval-meta">{activeApproval.meta}</small>}
-                      <code>{String(activeApproval.token).slice(0, 18)}</code>
-                      <div className="split-actions">
-                        <button disabled={Boolean(approvalAction)} onClick={approve}>
-                          <Check size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "approve" ? "Applying..." : activeApproval.approveLabel}
-                        </button>
-                        <button disabled={Boolean(approvalAction)} onClick={reject}>
-                          <X size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "reject" ? "Rejecting..." : "Reject"}
-                        </button>
-                      </div>
-                    </>
-                  ) : <p className="muted">{approvalFeedback || approvalEmptyText(busy, approvalSummary.count)}</p>}
-                </div>
-                <div className="panel-card">
-                  <h3><Clock3 size={16} /> Recent Events</h3>
-                  <ul className="event-list">
-                    {activityItems.length === 0 && <li className="muted-event">No tool activity yet</li>}
-                    {activityItems.slice(-8).reverse().map((item, index) => (
-                      <li key={`${item.label}-${index}`}>
-                        <strong>{item.label}</strong>
-                        <span>{item.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </aside>
+          <div className="canvas-actions">
+            <button className="icon-button" onClick={refreshAll} title="刷新">
+              <RefreshCw size={16} />
+            </button>
+            <button className="icon-button" onClick={createSession} title="新会话">
+              <Plus size={16} />
+            </button>
+            <button className="icon-button" onClick={cancelActiveSession} disabled={!activeSessionId || !busy} title="停止">
+              <Square size={15} />
+            </button>
+            <button className={inspectorOpen ? "icon-button active" : "icon-button"} onClick={() => setInspectorOpen((current) => !current)} title="观察窗">
+              <Activity size={16} />
+            </button>
+          </div>
+        </header>
 
-              <div className="composer">
-                <textarea
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="Ask pp-Echo what to do next"
-                  disabled={promptSubmitting || busy || Boolean(activeApproval)}
-                />
-                <button disabled={!activeSessionId || !prompt.trim() || Boolean(activeApproval) || busy || promptSubmitting} onClick={sendPrompt}>
-                  <Play size={17} />
-                </button>
-              </div>
-            </>
-          ) : activeTab?.type === "projects" ? (
-            <ProjectsView
-              workspaceDraft={workspaceDraft}
-              workspaces={workspaces}
-              pendingWorkspace={pendingWorkspace}
-              onChangeDraft={setWorkspaceDraft}
-              onOpenWorkspace={(path) => openWorkspace(path)}
-              onConfirmWorkspace={() => pendingWorkspace?.candidate && openWorkspace(pendingWorkspace.candidate.path, true)}
-              onCancelConfirmation={() => setPendingWorkspace(null)}
-              onReload={() => api.workspaces().then((data) => { setWorkspaces(data); setSideData((current) => ({ ...current, projects: data })); })}
+        <div className="canvas-body">
+          {activeView === "chat" || activeView === "history" || activeView === "board" ? (
+            <ChatWorkspace
+              transcriptRef={transcriptRef}
+              transcript={transcript}
+              activeSnapshot={activeSnapshot}
+              activeSessionId={activeSessionId}
+              displayStatus={displayStatus}
+              busy={busy}
+              prompt={prompt}
+              promptSubmitting={promptSubmitting}
+              activeApproval={activeApproval}
+              setPrompt={setPrompt}
+              sendPrompt={sendPrompt}
+              cancelActiveSession={cancelActiveSession}
+              activityItems={activityItems}
+              approvalSummary={approvalSummary}
+              approvalAction={approvalAction}
+              approvalFeedback={approvalFeedback}
+              approve={approve}
+              reject={reject}
+              inspectorTab={inspectorTab}
+              setInspectorTab={setInspectorTab}
+              activeEvents={activeEvents}
+              notice={notice}
+              inspectorOpen={inspectorOpen}
+              setInspectorOpen={setInspectorOpen}
             />
-          ) : activeTab ? (
-            <PanelView type={activeTab.type} data={sideData[activeTab.type]} onReload={() => loadPanel(activeTab.type)} />
+          ) : activeView === "logs" ? (
+            <TimelinePanel
+              activeSessionId={activeSessionId}
+              timeline={timeline}
+              activeEvents={activeEvents}
+              onReload={refreshTimeline}
+            />
           ) : (
-            <div className="empty full"><Sparkles size={30} /><h2>Select or create a session</h2></div>
+            <ComingSoonPanel title={viewLabel} onComingSoon={handleComingSoon} onReload={refreshAll} />
           )}
         </div>
       </main>
+
+      <div className={inspectorOpen ? "inspector-drawer open" : "inspector-drawer"}>
+        <div className="inspector-drawer-head">
+          <div>
+            <small>INSPECTOR</small>
+            <h2>状态 / 工具 / 审批</h2>
+          </div>
+          <button className="icon-button" onClick={() => setInspectorOpen(false)} title="收起">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="inspector-tabs">
+          {inspectorTabs.map((tab) => (
+            <button key={tab.id} className={inspectorTab === tab.id ? "inspector-tab active" : "inspector-tab"} onClick={() => setInspectorTab(tab.id)}>
+              <tab.icon size={15} />
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="inspector-panel">
+          {inspectorTab === "status" && (
+            <InspectorCard title="运行状态" icon={Activity}>
+              <StatGrid
+                items={[
+                  ["Status", displayStatus],
+                  ["Session", shortId(activeSessionId)],
+                  ["Phase", activeSnapshot?.runtime_control?.status || activeSnapshot?.turn?.phase || "idle"],
+                  ["Queue", String(activeSnapshot?.queued_message_count || 0)],
+                  ["Artifacts", String(activeSnapshot?.runtime_control?.pending_artifact_count || 0)],
+                  ["Mode", activeSnapshot?.cancel_requested ? "Canceling" : busy ? "Working" : "Idle"]
+                ]}
+              />
+            </InspectorCard>
+          )}
+
+          {inspectorTab === "tools" && (
+            <InspectorCard title="工具调用" icon={Code2}>
+              <ul className="event-list">
+                {activityItems.length === 0 && <li className="muted-event">暂无工具活动</li>}
+                {activityItems.slice(-8).reverse().map((item, index) => (
+                  <li key={`${item.label}-${index}`}>
+                    <strong>{item.label}</strong>
+                    <span>{item.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </InspectorCard>
+          )}
+
+          {inspectorTab === "approvals" && (
+            <InspectorCard title="审批流" icon={ShieldCheck}>
+              {activeApproval ? (
+                <>
+                  <p className="approval-kind">{activeApproval.title}</p>
+                  <p className="muted">{activeApproval.description}</p>
+                  {activeApproval.meta && <small className="approval-meta">{activeApproval.meta}</small>}
+                  <code>{String(activeApproval.token).slice(0, 18)}</code>
+                  <div className="split-actions">
+                    <button disabled={Boolean(approvalAction)} onClick={approve}>
+                      <Check size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "approve" ? "处理中..." : activeApproval.approveLabel}
+                    </button>
+                    <button disabled={Boolean(approvalAction)} onClick={reject}>
+                      <X size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "reject" ? "处理中..." : "拒绝"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="muted">{approvalFeedback || approvalEmptyText(busy, approvalSummary.count)}</p>
+              )}
+            </InspectorCard>
+          )}
+
+          <InspectorCard title="概览" icon={Monitor}>
+            <dl className="compact-meta">
+              <dt>消息</dt><dd>{activeSnapshot?.messages?.length || 0}</dd>
+              <dt>事件</dt><dd>{activeEvents.length}</dd>
+              <dt>审批</dt><dd>{approvalSummary.count}</dd>
+              <dt>状态</dt><dd>{displayStatus}</dd>
+            </dl>
+          </InspectorCard>
+        </div>
+      </div>
+
+      {workspaceDialogOpen ? (
+        <WorkspaceDialog
+          currentPath={workspace.active.path || ""}
+          value={workspaceDraft}
+          pendingWorkspace={pendingWorkspace}
+          onChange={(value) => {
+            setWorkspaceDraft(value);
+            setPendingWorkspace(null);
+          }}
+          onClose={() => {
+            setWorkspaceDialogOpen(false);
+            setPendingWorkspace(null);
+          }}
+          onOpen={() => openWorkspace(workspaceDraft)}
+          onConfirm={() => pendingWorkspace?.candidate?.path ? openWorkspace(pendingWorkspace.candidate.path, true) : undefined}
+        />
+      ) : null}
+
+      {notice ? (
+        <div className={`toast toast-${notice.tone}`}>
+          <span>{notice.message}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function ProjectsView({
-  workspaceDraft,
-  workspaces,
-  pendingWorkspace,
-  onChangeDraft,
-  onOpenWorkspace,
-  onConfirmWorkspace,
-  onCancelConfirmation,
+function ChatWorkspace({
+  transcriptRef,
+  transcript,
+  activeSnapshot,
+  activeSessionId,
+  displayStatus,
+  busy,
+  prompt,
+  promptSubmitting,
+  activeApproval,
+  setPrompt,
+  sendPrompt,
+  cancelActiveSession,
+  activityItems,
+  approvalSummary,
+  approvalAction,
+  approvalFeedback,
+  approve,
+  reject,
+  inspectorTab,
+  setInspectorTab,
+  activeEvents,
+  notice,
+  inspectorOpen,
+  setInspectorOpen
+}: {
+  transcriptRef: RefObject<HTMLElement>;
+  transcript: TranscriptItem[];
+  activeSnapshot?: SessionSnapshot;
+  activeSessionId: string;
+  displayStatus: string;
+  busy: boolean;
+  prompt: string;
+  promptSubmitting: boolean;
+  activeApproval: ActiveApproval | null;
+  setPrompt: (value: string) => void;
+  sendPrompt: () => void;
+  cancelActiveSession: () => void;
+  activityItems: Array<{ label: string; detail: string }>;
+  approvalSummary: ApprovalsSummary;
+  approvalAction: { token: string; action: "approve" | "reject" } | null;
+  approvalFeedback: string;
+  approve: () => void;
+  reject: () => void;
+  inspectorTab: InspectorTab;
+  setInspectorTab: (tab: InspectorTab) => void;
+  activeEvents: RuntimeEvent[];
+  notice: Notice | null;
+  inspectorOpen: boolean;
+  setInspectorOpen: (value: boolean | ((current: boolean) => boolean)) => void;
+}) {
+  return (
+    <div className={inspectorOpen ? "chat-layout with-inspector" : "chat-layout"}>
+      <section className="chat-stage">
+        <header className="chat-header">
+          <div className="chat-header-copy">
+            <div className="crumbs">
+              <span>PP-ECHO / CHAT</span>
+              <span>{shortId(activeSessionId)}</span>
+            </div>
+            <h2>{activeSnapshot?.history?.source === "stored" ? "历史会话" : "当前会话"}</h2>
+            <p>{activeSnapshot?.messages?.length ? `${activeSnapshot.messages.length} 条消息` : "尚无消息"}</p>
+          </div>
+
+          <div className="chat-header-actions">
+            <span className="status-pill">{displayStatus}</span>
+            <button className="icon-button" onClick={() => setInspectorOpen((current) => !current)} title={inspectorOpen ? "收起观察窗" : "展开观察窗"}>
+              <Activity size={15} />
+            </button>
+            <button onClick={cancelActiveSession} disabled={!busy}>
+              <Square size={14} />
+              停止
+            </button>
+          </div>
+        </header>
+
+        {notice ? <div className="inline-hint">{notice.message}</div> : null}
+
+        <section className="transcript" ref={transcriptRef}>
+          {transcript.length === 0 && (
+            <div className="empty">
+              <Sparkles size={26} />
+              <h2>选择或创建一个会话</h2>
+              <p>pp-Echo 的聊天、状态观察和工具调用会在这里一起展开。</p>
+            </div>
+          )}
+          {transcript.map((item) => (
+            <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id}>
+              <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : <MessageSquare size={15} />}</div>
+              <div className="bubble">
+                <span>{roleLabel(item.role)}</span>
+                <RichMessageContent
+                  text={item.body.text}
+                  attachments={item.body.attachments}
+                  streaming={item.streaming}
+                  plain={activeSnapshot?.history?.source === "stored" && !item.streaming}
+                />
+              </div>
+            </article>
+          ))}
+        </section>
+
+        {activeApproval ? (
+          <section className="composer-approval" aria-live="polite">
+            <div className="composer-approval-copy">
+              <p className="approval-kind">{activeApproval.title}</p>
+              <p>{activeApproval.description}</p>
+              <div className="composer-approval-meta">
+                {activeApproval.meta ? <small>{activeApproval.meta}</small> : null}
+                <code>{String(activeApproval.token).slice(0, 18)}</code>
+              </div>
+            </div>
+            <div className="split-actions">
+              <button disabled={Boolean(approvalAction)} onClick={approve}>
+                <Check size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "approve" ? "处理中..." : activeApproval.approveLabel}
+              </button>
+              <button disabled={Boolean(approvalAction)} onClick={reject}>
+                <X size={15} /> {approvalAction?.token === activeApproval.token && approvalAction.action === "reject" ? "处理中..." : "拒绝"}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        <footer className="composer">
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendPrompt();
+              }
+            }}
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            disabled={!activeSessionId || busy || Boolean(activeApproval)}
+          />
+          <button disabled={!activeSessionId || !prompt.trim() || Boolean(activeApproval) || busy || promptSubmitting} onClick={sendPrompt}>
+            <Plus size={16} />
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ComingSoonPanel({
+  title,
+  onComingSoon,
   onReload
 }: {
-  workspaceDraft: string;
-  workspaces: WorkspacesState;
-  pendingWorkspace: OpenWorkspaceResponse | null;
-  onChangeDraft: (value: string) => void;
-  onOpenWorkspace: (path: string) => void;
-  onConfirmWorkspace: () => void;
-  onCancelConfirmation: () => void;
+  title: string;
+  onComingSoon: (label: string) => void;
   onReload: () => void;
 }) {
   return (
-    <section className="projects-page">
-      <header>
+    <section className="panel-page">
+      <header className="panel-header">
         <div>
-          <h2>Projects</h2>
-          <p>{workspaces.active.path}</p>
+          <h2>{title}</h2>
+          <p>功能开发中，敬请期待</p>
         </div>
-        <button onClick={onReload}><RefreshCw size={16} /> Reload</button>
+        <button onClick={onReload}>
+          <RefreshCw size={16} />
+          刷新
+        </button>
       </header>
-
-      <div className="workspace-open">
-        <input
-          value={workspaceDraft}
-          onChange={(event) => onChangeDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") onOpenWorkspace(workspaceDraft);
-          }}
-          placeholder="E:\\Projects\\my-app"
-        />
-        <button onClick={() => onOpenWorkspace(workspaceDraft)}><FolderOpen size={16} /> Open</button>
-      </div>
-
-      {pendingWorkspace?.candidate && (
-        <div className="confirm-workspace">
-          <AlertTriangle size={18} />
-          <div>
-            <strong>Open this workspace?</strong>
-            <span>{pendingWorkspace.candidate.path}</span>
-          </div>
-          <button onClick={onConfirmWorkspace}><Check size={15} /> Confirm</button>
-          <button onClick={onCancelConfirmation}><X size={15} /> Cancel</button>
-        </div>
-      )}
-
-      <div className="project-grid">
-        <WorkspaceTile label="Current" workspace={workspaces.active} active onOpen={onOpenWorkspace} />
-        {workspaces.recent
-          .filter((item) => item.path !== workspaces.active.path)
-          .map((item) => <WorkspaceTile key={item.path} label="Recent" workspace={item} onOpen={onOpenWorkspace} />)}
+      <div className="coming-soon">
+        <Sparkles size={28} />
+        <h3>功能开发中，敬请期待</h3>
+        <p>这个页面已经保留，后续会继续补齐。</p>
+        <button onClick={() => onComingSoon(title)}>提示一下</button>
       </div>
     </section>
   );
 }
 
-function WorkspaceTile({ label, workspace, active = false, onOpen }: { label: string; workspace: WorkspaceEntry; active?: boolean; onOpen: (path: string) => void }) {
+function TimelinePanel({
+  activeSessionId,
+  timeline,
+  activeEvents,
+  onReload
+}: {
+  activeSessionId: string;
+  timeline: TimelineEntry[];
+  activeEvents: RuntimeEvent[];
+  onReload: () => void;
+}) {
+  const liveEvents = activeEvents.map(runtimeEventToTimelineLike);
+  const items = latestAgentLoopItems([...timeline, ...liveEvents]);
+  const text = formatTimelineText(items);
+
   return (
-    <button className={active ? "project-tile active" : "project-tile"} onClick={() => onOpen(workspace.path)}>
-      <div className="project-icon"><FolderOpen size={18} /></div>
-      <div>
-        <small>{label}</small>
-        <strong>{workspace.name}</strong>
-        <span>{workspace.path}</span>
-      </div>
-      <em>{workspace.has_agents ? "AGENTS.md" : workspace.has_pp_agent ? ".pp-agent" : "folder"}</em>
-    </button>
+    <section className="panel-page timeline-page">
+      <header className="panel-header">
+        <div>
+          <h2>Timeline</h2>
+          <p>{activeSessionId ? `Session ${shortId(activeSessionId)}` : "Recent workspace events"}</p>
+        </div>
+        <button onClick={onReload}>
+          <RefreshCw size={16} />
+          刷新
+        </button>
+      </header>
+      <textarea
+        className="timeline-textbox"
+        readOnly
+        value={text || "暂无最近一轮 agent loop 事件"}
+        aria-label="最近一轮 agent loop 时间线"
+      />
+    </section>
   );
 }
 
-function PanelView({ type, data, onReload }: { type: string; data: unknown; onReload: () => void }) {
-  if (type === "usage" && data && typeof data === "object") {
-    const report = data as RuntimeDoctorReport;
-    return (
-      <section className="panel-page">
+function formatEventTime(value?: number) {
+  if (!value) return "--:--:--";
+  return new Date(value * 1000).toLocaleTimeString();
+}
+
+function latestAgentLoopItems(items: Array<TimelineEntry | ReturnType<typeof runtimeEventToTimelineLike>>) {
+  const sorted = [...items]
+    .filter((item) => item.created_at || item.event_type)
+    .sort((left, right) => (left.created_at || 0) - (right.created_at || 0));
+  const start = findLastIndex(sorted, (item) => item.event_type === "agent_start" || item.event_type === "local_user_prompt");
+  return sorted.slice(Math.max(0, start)).slice(-160);
+}
+
+function runtimeEventToTimelineLike(event: RuntimeEvent, index: number) {
+  return {
+    id: `live-${index}`,
+    created_at: event.timestamp || 0,
+    event_type: event.type,
+    turn_id: event.turn_id || 0,
+    phase: event.phase,
+    tool_name: event.tool_name,
+    message: event.message,
+    is_error: Boolean(event.is_error),
+    details: event.details
+  };
+}
+
+function formatTimelineText(items: Array<TimelineEntry | ReturnType<typeof runtimeEventToTimelineLike>>) {
+  return items
+    .map((item) => {
+      const time = formatEventTime(item.created_at);
+      const turn = item.turn_id ? ` turn=${item.turn_id}` : "";
+      const phase = item.phase ? ` phase=${item.phase}` : "";
+      const tool = item.tool_name ? ` tool=${item.tool_name}` : "";
+      const error = item.is_error ? " ERROR" : "";
+      const message = item.message ? ` | ${truncate(item.message, 180)}` : "";
+      return `${time}${error}${turn}${phase}${tool} ${item.event_type}${message}`.trim();
+    })
+    .join("\n");
+}
+
+function WorkspaceDialog({
+  currentPath,
+  value,
+  pendingWorkspace,
+  onChange,
+  onClose,
+  onOpen,
+  onConfirm
+}: {
+  currentPath: string;
+  value: string;
+  pendingWorkspace: OpenWorkspaceResponse | null;
+  onChange: (value: string) => void;
+  onClose: () => void;
+  onOpen: () => void;
+  onConfirm: () => void | Promise<void> | undefined;
+}) {
+  const canPickDirectory = typeof (window as DirectoryPickerWindow).showDirectoryPicker === "function";
+  const [pickerHint, setPickerHint] = useState("");
+
+  async function pickDirectory() {
+    const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
+    if (!picker) return;
+    const handle = await picker();
+    const pickedPath = pickedDirectoryPath(handle);
+    if (pickedPath) {
+      setPickerHint("");
+      onChange(pickedPath);
+      return;
+    }
+    setPickerHint(`已选择「${handle.name}」，但浏览器没有暴露完整本地路径。请把文件夹的绝对路径粘贴到上方，例如 E:\\Projects\\my-app。`);
+  }
+
+  return (
+    <div className="workspace-dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="workspace-dialog" role="dialog" aria-modal="true" aria-label="选择工作区" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
-            <h2>{panelTitle(type)}</h2>
-            <p>{panelSubtitle(type)}</p>
+            <small>WORKSPACE</small>
+            <h2>选择工作区</h2>
           </div>
-          <button onClick={onReload}><RefreshCw size={16} /> Reload</button>
+          <button className="icon-button" onClick={onClose} title="关闭">
+            <X size={16} />
+          </button>
         </header>
-        <div className="panel-card">
-          <h3><Activity size={16} /> Runtime Doctor</h3>
-          <dl>
-            <dt>Status</dt><dd>{report.status}</dd>
-            <dt>Sessions</dt><dd>{report.summary?.session_count ?? 0}</dd>
-            <dt>Pending</dt><dd>{report.summary?.pending_action_count ?? 0}</dd>
-            <dt>Artifacts</dt><dd>{report.summary?.pending_artifact_count ?? 0}</dd>
-            <dt>Findings</dt><dd>{report.summary?.finding_count ?? 0}</dd>
-          </dl>
-          {Array.isArray(report.sessions) && report.sessions.length > 0 && (
-            <ul className="event-list">
-              {report.sessions.slice(0, 6).map((session) => (
-                <li key={session.session_id}>
-                  <strong>{shortId(session.session_id)}</strong>
-                  <span>{session.status} 路 artifacts {session.pending_artifact_count}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {Array.isArray(report.findings) && report.findings.length > 0 && (
-            <pre>{JSON.stringify(report.findings, null, 2)}</pre>
-          )}
+
+        <div className="workspace-current">
+          <span>当前</span>
+          <strong>{currentPath || "本地工作区"}</strong>
         </div>
+
+        <label className="workspace-path-field">
+          <span>本地路径</span>
+          <input
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onOpen();
+            }}
+            placeholder="E:\\Projects\\my-app"
+          />
+        </label>
+
+        <div className="workspace-dialog-actions">
+          <button type="button" onClick={pickDirectory} disabled={!canPickDirectory} title={canPickDirectory ? "浏览器通常不会返回完整本地路径；选择后可能仍需粘贴绝对路径" : "当前浏览器不支持目录选择器"}>
+            <FolderOpen size={16} />
+            选择文件夹
+          </button>
+          <button type="button" onClick={onOpen}>
+            <Check size={16} />
+            打开
+          </button>
+        </div>
+
+        {pendingWorkspace?.candidate ? (
+          <div className="workspace-confirm">
+            <div>
+              <strong>确认打开这个工作区？</strong>
+              <span>{pendingWorkspace.candidate.path}</span>
+            </div>
+            <button type="button" onClick={onConfirm}>
+              确认
+            </button>
+          </div>
+        ) : (
+          <p className="workspace-dialog-note">{pickerHint || "请粘贴本地绝对路径。浏览器安全策略通常不会把“选择文件夹”的完整路径交给网页。"}</p>
+        )}
       </section>
-    );
-  }
-  return (
-    <section className="panel-page">
-      <header>
-        <div>
-          <h2>{panelTitle(type)}</h2>
-          <p>{panelSubtitle(type)}</p>
-        </div>
-        <button onClick={onReload}><RefreshCw size={16} /> Reload</button>
-      </header>
-      <pre>{JSON.stringify(data || {}, null, 2)}</pre>
-    </section>
+    </div>
   );
+}
+
+function InspectorCard({ title, icon: Icon, children }: { title: string; icon: typeof Activity; children: React.ReactNode }) {
+  return (
+    <div className="panel-card">
+      <h3>
+        <Icon size={16} /> {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
+
+function StatGrid({ items }: { items: Array<[string, string]> }) {
+  return (
+    <dl className="compact-meta">
+      {items.map(([label, value]) => (
+        <div key={label} className="compact-meta-row">
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function pickedDirectoryPath(handle?: DirectoryPickerHandle | null) {
+  if (!handle) return "";
+  for (const key of ["path", "fullPath", "nativePath", "__path"] as const) {
+    const value = handle[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function workspaceErrorMessage(error: unknown, attemptedPath: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("Workspace does not exist")) {
+    return `工作区不存在：${attemptedPath}。请确认这里填写的是完整本地绝对路径，不是单独的文件夹名称。`;
+  }
+  if (message.includes("Workspace is not a directory")) {
+    return `工作区不是文件夹：${attemptedPath}`;
+  }
+  if (message.includes("Workspace path cannot be empty")) {
+    return "请输入工作区路径";
+  }
+  return message;
+}
+
+function filterSessions(items: SessionEntry[], query: string) {
+  const clean = query.trim().toLowerCase();
+  if (!clean) return items;
+  return items.filter((item) => {
+    const fields = [item.id, item.model, item.summary_preview, item.last_user_preview, item.last_assistant_preview].filter(Boolean).join(" ").toLowerCase();
+    return fields.includes(clean);
+  });
+}
+
+function computeSessionStats(items: SessionEntry[]) {
+  return {
+    total: items.length,
+    active: items.filter((item) => Boolean(item.pending_plan_token)).length
+  };
+}
+
+function readTheme(): ThemeMode {
+  const stored = window.localStorage.getItem(STORAGE_THEME_KEY);
+  if (stored === "light" || stored === "dark") return stored;
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function readStoredView(): ViewKey {
+  const stored = window.localStorage.getItem(STORAGE_ACTIVE_VIEW_KEY) as ViewKey | null;
+  return stored === "history" || stored === "board" ? "chat" : stored || "chat";
+}
+
+function roleLabel(role: string) {
+  if (role === "assistant") return "assistant";
+  if (role === "user") return "user";
+  return role;
 }
 
 export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []): TranscriptItem[] {
@@ -694,7 +1249,8 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     .map((message, index) => ({
       id: `stored:${index}`,
       role: message.role,
-      body: extractMessageBody(message)
+      body: extractMessageBody(message),
+      timestamp: typeof message.timestamp === "number" ? message.timestamp : index + 1
     }))
     .filter((item) => item.body.text.trim() || item.body.attachments.length > 0);
 
@@ -712,6 +1268,7 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
   const runtime: TranscriptItem[] = [];
   let streamBuffer = "";
   let streamIndex = 0;
+  let streamTimestamp = 0;
 
   const flushStream = () => {
     const text = streamBuffer.trim();
@@ -720,20 +1277,22 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     const normalized = normalizeText(text);
     const alreadyCommitted = committedAssistants.some((committed) => committed.includes(normalized) || normalized.includes(committed));
     if (!alreadyCommitted) {
-      runtime.push({ id: `stream:${streamIndex++}`, role: "assistant", body: { text, attachments: [] }, streaming: true });
+      runtime.push({ id: `stream:${streamIndex++}`, role: "assistant", body: { text, attachments: [] }, streaming: true, timestamp: streamTimestamp || undefined });
     }
+    streamTimestamp = 0;
   };
 
   for (const event of events) {
     if (event.type === "message_delta") {
       streamBuffer += event.delta || "";
+      streamTimestamp = streamTimestamp || event.timestamp || 0;
       continue;
     }
     if (event.type === "local_user_prompt") {
       flushStream();
       const text = (event.message || "").trim();
       if (text && !committedUsers.has(normalizeText(text))) {
-        runtime.push({ id: `local-user:${runtime.length}`, role: "user", body: { text, attachments: [] } });
+        runtime.push({ id: `local-user:${runtime.length}`, role: "user", body: { text, attachments: [] }, timestamp: event.timestamp });
       }
       continue;
     }
@@ -743,15 +1302,19 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     }
     if (event.is_error && event.message) {
       flushStream();
-      runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: event.message, attachments: [] } });
+      runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: formatErrorEvent(event), attachments: [] }, timestamp: event.timestamp });
       continue;
     }
-    if (event.type.includes("tool")) {
-      flushStream();
-    }
+    if (event.type.includes("tool")) flushStream();
   }
+
   flushStream();
-  const items = [...stored, ...runtime];
+  const items = [...stored, ...runtime].sort((left, right) => {
+    const leftTime = left.timestamp || 0;
+    const rightTime = right.timestamp || 0;
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return 0;
+  });
   if (shouldShowThinking(items, events)) {
     items.push({ id: "thinking", role: "assistant", body: { text: "Thinking", attachments: [] }, streaming: true });
   }
@@ -762,14 +1325,71 @@ function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function formatErrorEvent(event: RuntimeEvent) {
+  const lines = [`ERROR: ${event.message || event.type}`];
+  if (event.tool_name) lines.push(`tool: ${event.tool_name}`);
+  if (event.type && event.type !== "error") lines.push(`event: ${event.type}`);
+  const details = event.details || {};
+  const errorType = details.error_type;
+  const action = details.action;
+  const source = details.source;
+  if (typeof errorType === "string" && errorType) lines.push(`type: ${errorType}`);
+  if (typeof action === "string" && action) lines.push(`action: ${action}`);
+  if (typeof source === "string" && source) lines.push(`source: ${source}`);
+  const error = details.error;
+  if (typeof error === "string" && error && error !== event.message) lines.push(`detail: ${error}`);
+  const attempts = details.attempts;
+  if (Array.isArray(attempts) && attempts.length > 0) {
+    lines.push("attempts:");
+    attempts.slice(0, 6).forEach((attempt) => {
+      if (!attempt || typeof attempt !== "object") return;
+      const item = attempt as Record<string, unknown>;
+      const provider = typeof item.provider === "string" ? item.provider : "provider";
+      const status = typeof item.status === "string" ? item.status : "unknown";
+      const message = typeof item.error === "string" ? ` - ${item.error}` : "";
+      lines.push(`  - ${provider}: ${status}${message}`);
+    });
+  }
+  const diagnostics = details.diagnostics;
+  if (diagnostics && typeof diagnostics === "object") {
+    const payload = diagnostics as Record<string, unknown>;
+    const runtime = payload.runtime;
+    const controller = payload.controller;
+    appendDiagnosticLines(lines, "runtime", runtime);
+    appendDiagnosticLines(lines, "controller", controller);
+  }
+  return lines.join("\n");
+}
+
+function appendDiagnosticLines(lines: string[], label: string, value: unknown) {
+  if (!value || typeof value !== "object") return;
+  const payload = value as Record<string, unknown>;
+  const status = payload.status && typeof payload.status === "object" ? payload.status as Record<string, unknown> : payload;
+  const interesting = ["controller", "running", "controller_ready", "cdp_port", "tabs_count", "last_error", "doctor_error"];
+  const parts = interesting
+    .map((key) => {
+      const item = status[key];
+      if (item === undefined || item === null || item === "") return "";
+      return `${key}=${String(item)}`;
+    })
+    .filter(Boolean);
+  if (parts.length > 0) lines.push(`${label}: ${parts.join(", ")}`);
+  const recent = status.recent_actions;
+  if (Array.isArray(recent) && recent.length > 0) {
+    const tail = recent.slice(-3).map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const action = (item as Record<string, unknown>).action || "action";
+      const ok = (item as Record<string, unknown>).ok === true ? "ok" : "failed";
+      const duration = (item as Record<string, unknown>).duration_ms;
+      const error = (item as Record<string, unknown>).error;
+      return `${String(action)}:${ok}${typeof duration === "number" ? ` ${duration}ms` : ""}${typeof error === "string" ? ` ${error}` : ""}`;
+    }).filter(Boolean);
+    if (tail.length > 0) lines.push(`${label} recent: ${tail.join(" | ")}`);
+  }
+}
+
 function runtimeEventKey(event: RuntimeEvent) {
-  const detailKey =
-    event.details?.event_id ||
-    event.details?.id ||
-    event.details?.tool_call_id ||
-    event.details?.token ||
-    event.details?.artifact_id ||
-    "";
+  const detailKey = event.details?.event_id || event.details?.id || event.details?.tool_call_id || event.details?.token || event.details?.artifact_id || "";
   return [
     event.type,
     event.turn_id ?? "",
@@ -808,12 +1428,8 @@ export function runtimeDisplayStatus(currentStatus: string, snapshot: SessionSna
 export function isTurnInFlight(events: RuntimeEvent[]) {
   let inFlight = false;
   for (const event of events) {
-    if (event.type === "local_user_prompt" || event.type === "agent_start" || event.type === "turn_start") {
-      inFlight = true;
-    }
-    if (event.type === "turn_end" || event.type === "agent_end" || event.type === "error") {
-      inFlight = false;
-    }
+    if (event.type === "local_user_prompt" || event.type === "agent_start" || event.type === "turn_start") inFlight = true;
+    if (event.type === "turn_end" || event.type === "agent_end" || event.type === "error") inFlight = false;
   }
   return inFlight;
 }
@@ -821,31 +1437,20 @@ export function isTurnInFlight(events: RuntimeEvent[]) {
 function latestTerminalEvent(events: RuntimeEvent[]) {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event.type === "turn_end" || event.type === "agent_end" || event.type === "error" || event.is_error) {
-      return event;
-    }
+    if (event.type === "turn_end" || event.type === "agent_end" || event.type === "error" || event.is_error) return event;
   }
   return undefined;
 }
 
 function hasErrorSinceLatestStart(events: RuntimeEvent[]) {
-  const latestStart = findLastIndex(
-    events,
-    (event) => event.type === "local_user_prompt" || event.type === "agent_start" || event.type === "turn_start"
-  );
+  const latestStart = findLastIndex(events, (event) => event.type === "local_user_prompt" || event.type === "agent_start" || event.type === "turn_start");
   return events.slice(Math.max(0, latestStart)).some((event) => event.type === "error" || event.is_error);
 }
 
 export function buildActivityItems(events: RuntimeEvent[]) {
   const toolStarts = new Map<string, RuntimeEvent>();
   return events
-    .filter((event) =>
-      event.type.includes("tool") ||
-      event.type.includes("planner") ||
-      event.type.includes("checkpoint") ||
-      event.type.includes("subagent") ||
-      event.type === "cancel_requested"
-    )
+    .filter((event) => event.type.includes("tool") || event.type.includes("planner") || event.type.includes("checkpoint") || event.type.includes("subagent") || event.type === "cancel_requested")
     .map((event) => {
       const key = toolEventKey(event);
       if (event.type === "tool_start" && key) toolStarts.set(key, event);
@@ -971,7 +1576,7 @@ function isActionableApproval(item: PendingAction) {
 
 function approvalEmptyText(busy: boolean, workspaceApprovalCount: number) {
   if (busy) return "Plan accepted. Waiting for model output or an exact action confirmation.";
-  if (workspaceApprovalCount > 0) return `${workspaceApprovalCount} pending approval(s) exist in this workspace. Open Usage to review old items.`;
+  if (workspaceApprovalCount > 0) return `${workspaceApprovalCount} pending approval(s) exist in this workspace.`;
   return "No pending approval for this session.";
 }
 
@@ -996,9 +1601,7 @@ function approvalSuccessMessage(actionType: string, result: ApprovalActionRespon
     const changedPaths = Array.isArray(result.details?.changed_paths)
       ? result.details.changed_paths.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       : [];
-    return changedPaths.length > 0
-      ? `Patch applied successfully: ${changedPaths.join(", ")}`
-      : "Patch artifact applied successfully.";
+    return changedPaths.length > 0 ? `Patch applied successfully: ${changedPaths.join(", ")}` : "Patch artifact applied successfully.";
   }
   const path = result.details?.absolute_path || result.details?.path;
   if (actionType === "write_file" || actionType === "edit_file") {
@@ -1043,20 +1646,4 @@ function shortId(value: string) {
 
 function sortSessionsByUpdatedAt(items: SessionEntry[]) {
   return [...items].sort((left, right) => (right.updated_at || 0) - (left.updated_at || 0));
-}
-
-function panelTitle(type: string) {
-  if (type === "agents") return "Agents / Subagents";
-  if (type === "mcp") return "MCP Manager";
-  if (type === "usage") return "Usage Dashboard";
-  if (type === "timeline") return "Timeline & Checkpoints";
-  return "Settings";
-}
-
-function panelSubtitle(type: string) {
-  if (type === "agents") return "Discover built-in tools, skills, extensions, and subagent-facing capabilities.";
-  if (type === "mcp") return "Inspect Model Context Protocol configuration for this workspace.";
-  if (type === "usage") return "Runtime status and approval workload for the current workspace.";
-  if (type === "timeline") return "Session tree, rewind targets, and checkpoint-oriented state.";
-  return "Active pp-Echo configuration resolved from environment and project files.";
 }

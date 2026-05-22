@@ -163,6 +163,18 @@
       "allow_high_risk_actions": false,
       "_comment_evaluate_enabled": "JS evaluate and wait-function style automation are disabled by default.",
       "evaluate_enabled": false,
+      "_comment_connect_timeout_seconds": "Browser startup / websocket connection timeout in seconds.",
+      "connect_timeout_seconds": 20,
+      "_comment_navigation_timeout_ms": "Default navigation/page-ready wait in milliseconds.",
+      "navigation_timeout_ms": 5000,
+      "_comment_cdp_http_timeout_seconds": "Local DevTools HTTP endpoint timeout in seconds.",
+      "cdp_http_timeout_seconds": 3,
+      "_comment_cdp_response_timeout_seconds": "CDP websocket method response timeout in seconds.",
+      "cdp_response_timeout_seconds": 20,
+      "_comment_action_timeout_ms": "Default post-action page-ready wait in milliseconds.",
+      "action_timeout_ms": 1500,
+      "_comment_shutdown_timeout_seconds": "Browser process shutdown wait in seconds.",
+      "shutdown_timeout_seconds": 5,
       "_comment_snapshot_defaults": "Default snapshot behavior. Snapshot content is always treated as untrusted_web_content.",
       "snapshot_defaults": {
         "refs": true,
@@ -170,6 +182,18 @@
         "compact": true,
         "max_chars": 4000
       }
+    },
+    "web": {
+      "_comment_search_providers": "provider=auto tries these in order; Baidu/Zhipu/Bing are China-friendly, DuckDuckGo is the final fallback.",
+      "search_providers": ["baidu", "zhipu", "bing", "duckduckgo"],
+      "_comment_search_timeout_seconds": "Static search HTTP timeout in seconds.",
+      "search_timeout_seconds": 10,
+      "_comment_fetch_timeout_seconds": "Static fetch HTTP timeout in seconds.",
+      "fetch_timeout_seconds": 10,
+      "_comment_zhipu_api_key_env": "Zhipu search is skipped unless this environment variable is set.",
+      "zhipu_api_key_env": "ZHIPUAI_API_KEY",
+      "_comment_zhipu_base_url": "Zhipu search endpoint.",
+      "zhipu_base_url": "https://open.bigmodel.cn/api/paas/v4/tools"
     }
   },
 

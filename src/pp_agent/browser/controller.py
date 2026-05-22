@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -81,6 +82,11 @@ class LocalCDPBrowserController:
         screenshot_dir: str = "",
         launch_flags: list[str] | None = None,
         connect_timeout_seconds: int = 20,
+        navigation_timeout_ms: int = 5000,
+        cdp_http_timeout_seconds: int = 3,
+        cdp_response_timeout_seconds: int | None = None,
+        action_timeout_ms: int = 1500,
+        shutdown_timeout_seconds: int = 5,
     ) -> None:
         self.workspace = workspace.resolve()
         self.browser_executable = browser_executable.strip()
@@ -88,6 +94,11 @@ class LocalCDPBrowserController:
         self.screenshot_dir = self._resolve_workspace_path(screenshot_dir, self.workspace / ".pp-agent" / "browser" / "screenshots")
         self.launch_flags = list(launch_flags or [])
         self.connect_timeout_seconds = max(5, int(connect_timeout_seconds))
+        self.navigation_timeout_ms = max(0, int(navigation_timeout_ms))
+        self.cdp_http_timeout_seconds = max(1, int(cdp_http_timeout_seconds))
+        self.cdp_response_timeout_seconds = max(1, int(cdp_response_timeout_seconds or self.connect_timeout_seconds))
+        self.action_timeout_ms = max(0, int(action_timeout_ms))
+        self.shutdown_timeout_seconds = max(1, int(shutdown_timeout_seconds))
         self._process: subprocess.Popen[str] | None = None
         self._clients: dict[str, Any] = {}
         self._browser_ws_url: str | None = None
@@ -99,12 +110,17 @@ class LocalCDPBrowserController:
         self._snapshot_ids: dict[str, str] = {}
         self._stale_targets: set[str] = set()
         self._last_error = ""
+        self._actions: deque[dict[str, Any]] = deque(maxlen=50)
 
     def doctor(self) -> dict[str, Any]:
         status = self.status()
         status["user_data_dir"] = str(self.user_data_dir)
         status["screenshot_dir"] = str(self.screenshot_dir)
         status["browser_executable_configured"] = bool(self.browser_executable)
+        status["browser_executable"] = self._diagnose_browser_executable()
+        status["profile_writable"] = self._diagnose_writable_dir(self.user_data_dir)
+        status["screenshots_writable"] = self._diagnose_writable_dir(self.screenshot_dir)
+        status["recent_actions"] = list(self._actions)
         return status
 
     def status(self) -> dict[str, Any]:
@@ -121,15 +137,22 @@ class LocalCDPBrowserController:
             "cdp_port": self._devtools_port,
             "tabs_count": len(tabs),
             "last_error": self._last_error,
+            "timeouts": {
+                "connect_timeout_seconds": self.connect_timeout_seconds,
+                "navigation_timeout_ms": self.navigation_timeout_ms,
+                "cdp_http_timeout_seconds": self.cdp_http_timeout_seconds,
+                "cdp_response_timeout_seconds": self.cdp_response_timeout_seconds,
+                "action_timeout_ms": self.action_timeout_ms,
+                "shutdown_timeout_seconds": self.shutdown_timeout_seconds,
+            },
+            "recent_actions": list(self._actions),
         }
 
     def start(self) -> dict[str, Any]:
-        self._start_browser_if_needed()
-        return self.status()
+        return self._record_action("start", lambda: self._start_and_status())
 
     def stop(self) -> dict[str, Any]:
-        self.close()
-        return self.status()
+        return self._record_action("stop", lambda: self._stop_and_status())
 
     def profiles(self) -> list[BrowserProfile]:
         return [
@@ -140,25 +163,12 @@ class LocalCDPBrowserController:
         ]
 
     def list_tabs(self) -> list[BrowserTab]:
-        self._start_browser_if_needed()
-        targets = self._list_page_targets()
-        active_target = self._target_id_from_ws(self._page_ws_url or "")
-        tabs: list[BrowserTab] = []
-        for target in targets:
-            target_id = str(target.get("id") or "")
-            tabs.append(
-                BrowserTab(
-                    tab_id=target_id,
-                    target_id=target_id,
-                    label=self._tab_labels.get(target_id, ""),
-                    url=str(target.get("url") or ""),
-                    title=str(target.get("title") or ""),
-                    active=target_id == active_target,
-                )
-            )
-        return tabs
+        return self._record_action("tabs.list", self._list_tabs_impl)
 
     def open_tab(self, url: str, *, label: str = "") -> BrowserTab:
+        return self._record_action("tabs.open", lambda: self._open_tab_impl(url, label=label), {"url": url, "label": label})
+
+    def _open_tab_impl(self, url: str, *, label: str = "") -> BrowserTab:
         self._start_browser_if_needed()
         browser_client = self._connect_browser_client(self._browser_ws_url or "")
         try:
@@ -170,10 +180,13 @@ class LocalCDPBrowserController:
             self._tab_labels[target_id] = label
         self._stale_targets.add(target_id)
         self.focus_tab(target_id)
-        self._wait_ready(self._client_for_target(target_id), wait_ms=5000)
+        self._wait_ready(self._client_for_target(target_id), wait_ms=self.navigation_timeout_ms)
         return self._tab_for_target(target_id)
 
     def focus_tab(self, target_id: str) -> BrowserTab:
+        return self._record_action("tabs.focus", lambda: self._focus_tab_impl(target_id), {"target_id": target_id})
+
+    def _focus_tab_impl(self, target_id: str) -> BrowserTab:
         self._start_browser_if_needed()
         resolved = self._resolve_target_id(target_id)
         browser_client = self._connect_browser_client(self._browser_ws_url or "")
@@ -186,6 +199,9 @@ class LocalCDPBrowserController:
         return self._tab_for_target(resolved)
 
     def close_tab(self, target_id: str) -> dict[str, Any]:
+        return self._record_action("tabs.close", lambda: self._close_tab_impl(target_id), {"target_id": target_id})
+
+    def _close_tab_impl(self, target_id: str) -> dict[str, Any]:
         self._start_browser_if_needed()
         resolved = self._resolve_target_id(target_id)
         browser_client = self._connect_browser_client(self._browser_ws_url or "")
@@ -203,6 +219,13 @@ class LocalCDPBrowserController:
         return {"closed": True, "target_id": resolved}
 
     def navigate(self, url: str, *, target_id: str | None = None, wait_ms: int = 5000) -> BrowserSnapshot:
+        return self._record_action(
+            "navigate",
+            lambda: self._navigate_impl(url, target_id=target_id, wait_ms=wait_ms),
+            {"url": url, "target_id": target_id, "wait_ms": wait_ms},
+        )
+
+    def _navigate_impl(self, url: str, *, target_id: str | None = None, wait_ms: int = 5000) -> BrowserSnapshot:
         client = self._client_for_target_id(target_id)
         self._call(client, "Page.navigate", {"url": url})
         self._wait_ready(client, wait_ms=wait_ms)
@@ -211,6 +234,13 @@ class LocalCDPBrowserController:
         return self.snapshot(target_id=resolved)
 
     def snapshot(self, *, target_id: str | None = None, options: BrowserSnapshotOptions | None = None) -> BrowserSnapshot:
+        return self._record_action(
+            "snapshot",
+            lambda: self._snapshot_impl(target_id=target_id, options=options),
+            {"target_id": target_id, "options": options.model_dump(mode="python") if options is not None else {}},
+        )
+
+    def _snapshot_impl(self, *, target_id: str | None = None, options: BrowserSnapshotOptions | None = None) -> BrowserSnapshot:
         options = options or BrowserSnapshotOptions()
         client = self._client_for_target_id(target_id)
         target = self._target_id_for_client(client, target_id)
@@ -234,6 +264,13 @@ class LocalCDPBrowserController:
         )
 
     def act(self, request: BrowserActRequest, *, target_id: str | None = None) -> BrowserActResult:
+        return self._record_action(
+            "act",
+            lambda: self._act_impl(request, target_id=target_id),
+            {"target_id": target_id, "kind": request.kind, "ref": request.ref},
+        )
+
+    def _act_impl(self, request: BrowserActRequest, *, target_id: str | None = None) -> BrowserActResult:
         client = self._client_for_target_id(target_id)
         target = self._target_id_for_client(client, target_id)
         if request.kind in {"resize", "close", "wait"}:
@@ -250,12 +287,19 @@ class LocalCDPBrowserController:
             stale = self.snapshot(target_id=target)
             return BrowserActResult(snapshot=stale, action=request.kind, requires_resnapshot=True, stale_ref=True)
         self._evaluate(client, self._act_expression(node.selector, request))
-        self._wait_ready(client, wait_ms=request.timeout_ms or 1500)
+        self._wait_ready(client, wait_ms=request.timeout_ms or self.action_timeout_ms)
         self._stale_targets.add(target)
         snapshot = self.snapshot(target_id=target)
         return BrowserActResult(snapshot=snapshot, action=request.kind, requires_resnapshot=request.kind in {"click", "type", "select", "fill", "press"})
 
     def screenshot(self, *, target_id: str | None = None, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
+        return self._record_action(
+            "screenshot",
+            lambda: self._screenshot_impl(target_id=target_id, full_page=full_page, filename=filename),
+            {"target_id": target_id, "full_page": full_page, "filename": filename},
+        )
+
+    def _screenshot_impl(self, *, target_id: str | None = None, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
         client = self._client_for_target_id(target_id)
         payload = self._call(
             client,
@@ -282,13 +326,62 @@ class LocalCDPBrowserController:
         if self._process is not None:
             try:
                 self._process.terminate()
-                self._process.wait(timeout=5)
+                self._process.wait(timeout=self.shutdown_timeout_seconds)
             except Exception:
                 try:
                     self._process.kill()
                 except Exception:
                     pass
         self._process = None
+
+    def _start_and_status(self) -> dict[str, Any]:
+        self._start_browser_if_needed()
+        return self.status()
+
+    def _stop_and_status(self) -> dict[str, Any]:
+        self.close()
+        return self.status()
+
+    def _list_tabs_impl(self) -> list[BrowserTab]:
+        self._start_browser_if_needed()
+        targets = self._list_page_targets()
+        active_target = self._target_id_from_ws(self._page_ws_url or "")
+        tabs: list[BrowserTab] = []
+        for target in targets:
+            target_id = str(target.get("id") or "")
+            tabs.append(
+                BrowserTab(
+                    tab_id=target_id,
+                    target_id=target_id,
+                    label=self._tab_labels.get(target_id, ""),
+                    url=str(target.get("url") or ""),
+                    title=str(target.get("title") or ""),
+                    active=target_id == active_target,
+                )
+            )
+        return tabs
+
+    def _record_action(self, action: str, fn, details: dict[str, Any] | None = None):
+        started = time.time()
+        entry: dict[str, Any] = {
+            "action": action,
+            "started_at": started,
+            "ok": False,
+            "duration_ms": 0,
+            "details": {key: value for key, value in (details or {}).items() if value not in (None, "")},
+        }
+        try:
+            result = fn()
+            entry["ok"] = True
+            return result
+        except Exception as exc:
+            self._last_error = str(exc)
+            entry["error_type"] = type(exc).__name__
+            entry["error"] = str(exc)
+            raise
+        finally:
+            entry["duration_ms"] = int((time.time() - started) * 1000)
+            self._actions.append(entry)
 
     def _act_without_ref(self, client, target: str, request: BrowserActRequest) -> None:
         if request.kind == "resize":
@@ -389,7 +482,11 @@ class LocalCDPBrowserController:
         last_error = ""
         while time.time() < deadline:
             if self._process is not None and self._process.poll() is not None:
-                raise RuntimeError(f"Browser exited before DevTools became available (exit code {self._process.returncode}).")
+                raise RuntimeError(
+                    f"Browser exited before DevTools became available (exit code {self._process.returncode}). "
+                    f"executable={self._diagnose_browser_executable().get('path', '')} "
+                    f"profile={self.user_data_dir}"
+                )
             if devtools_file.exists():
                 try:
                     lines = [line.strip() for line in devtools_file.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -400,7 +497,10 @@ class LocalCDPBrowserController:
                     last_error = str(exc)
             time.sleep(0.2)
         suffix = f" Last error: {last_error}" if last_error else ""
-        raise RuntimeError(f"Timed out waiting for browser DevTools port.{suffix}")
+        raise RuntimeError(
+            f"Timed out waiting for browser DevTools port after {self.connect_timeout_seconds}s.{suffix} "
+            f"executable={self._diagnose_browser_executable().get('path', '')} profile={self.user_data_dir}"
+        )
 
     def _discover_page_ws_url(self, port: int) -> str:
         deadline = time.time() + self.connect_timeout_seconds
@@ -418,7 +518,7 @@ class LocalCDPBrowserController:
                     if target.get("url") != "chrome://newtab/":
                         return str(target["webSocketDebuggerUrl"])
                 if browser_ws is None:
-                    with httpx.Client(timeout=3) as client:
+                    with httpx.Client(timeout=self.cdp_http_timeout_seconds) as client:
                         browser_ws = str(client.get(version_url).json()["webSocketDebuggerUrl"])
             except Exception as exc:
                 last_error = str(exc)
@@ -437,14 +537,14 @@ class LocalCDPBrowserController:
                         pass
             time.sleep(0.2)
         suffix = f" Last error: {last_error}" if last_error else ""
-        raise RuntimeError(f"Timed out waiting for browser page target.{suffix}")
+        raise RuntimeError(f"Timed out waiting for browser page target after {self.connect_timeout_seconds}s.{suffix}")
 
     def _list_page_targets(self, *, port: int | None = None) -> list[dict[str, Any]]:
         port = port or self._devtools_port
         if port is None:
             return []
         list_url = f"http://127.0.0.1:{port}/json/list"
-        with httpx.Client(timeout=3) as client:
+        with httpx.Client(timeout=self.cdp_http_timeout_seconds) as client:
             page_targets = client.get(list_url).json()
         return [
             target
@@ -497,6 +597,24 @@ class LocalCDPBrowserController:
                 return str(candidate)
         raise FileNotFoundError("No local Chrome/Edge executable found. Set capabilities.browser.browser_executable.")
 
+    def _diagnose_browser_executable(self) -> dict[str, Any]:
+        try:
+            path = self._resolve_browser_executable()
+            return {"ok": True, "path": path}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @staticmethod
+    def _diagnose_writable_dir(path: Path) -> dict[str, Any]:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".pp-echo-write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return {"ok": True, "path": str(path)}
+        except Exception as exc:
+            return {"ok": False, "path": str(path), "error": str(exc)}
+
     def _resolve_workspace_path(self, value: str, fallback: Path) -> Path:
         if not value:
             return fallback.resolve()
@@ -518,7 +636,7 @@ class LocalCDPBrowserController:
         self._request_id += 1
         request_id = self._request_id
         client.send(json.dumps({"id": request_id, "method": method, "params": params}))
-        deadline = time.time() + self.connect_timeout_seconds
+        deadline = time.time() + self.cdp_response_timeout_seconds
         while time.time() < deadline:
             raw = client.recv()
             payload = json.loads(raw)
@@ -527,7 +645,7 @@ class LocalCDPBrowserController:
             if "error" in payload:
                 raise RuntimeError(f"CDP {method} failed: {payload['error']}")
             return payload
-        raise TimeoutError(f"Timed out waiting for CDP response to {method}")
+        raise TimeoutError(f"Timed out waiting for CDP response to {method} after {self.cdp_response_timeout_seconds}s")
 
     def _evaluate(self, client, expression: str) -> dict[str, Any]:
         return self._call(

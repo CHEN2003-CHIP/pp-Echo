@@ -16,6 +16,7 @@ export type MessageContentPart =
 export type SnapshotMessage = {
   role: string;
   content: MessageContentPart[];
+  timestamp?: number;
   tool_call_id?: string | null;
   tool_name?: string | null;
   metadata?: {
@@ -155,6 +156,19 @@ export type RuntimeDoctorReport = {
   findings: Array<Record<string, unknown>>;
 };
 
+export type TimelineEntry = {
+  id: string;
+  session_id: string;
+  created_at: number;
+  event_type: string;
+  turn_id?: number;
+  phase?: string | null;
+  tool_name?: string | null;
+  message?: string | null;
+  is_error?: boolean;
+  details?: Record<string, unknown>;
+};
+
 export type OpenWorkspaceResponse = WorkspacesState & {
   requires_confirmation: boolean;
   candidate?: WorkspaceEntry | null;
@@ -185,6 +199,12 @@ export const api = {
   createSession: () => request<SessionSnapshot>("/api/sessions", { method: "POST" }),
   snapshot: (sessionId: string) => request<SessionSnapshot>(`/api/sessions/${sessionId}`),
   events: (sessionId: string) => request<{ events: RuntimeEvent[] }>(`/api/sessions/${sessionId}/events`),
+  timeline: (sessionId?: string, limit = 80) =>
+    request<{ timeline: TimelineEntry[] }>(
+      sessionId
+        ? `/api/sessions/${encodeURIComponent(sessionId)}/timeline?limit=${limit}`
+        : `/api/timeline?limit=${limit}`
+    ),
   tree: (sessionId: string) => request<Record<string, unknown>>(`/api/sessions/${sessionId}/tree`),
   prompt: (sessionId: string, prompt: string) =>
     request<{ session_id: string; queued: boolean }>(`/api/sessions/${sessionId}/prompt`, {

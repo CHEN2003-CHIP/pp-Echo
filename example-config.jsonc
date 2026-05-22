@@ -177,6 +177,24 @@
       // JS evaluate and wait-function style automation are disabled by default.
       "evaluate_enabled": false,
 
+      // Browser startup / websocket connection timeout in seconds.
+      "connect_timeout_seconds": 20,
+
+      // Default navigation/page-ready wait in milliseconds.
+      "navigation_timeout_ms": 5000,
+
+      // Local DevTools HTTP endpoint timeout in seconds.
+      "cdp_http_timeout_seconds": 3,
+
+      // CDP websocket method response timeout in seconds.
+      "cdp_response_timeout_seconds": 20,
+
+      // Default post-action page-ready wait in milliseconds.
+      "action_timeout_ms": 1500,
+
+      // Browser process shutdown wait in seconds.
+      "shutdown_timeout_seconds": 5,
+
       // Default snapshot behavior. Snapshot content is always treated as untrusted_web_content.
       "snapshot_defaults": {
         "refs": true,
@@ -184,6 +202,20 @@
         "compact": true,
         "max_chars": 4000
       }
+    },
+
+    "web": {
+      // provider=auto tries these in order. Baidu/Zhipu/Bing are usually more stable in mainland China;
+      // DuckDuckGo remains as the final public fallback.
+      "search_providers": ["baidu", "zhipu", "bing", "duckduckgo"],
+
+      // Static search/fetch HTTP timeouts.
+      "search_timeout_seconds": 10,
+      "fetch_timeout_seconds": 10,
+
+      // Zhipu search is skipped unless this environment variable is set.
+      "zhipu_api_key_env": "ZHIPUAI_API_KEY",
+      "zhipu_base_url": "https://open.bigmodel.cn/api/paas/v4/tools"
     }
   },
 

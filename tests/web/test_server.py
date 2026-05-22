@@ -16,6 +16,7 @@ from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.storage.models import StoredModelConfig
 from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.runtime.state import AgentEvent
 
 from tests.web.test_session_manager import _factory
 
@@ -100,6 +101,24 @@ def test_web_api_events_polling_endpoint(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert events.status_code == 200
     assert events.json()["events"][0]["type"] == "message_delta"
+
+
+def test_web_api_session_timeline_endpoint(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server_module.bootstrap.timeline_store_for(workspace).append(
+        "session-1",
+        AgentEvent(type="error", session_id="session-1", message="timed out", is_error=True),
+    )
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    response = client.get("/api/sessions/session-1/timeline")
+
+    assert response.status_code == 200
+    assert response.json()["timeline"][0]["event_type"] == "error"
+    assert response.json()["timeline"][0]["message"] == "timed out"
 
 
 def test_web_api_approves_pending_action_token(tmp_path: Path, monkeypatch) -> None:

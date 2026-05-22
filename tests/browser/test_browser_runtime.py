@@ -166,6 +166,24 @@ def test_profile_user_requires_explicit_enable(tmp_path: Path, monkeypatch) -> N
     assert "allow_user_profile" in result.content
 
 
+def test_browser_error_returns_diagnostics(tmp_path: Path, monkeypatch) -> None:
+    settings = _settings(tmp_path, monkeypatch)
+
+    class FailingController(FakeBrowserController):
+        def snapshot(self, *, target_id=None, options=None):
+            raise TimeoutError("timed out waiting for snapshot")
+
+    registry, _loaded = _registry(tmp_path, settings, FailingController())
+
+    result = registry.execute("browser", {"action": "snapshot"})
+
+    assert result.is_error is True
+    assert result.details["error_type"] == "TimeoutError"
+    assert result.details["action"] == "snapshot"
+    assert "diagnostics" in result.details
+    assert result.details["diagnostics"]["runtime"]["controller_ready"] is True
+
+
 def _browser_agent(tmp_path: Path, monkeypatch, llm_client, controller) -> AgentRuntime:
     settings = _settings(tmp_path, monkeypatch)
     registry, _loaded = _registry(tmp_path, settings, controller)
@@ -251,3 +269,36 @@ def test_local_controller_creates_page_target_when_list_is_empty(tmp_path: Path,
     )
 
     assert controller._discover_page_ws_url(123) == "ws://127.0.0.1:123/devtools/page/created-page"
+
+
+def test_browser_runtime_passes_timeout_config_to_local_controller(tmp_path: Path, monkeypatch) -> None:
+    settings = _settings(
+        tmp_path,
+        monkeypatch,
+        {
+            "connect_timeout_seconds": 25,
+            "navigation_timeout_ms": 8000,
+            "cdp_http_timeout_seconds": 4,
+            "cdp_response_timeout_seconds": 12,
+            "action_timeout_ms": 2200,
+            "shutdown_timeout_seconds": 7,
+        },
+    )
+    controller = LocalCDPBrowserController(
+        workspace=tmp_path,
+        connect_timeout_seconds=settings.capabilities.browser.connect_timeout_seconds,
+        navigation_timeout_ms=settings.capabilities.browser.navigation_timeout_ms,
+        cdp_http_timeout_seconds=settings.capabilities.browser.cdp_http_timeout_seconds,
+        cdp_response_timeout_seconds=settings.capabilities.browser.cdp_response_timeout_seconds,
+        action_timeout_ms=settings.capabilities.browser.action_timeout_ms,
+        shutdown_timeout_seconds=settings.capabilities.browser.shutdown_timeout_seconds,
+    )
+
+    status = controller.status()
+
+    assert status["timeouts"]["connect_timeout_seconds"] == 25
+    assert status["timeouts"]["navigation_timeout_ms"] == 8000
+    assert status["timeouts"]["cdp_http_timeout_seconds"] == 4
+    assert status["timeouts"]["cdp_response_timeout_seconds"] == 12
+    assert status["timeouts"]["action_timeout_ms"] == 2200
+    assert status["timeouts"]["shutdown_timeout_seconds"] == 7

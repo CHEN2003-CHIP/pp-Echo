@@ -139,6 +139,31 @@ def test_browser_policy_settings_are_loaded_from_project_config(tmp_path: Path) 
     assert settings.capabilities.browser.snapshot_defaults == {"compact": True}
 
 
+def test_browser_and_web_timeout_config(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir()
+    (project_dir / "config.json").write_text(
+        '{"capabilities":{"browser":{"connect_timeout_seconds":25,"navigation_timeout_ms":8000,'
+        '"cdp_http_timeout_seconds":4,"cdp_response_timeout_seconds":12,"action_timeout_ms":2200,'
+        '"shutdown_timeout_seconds":7},"web":{"search_providers":["baidu","duckduckgo"],'
+        '"search_timeout_seconds":6,"fetch_timeout_seconds":8,"zhipu_api_key_env":"CUSTOM_ZHIPU"}}}',
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.capabilities.browser.connect_timeout_seconds == 25
+    assert settings.capabilities.browser.navigation_timeout_ms == 8000
+    assert settings.capabilities.browser.cdp_http_timeout_seconds == 4
+    assert settings.capabilities.browser.cdp_response_timeout_seconds == 12
+    assert settings.capabilities.browser.action_timeout_ms == 2200
+    assert settings.capabilities.browser.shutdown_timeout_seconds == 7
+    assert settings.capabilities.web.search_providers == ["baidu", "duckduckgo"]
+    assert settings.capabilities.web.search_timeout_seconds == 6
+    assert settings.capabilities.web.fetch_timeout_seconds == 8
+    assert settings.capabilities.web.zhipu_api_key_env == "CUSTOM_ZHIPU"
+
+
 def test_memory_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)

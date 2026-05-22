@@ -124,6 +124,22 @@ def create_app(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/api/sessions/{session_id}/timeline")
+    def session_timeline(session_id: str, limit: int = 80) -> dict:
+        try:
+            entries = bootstrap.timeline_store_for(active_workspace()).list_session(
+                session_id,
+                limit=max(1, min(500, int(limit))),
+            )
+            return {"timeline": [entry.model_dump(mode="json") for entry in entries]}
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/timeline")
+    def recent_timeline(limit: int = 80) -> dict:
+        entries = bootstrap.timeline_store_for(active_workspace()).list_recent(limit=max(1, min(500, int(limit))))
+        return {"timeline": [entry.model_dump(mode="json") for entry in entries]}
+
     @app.get("/api/sessions/{session_id}/tree")
     def session_tree(session_id: str) -> dict:
         try:
