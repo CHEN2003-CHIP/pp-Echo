@@ -48,6 +48,21 @@ def test_web_api_health_and_session_create(tmp_path: Path) -> None:
     assert created.json()["session_id"] == "session-1"
 
 
+def test_web_api_workspace_status_includes_git_branch(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-b", "feature/config-ui"], cwd=workspace, check=True)
+    client = TestClient(_app(tmp_path))
+
+    response = client.get("/api/workspace/status")
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "workspace"
+    assert response.json()["git_branch"] == "feature/config-ui"
+
+
 def test_web_api_prompt_endpoint(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

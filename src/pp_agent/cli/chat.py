@@ -121,7 +121,10 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
             if is_busy():
                 if raw.startswith("/"):
                     #TODO: maybe skill or mcp allowed here?
-                    if raw in {"/session", "/settings", "/status", "/approvals", "/timeline"} or raw.startswith("/tree"):
+                    if (
+                        raw in {"/session", "/settings", "/status", "/approvals", "/timeline", "/tools"}
+                        or raw.startswith(("/tree", "/model ", "/debug set ", "/config set ", "/config patch "))
+                    ):
                         result = safe_handle_command(raw)
                         if result == "quit":
                             console.print("Wait for the current task to finish before quitting.")

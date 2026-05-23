@@ -20,6 +20,7 @@ from pp_agent.capabilities import (
     CapabilityDiscoveryProvider,
     SkillCapabilityDiscoveryProvider,
 )
+from pp_agent.config import get_config_manager
 from pp_agent.domain.checkpoints import CheckpointEntry
 from pp_agent.extensions import ExtensionDescriptor, ExtensionRegistry, load_extensions
 from pp_agent.extensions.hooks import LifecycleSubscriber
@@ -370,7 +371,7 @@ def load_settings(workspace: Path) -> Settings:
     :param workspace: 工作空间路径
     :return: 配置实例
     """
-    return Settings.load(workspace)
+    return get_config_manager(workspace).get_effective_snapshot().settings
 
 
 def configured_subagent_specs(settings: Settings) -> dict[str, SubAgentSpec]:
@@ -943,7 +944,9 @@ def create_runtime_from_record(
     :param lifecycle_subscribers: 生命周期订阅器，可选
     :return: Agent运行时实例
     """
-    settings = load_settings(workspace)
+    config_manager = get_config_manager(workspace)
+    config_snapshot = config_manager.get_effective_snapshot(session_id=record.id)
+    settings = config_snapshot.settings
     options = options or RuntimeCreationOptions.main()
     session_store = session_store_for(workspace)
     tool_registry = ToolRegistry(
@@ -964,7 +967,7 @@ def create_runtime_from_record(
     runtime_hooks = RuntimeHooks()
     llm_client = create_llm_client(
         provider=provider_config_for_llm(settings.provider),
-        model=model_config_for_llm(record.model),
+        model=model_config_for_llm(settings.model),
     )
     agent = AgentRuntime(
         llm_client=llm_client,
@@ -985,6 +988,9 @@ def create_runtime_from_record(
         learning_runtime=learning_runtime_for(workspace, llm_client),
         enforce_orchestrated_edit_contract=settings.subagents.enforce_orchestrated_edit_contract,
         require_patch_artifact_for_code_change=settings.subagents.require_patch_artifact_for_code_change,
+        config_manager=config_manager,
+        config_snapshot=config_snapshot,
+        config_refresh_callback=_refresh_runtime_from_config,
     )
     # 安装自动检查点钩子
     _install_auto_checkpoint_hook(
@@ -1141,6 +1147,11 @@ def reload_runtime_extensions(
         "mcp_enabled": extension_runtime.mcp_runtime is not None,
         "mcp_discovered": extension_runtime.mcp_runtime.status()["discovered"] if extension_runtime.mcp_runtime is not None else False,
     }
+
+
+def _refresh_runtime_from_config(agent: AgentRuntime, _snapshot: object) -> None:
+    """Apply config changes that need the runtime tool surface rebuilt."""
+    reload_runtime_extensions(agent, Path(agent.tool_registry.workspace))
 
 
 def session_defaults_for(workspace: Path) -> dict[str, object]:

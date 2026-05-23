@@ -11,6 +11,7 @@ import {
   Database,
   FileText,
   FolderOpen,
+  GitBranch,
   LayoutDashboard,
   MessageSquare,
   Monitor,
@@ -24,7 +25,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, ConfigField, ConfigSnapshot, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageContent } from "./rich-text";
 
 type ViewKey =
@@ -129,6 +130,7 @@ const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activ
 export function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => readTheme());
   const [workspace, setWorkspace] = useState<WorkspacesState>({ active: { name: "pp-Echo", path: "", exists: true, is_dir: true }, recent: [] });
+  const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null);
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
   const [activeView, setActiveView] = useState<ViewKey>(() => readStoredView());
   const [activeSessionId, setActiveSessionId] = useState<string>(() => window.localStorage.getItem(STORAGE_ACTIVE_SESSION_KEY) || "");
@@ -146,6 +148,8 @@ export function App() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("status");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const [settingsFocus, setSettingsFocus] = useState("general");
   const [searchQuery, setSearchQuery] = useState("");
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
 
@@ -187,6 +191,7 @@ export function App() {
   }, [activeSessionId, sessions.length, notice?.id]);
 
   const activeSnapshot = activeSessionId ? snapshots[activeSessionId] : undefined;
+  const activeSession = activeSessionId ? sessions.find((session) => session.id === activeSessionId) : undefined;
   const activeEvents = activeSessionId ? events[activeSessionId] || [] : [];
   const transcript = useMemo(() => buildTranscript(activeSnapshot, activeEvents), [activeSnapshot, activeEvents]);
   const activityItems = useMemo(() => buildActivityItems(activeEvents), [activeEvents]);
@@ -200,8 +205,9 @@ export function App() {
   const middleMode = activeView === "history" ? "sessions" : activeView === "board" ? "observer" : null;
 
   async function refreshAll() {
-    const [workspaceState, sessionList, approvals] = await Promise.all([api.workspaces(), api.sessions(), api.approvals()]);
+    const [workspaceState, workspaceMeta, sessionList, approvals] = await Promise.all([api.workspaces(), api.workspaceStatus(), api.sessions(), api.approvals()]);
     setWorkspace(workspaceState);
+    setWorkspaceStatus(workspaceMeta);
     setSessions(sortSessionsByUpdatedAt(sessionList.sessions));
     setApprovalSummary(approvals);
     setStatus("Connected");
@@ -311,6 +317,11 @@ export function App() {
       setWorkspaceDraft(workspace.active.path || "");
       return;
     }
+    if (view === "users" || view === "model" || view === "skills" || view === "plugins") {
+      setSettingsFocus(view === "users" ? "general" : view);
+      setSettingsDialogOpen(true);
+      return;
+    }
     if (view === "history") {
       if (activeView === "history") {
         setActiveView("chat");
@@ -382,8 +393,10 @@ export function App() {
     setEvents({});
     setTimeline([]);
     setPrompt("");
+    setWorkspaceStatus(null);
     setApprovalSummary({ count: 0, items: [] });
-    const [sessionList, approvals] = await Promise.all([api.sessions(), api.approvals()]);
+    const [workspaceMeta, sessionList, approvals] = await Promise.all([api.workspaceStatus(), api.sessions(), api.approvals()]);
+    setWorkspaceStatus(workspaceMeta);
     const sorted = sortSessionsByUpdatedAt(sessionList.sessions);
     setSessions(sorted);
     setApprovalSummary(approvals);
@@ -671,6 +684,9 @@ export function App() {
               transcriptRef={transcriptRef}
               transcript={transcript}
               activeSnapshot={activeSnapshot}
+              workspace={workspace}
+              workspaceStatus={workspaceStatus}
+              activeModel={activeSession?.model || ""}
               activeSessionId={activeSessionId}
               displayStatus={displayStatus}
               busy={busy}
@@ -807,6 +823,18 @@ export function App() {
         />
       ) : null}
 
+      {settingsDialogOpen ? (
+        <DynamicSettingsDialog
+          sessionId={activeSessionId}
+          initialCategory={settingsFocus}
+          onClose={() => setSettingsDialogOpen(false)}
+          onSaved={() => {
+            refreshAll().catch(() => undefined);
+            if (activeSessionId) refreshSessionState(activeSessionId).catch(() => undefined);
+          }}
+        />
+      ) : null}
+
       {notice ? (
         <div className={`toast toast-${notice.tone}`}>
           <span>{notice.message}</span>
@@ -816,10 +844,527 @@ export function App() {
   );
 }
 
+const settingsCategoryLabels: Record<string, string> = {
+  general: "General",
+  model: "Model",
+  skills: "Skills",
+  plugins: "Plugins",
+  tools: "Tools",
+  memory: "Memory",
+  browser_web: "Browser/Web",
+  subagents: "Subagents",
+  storage: "Storage",
+  learning: "Learning"
+};
+
+function DynamicSettingsDialog({
+  sessionId,
+  initialCategory,
+  onClose,
+  onSaved
+}: {
+  sessionId: string;
+  initialCategory: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
+  const [category, setCategory] = useState(initialCategory);
+  const [scope, setScope] = useState<"project" | "profile" | "session">(sessionId ? "session" : "project");
+  const [profileDraft, setProfileDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [jsonDraft, setJsonDraft] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    setCategory(initialCategory);
+  }, [initialCategory]);
+
+  useEffect(() => {
+    loadConfig().catch((err) => applyConfigError(err, setError, setFieldErrors));
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope, profileDraft), null, 2));
+  }, [scope, profileDraft, snapshot]);
+
+  async function loadConfig() {
+    const payload = await api.config(sessionId || undefined);
+    setSnapshot(payload);
+    setProfileDraft(payload.active_profile || payload.profiles[0] || "default");
+    setDrafts(buildConfigDrafts(payload));
+    setJsonDraft(JSON.stringify(readScopeConfig(payload, scope), null, 2));
+    setError("");
+    setFieldErrors({});
+    setNotice("");
+  }
+
+  async function applyChanges() {
+    if (!snapshot) return;
+    const dirtyFields = fields.filter((field) => isFieldDirty(snapshot, drafts, field, scope, profileDraft));
+    if (!dirtyFields.length) return;
+    if (scope === "session" && !sessionId) {
+      setError("Open a session before applying session overrides.");
+      return;
+    }
+    const profileName = profileDraft.trim();
+    if (scope === "profile" && !profileName) {
+      setError("Profile name is required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setFieldErrors({});
+    try {
+      let updated = snapshot;
+      let baseHash = snapshot.config_hash;
+      for (const field of dirtyFields) {
+        const value = parseFieldDraft(drafts[field.path], field.type);
+        if (scope === "session" && sessionId) {
+          updated = await api.sessionConfigSet(sessionId, field.path, value);
+        } else if (scope === "profile") {
+          updated = await api.configProfileSet(profileName, field.path, value, baseHash, sessionId || undefined);
+        } else {
+          updated = await api.configSet(field.path, value, baseHash);
+        }
+        baseHash = updated.config_hash;
+      }
+      setSnapshot(updated);
+      setDrafts(buildConfigDrafts(updated));
+      setProfileDraft(updated.active_profile || profileName || updated.profiles[0] || "default");
+      setNotice(scope === "session" ? "Session override saved; takes effect on the next turn." : "Configuration saved.");
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function applyJson() {
+    if (!snapshot) return;
+    setSaving(true);
+    setError("");
+    setFieldErrors({});
+    try {
+      const parsed = JSON.parse(jsonDraft || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON must be an object.");
+      const updated = await api.configPatch(parsed as Record<string, unknown>, snapshot.config_hash);
+      setSnapshot(updated);
+      setDrafts(buildConfigDrafts(updated));
+      setNotice("JSON patch saved.");
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function switchProfile(value: string) {
+    if (!snapshot) return;
+    setSaving(true);
+    setError("");
+    setFieldErrors({});
+    try {
+      const nextProfile = value || null;
+      const updated = scope === "session" && sessionId
+        ? await api.setSessionProfile(sessionId, nextProfile)
+        : await api.setProjectProfile(nextProfile, snapshot.config_hash, sessionId || undefined);
+      setSnapshot(updated);
+      setProfileDraft(updated.active_profile || "");
+      setDrafts(buildConfigDrafts(updated));
+      setNotice(nextProfile ? `Profile switched to ${nextProfile}.` : "Profile cleared.");
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function revertDrafts() {
+    if (!snapshot) return;
+    setDrafts(buildConfigDrafts(snapshot));
+    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope, profileDraft), null, 2));
+    setError("");
+    setFieldErrors({});
+  }
+
+  const savingPath = saving ? "__batch__" : "";
+  async function saveField(field: ConfigField) {
+    if (!snapshot) return;
+    setSaving(true);
+    setError("");
+    try {
+      const value = parseFieldDraft(drafts[field.path], field.type);
+      const updated = field.path === "model.model" && sessionId
+        ? await api.setSessionModel(sessionId, String(value))
+        : await api.configSet(field.path, value, snapshot.config_hash);
+      setSnapshot(updated);
+      setDrafts(buildConfigDrafts(updated));
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fields = snapshot?.schema.fields || [];
+  const categories = ["general", "model", "skills", "plugins", "tools", "memory", "browser_web", "subagents", "storage", "learning"]
+    .filter((item) => item === "general" || fields.some((field) => field.category === item));
+  const visibleFields = category === "general"
+    ? fields.filter((field) => ["provider.base_url", "tool_policy.confirm_high_risk_plan", "capabilities.builtin_tools.enable"].includes(field.path))
+    : fields.filter((field) => field.category === category);
+  const dirtyCount = snapshot ? fields.filter((field) => isFieldDirty(snapshot, drafts, field, scope, profileDraft)).length : 0;
+  const reloadTone = snapshot?.reload_policy || "hot";
+
+  return (
+    <div className="settings-dialog-backdrop">
+      <section className="settings-dialog settings-workbench">
+        <header className="settings-dialog-head">
+          <div>
+            <small>CONFIG</small>
+            <h2>Dynamic settings</h2>
+            <p>{snapshot ? `effective ${snapshot.effective_hash.slice(0, 12)} · project ${snapshot.config_hash.slice(0, 12)}` : "Loading"}</p>
+          </div>
+          {snapshot ? (
+            <div className="settings-head-meta">
+              <span className={`reload-badge reload-${reloadTone}`}>{snapshot.reload_policy}</span>
+              <span>{snapshot.active_profile || "no profile"}</span>
+            </div>
+          ) : null}
+          <button className="icon-button" onClick={onClose} title="Close">
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="settings-dialog-body">
+          <nav className="settings-category-list">
+            <div className="settings-scope-panel">
+              <span>Scope</span>
+              <div className="segmented-control">
+                <button className={scope === "project" ? "active" : ""} onClick={() => setScope("project")}>Project</button>
+                <button className={scope === "profile" ? "active" : ""} onClick={() => setScope("profile")}>Profile</button>
+                <button className={scope === "session" ? "active" : ""} onClick={() => setScope("session")} disabled={!sessionId}>Session</button>
+              </div>
+              <select value={snapshot?.active_profile || ""} onChange={(event) => switchProfile(event.target.value)} disabled={!snapshot || saving}>
+                <option value="">No active profile</option>
+                {(snapshot?.profiles || []).map((profile) => <option key={profile} value={profile}>{profile}</option>)}
+              </select>
+              {scope === "profile" ? (
+                <input value={profileDraft} onChange={(event) => setProfileDraft(event.target.value)} placeholder="profile name" />
+              ) : null}
+            </div>
+            {categories.map((item) => (
+              <button key={item} className={category === item ? "active" : ""} onClick={() => setCategory(item)}>
+                {settingsCategoryLabels[item] || item}
+              </button>
+            ))}
+          </nav>
+
+          <div className="settings-editor">
+            <div className="settings-editor-toolbar">
+              <div>
+                <strong>{settingsCategoryLabels[category] || category}</strong>
+                <span>{scopeLabel(scope, profileDraft, sessionId)}</span>
+              </div>
+              <button onClick={loadConfig} disabled={saving}>
+                <RefreshCw size={14} /> Reload
+              </button>
+            </div>
+            {error ? <p className="settings-error">{error}</p> : null}
+            {notice ? <p className="settings-success">{notice}</p> : null}
+            {snapshot?.pending_effects?.length ? (
+              <div className="settings-pending">
+                {snapshot.pending_effects.slice(0, 5).map((effect) => <span key={effect}>{effect}</span>)}
+              </div>
+            ) : null}
+            {!snapshot ? <p className="muted">Loading config...</p> : null}
+            {snapshot && visibleFields.map((field) => {
+              const dirty = isFieldDirty(snapshot, drafts, field, scope, profileDraft);
+              const source = snapshot.source_map[field.path] || "default/env";
+              const fieldError = fieldErrors[field.path];
+              return (
+                <div className={`settings-field ${dirty ? "dirty" : ""} ${fieldError ? "invalid" : ""}`} key={field.path}>
+                  <div className="settings-field-copy">
+                    <strong>{field.path}</strong>
+                    <span>{source} · {field.reload_policy}</span>
+                    {field.description ? <em>{field.description}</em> : null}
+                    {fieldError ? <b>{fieldError}</b> : null}
+                  </div>
+                  {renderConfigInput(field, drafts[field.path] || "", (value) => setDrafts((current) => ({ ...current, [field.path]: value })))}
+                  <span className="settings-field-state">{dirty ? "Changed" : "Synced"}</span>
+                </div>
+              );
+            })}
+            {advancedOpen && snapshot ? (
+              <div className="settings-json-editor">
+                <div>
+                  <strong>Advanced JSON</strong>
+                  <span>{scope === "project" ? "Project patch editor" : "Read-only layer preview"}</span>
+                </div>
+                <textarea value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} readOnly={scope !== "project"} />
+                {scope === "project" ? <button onClick={applyJson} disabled={saving}>Apply JSON</button> : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <footer className="settings-action-bar">
+          <button onClick={() => setAdvancedOpen((value) => !value)}>{advancedOpen ? "Hide JSON" : "Advanced JSON"}</button>
+          <span>{dirtyCount} pending change{dirtyCount === 1 ? "" : "s"}</span>
+          <button onClick={revertDrafts} disabled={!dirtyCount || saving}>Revert</button>
+          <button onClick={revertDrafts} disabled={!dirtyCount || saving}>Reset</button>
+          <button className="primary" onClick={applyChanges} disabled={!dirtyCount || saving}>{saving ? "Applying" : "Apply"}</button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function SettingsDialog({
+  sessionId,
+  initialCategory,
+  onClose,
+  onSaved
+}: {
+  sessionId: string;
+  initialCategory: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
+  const [category, setCategory] = useState(initialCategory);
+  const [scope, setScope] = useState<"project" | "profile" | "session">(sessionId ? "session" : "project");
+  const [profileDraft, setProfileDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [jsonDraft, setJsonDraft] = useState("");
+
+  useEffect(() => {
+    setCategory(initialCategory);
+  }, [initialCategory]);
+
+  useEffect(() => {
+    loadConfig().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [sessionId]);
+
+  async function loadConfig() {
+    const payload = await api.config(sessionId || undefined);
+    setSnapshot(payload);
+    setProfileDraft(payload.active_profile || payload.profiles[0] || "default");
+    setDrafts(buildConfigDrafts(payload));
+    setJsonDraft(JSON.stringify(readScopeConfig(payload, scope), null, 2));
+    setError("");
+    setFieldErrors({});
+  }
+
+  useEffect(() => {
+    if (!snapshot) return;
+    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope, profileDraft), null, 2));
+  }, [scope, profileDraft, snapshot]);
+
+  async function applyChanges() {
+    if (!snapshot) return;
+    const dirtyFields = fields.filter((field) => isFieldDirty(snapshot, drafts, field, scope, profileDraft));
+    if (dirtyFields.length === 0) return;
+    if (scope === "session" && !sessionId) {
+      setError("Open a session before applying session overrides.");
+      return;
+    }
+    const profileName = profileDraft.trim();
+    if (scope === "profile" && !profileName) {
+      setError("Profile name is required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setFieldErrors({});
+    try {
+      let updated = snapshot;
+      let baseHash = snapshot.config_hash;
+      for (const field of dirtyFields) {
+        const value = parseFieldDraft(drafts[field.path], field.type);
+        if (scope === "session" && sessionId) {
+          updated = await api.sessionConfigSet(sessionId, field.path, value);
+        } else if (scope === "profile") {
+          updated = await api.configProfileSet(profileName, field.path, value, baseHash, sessionId || undefined);
+        } else {
+          updated = await api.configSet(field.path, value, baseHash);
+        }
+        baseHash = updated.config_hash;
+      }
+      setSnapshot(updated);
+      setDrafts(buildConfigDrafts(updated));
+      setProfileDraft(updated.active_profile || profileName || updated.profiles[0] || "default");
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function applyJson() {
+    if (!snapshot) return;
+    setSaving(true);
+    setError("");
+    setFieldErrors({});
+    try {
+      const parsed = JSON.parse(jsonDraft || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON must be an object.");
+      const updated = await api.configPatch(parsed as Record<string, unknown>, snapshot.config_hash);
+      setSnapshot(updated);
+      setDrafts(buildConfigDrafts(updated));
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function switchProfile(value: string) {
+    if (!snapshot) return;
+    setSaving(true);
+    setError("");
+    try {
+      const nextProfile = value || null;
+      const updated = scope === "session" && sessionId
+        ? await api.setSessionProfile(sessionId, nextProfile)
+        : await api.setProjectProfile(nextProfile, snapshot.config_hash, sessionId || undefined);
+      setSnapshot(updated);
+      setProfileDraft(updated.active_profile || "");
+      setDrafts(buildConfigDrafts(updated));
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function revertDrafts() {
+    if (!snapshot) return;
+    setDrafts(buildConfigDrafts(snapshot));
+    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope, profileDraft), null, 2));
+    setError("");
+    setFieldErrors({});
+  }
+
+  const savingPath = saving ? "__batch__" : "";
+  async function saveField(field: ConfigField) {
+    if (!snapshot) return;
+    setSaving(true);
+    setError("");
+    try {
+      const value = parseFieldDraft(drafts[field.path], field.type);
+      const updated = field.path === "model.model" && sessionId
+        ? await api.setSessionModel(sessionId, String(value))
+        : await api.configSet(field.path, value, snapshot.config_hash);
+      setSnapshot(updated);
+      setDrafts(buildConfigDrafts(updated));
+      onSaved();
+    } catch (err) {
+      applyConfigError(err, setError, setFieldErrors);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fields = snapshot?.schema.fields || [];
+  const categories = ["general", "model", "skills", "plugins", "tools", "memory", "browser_web", "subagents", "storage", "learning"]
+    .filter((item) => item === "general" || fields.some((field) => field.category === item));
+  const visibleFields = category === "general"
+    ? fields.filter((field) => ["provider.base_url", "tool_policy.confirm_high_risk_plan", "capabilities.builtin_tools.enable"].includes(field.path))
+    : fields.filter((field) => field.category === category);
+  const dirtyCount = snapshot ? fields.filter((field) => isFieldDirty(snapshot, drafts, field, scope, profileDraft)).length : 0;
+  const reloadTone = snapshot?.reload_policy || "hot";
+
+  return (
+    <div className="settings-dialog-backdrop">
+      <section className="settings-dialog">
+        <header className="settings-dialog-head">
+          <div>
+            <small>CONFIG</small>
+            <h2>Dynamic settings</h2>
+            <p>{snapshot ? `hash ${snapshot.config_hash.slice(0, 12)} · ${snapshot.reload_policy}` : "Loading"}</p>
+          </div>
+          <button className="icon-button" onClick={onClose} title="Close">
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="settings-dialog-body">
+          <nav className="settings-category-list">
+            {categories.map((item) => (
+              <button key={item} className={category === item ? "active" : ""} onClick={() => setCategory(item)}>
+                {settingsCategoryLabels[item] || item}
+              </button>
+            ))}
+          </nav>
+
+          <div className="settings-editor">
+            <div className="settings-editor-toolbar">
+              <strong>{settingsCategoryLabels[category] || category}</strong>
+              <button onClick={loadConfig}>
+                <RefreshCw size={14} /> Reload
+              </button>
+            </div>
+            {error ? <p className="settings-error">{error}</p> : null}
+            {!snapshot ? <p className="muted">Loading config...</p> : null}
+            {snapshot && visibleFields.map((field) => {
+              const dirty = drafts[field.path] !== stringifyConfigValue(readConfigPath(snapshot.settings, field.path));
+              const source = snapshot.source_map[field.path] || "default/env";
+              return (
+                <div className="settings-field" key={field.path}>
+                  <div className="settings-field-copy">
+                    <strong>{field.path}</strong>
+                    <span>{source} · {field.reload_policy}</span>
+                  </div>
+                  {field.type === "boolean" ? (
+                    <label className="settings-toggle">
+                      <input
+                        type="checkbox"
+                        checked={drafts[field.path] === "true"}
+                        onChange={(event) => setDrafts((current) => ({ ...current, [field.path]: String(event.target.checked) }))}
+                      />
+                    </label>
+                  ) : (
+                    <input
+                      value={drafts[field.path] || ""}
+                      onChange={(event) => setDrafts((current) => ({ ...current, [field.path]: event.target.value }))}
+                    />
+                  )}
+                  <button disabled={!dirty || savingPath === field.path} onClick={() => saveField(field)}>
+                    {savingPath === field.path ? "Saving" : "Save"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ChatWorkspace({
   transcriptRef,
   transcript,
   activeSnapshot,
+  workspace,
+  workspaceStatus,
+  activeModel,
   activeSessionId,
   displayStatus,
   busy,
@@ -845,6 +1390,9 @@ function ChatWorkspace({
   transcriptRef: RefObject<HTMLElement>;
   transcript: TranscriptItem[];
   activeSnapshot?: SessionSnapshot;
+  workspace: WorkspacesState;
+  workspaceStatus: WorkspaceStatus | null;
+  activeModel: string;
   activeSessionId: string;
   displayStatus: string;
   busy: boolean;
@@ -956,6 +1504,20 @@ function ChatWorkspace({
             <Plus size={16} />
           </button>
         </footer>
+        <div className="composer-statusbar">
+          <span>
+            <FolderOpen size={14} />
+            {workspaceStatus?.name || workspace.active.name || "workspace"}
+          </span>
+          <span>
+            <GitBranch size={14} />
+            {workspaceStatus?.git_branch || "no branch"}
+          </span>
+          <span>
+            <Monitor size={14} />
+            {activeModel || (activeSnapshot?.history?.source === "stored" ? "stored session" : "model pending")}
+          </span>
+        </div>
       </section>
     </div>
   );
@@ -1223,6 +1785,143 @@ function computeSessionStats(items: SessionEntry[]) {
     total: items.length,
     active: items.filter((item) => Boolean(item.pending_plan_token)).length
   };
+}
+
+function scopeLabel(scope: "project" | "profile" | "session", profile: string, sessionId: string) {
+  if (scope === "profile") return `Profile: ${profile || "new profile"}`;
+  if (scope === "session") return sessionId ? `Session override: ${shortId(sessionId)}` : "Session override unavailable";
+  return "Project defaults";
+}
+
+function readScopeConfig(snapshot: ConfigSnapshot, scope: "project" | "profile" | "session", profile?: string) {
+  if (scope === "session") return snapshot.session_config || {};
+  if (scope === "profile") {
+    const profiles = (snapshot.project_config.profiles || {}) as Record<string, unknown>;
+    const name = profile || snapshot.active_profile || "";
+    const value = profiles[name];
+    return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  }
+  return snapshot.project_config || {};
+}
+
+function isFieldDirty(
+  snapshot: ConfigSnapshot,
+  drafts: Record<string, string>,
+  field: ConfigField,
+  scope: "project" | "profile" | "session",
+  profile?: string
+) {
+  const layer = readScopeConfig(snapshot, scope, profile);
+  const layerValue = readConfigPath(layer, field.path);
+  const baseline = layerValue === undefined ? readConfigPath(snapshot.settings, field.path) : layerValue;
+  return (drafts[field.path] || "") !== stringifyConfigValue(baseline);
+}
+
+function renderConfigInput(field: ConfigField, value: string, onChange: (value: string) => void) {
+  if (field.type === "boolean") {
+    return (
+      <label className="settings-toggle">
+        <input type="checkbox" checked={value === "true"} onChange={(event) => onChange(String(event.target.checked))} />
+      </label>
+    );
+  }
+  if (field.options?.length) {
+    return (
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    );
+  }
+  if (field.type === "array") {
+    const chips = value.trim().startsWith("[") ? parseArrayPreview(value) : value.split(",").map((item) => item.trim()).filter(Boolean);
+    return (
+      <div className="settings-array-editor">
+        <div>{chips.slice(0, 8).map((item) => <span key={item}>{item}</span>)}</div>
+        <input value={value} onChange={(event) => onChange(event.target.value)} placeholder="comma list or JSON array" />
+      </div>
+    );
+  }
+  if (field.type === "object") {
+    return <textarea className="settings-inline-json" value={value} onChange={(event) => onChange(event.target.value)} />;
+  }
+  return (
+    <input
+      type={field.type.startsWith("integer") || field.type === "number" ? "number" : "text"}
+      min={field.minimum ?? undefined}
+      max={field.maximum ?? undefined}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+function parseArrayPreview(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function applyConfigError(
+  err: unknown,
+  setError: (value: string) => void,
+  setFieldErrors: (value: Record<string, string>) => void
+) {
+  const message = err instanceof Error ? err.message : String(err);
+  try {
+    const payload = JSON.parse(message);
+    const errors = Array.isArray(payload.errors) ? payload.errors : [];
+    const next: Record<string, string> = {};
+    errors.forEach((item: Record<string, unknown>) => {
+      if (typeof item.path === "string") next[item.path] = String(item.message || item.code || "Invalid value");
+    });
+    setFieldErrors(next);
+    setError(String(payload.message || "Config validation failed."));
+    return;
+  } catch {
+    setError(message.includes("[object Object]") ? "Config conflict or validation error. Reload and reapply the change." : message);
+  }
+}
+
+function buildConfigDrafts(snapshot: ConfigSnapshot) {
+  const drafts: Record<string, string> = {};
+  snapshot.schema.fields.forEach((field) => {
+    drafts[field.path] = stringifyConfigValue(readConfigPath(snapshot.settings, field.path));
+  });
+  return drafts;
+}
+
+function readConfigPath(source: Record<string, unknown>, path: string): unknown {
+  return path.split(".").reduce<unknown>((current, part) => {
+    if (!current || typeof current !== "object") return undefined;
+    return (current as Record<string, unknown>)[part];
+  }, source);
+}
+
+function stringifyConfigValue(value: unknown) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function parseFieldDraft(value: string | undefined, type: string): unknown {
+  const text = (value || "").trim();
+  if (type === "boolean") return text === "true";
+  if (type.startsWith("integer")) return text ? Number.parseInt(text, 10) : null;
+  if (type === "number") return text ? Number.parseFloat(text) : 0;
+  if (type === "array") {
+    if (!text) return [];
+    if (!text.startsWith("[")) return text.split(",").map((item) => item.trim()).filter(Boolean);
+    return JSON.parse(text);
+  }
+  if (type === "object" || type.includes("null")) {
+    if (!text) return type.includes("null") ? null : {};
+    return JSON.parse(text);
+  }
+  return value || "";
 }
 
 function readTheme(): ThemeMode {

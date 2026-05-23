@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -70,6 +71,10 @@ def create_app(
     def session_manager() -> WebSessionManager:
         return workspace_manager.active_session_manager()
 
+    from pp_agent.server.routes.config import mount_config_routes
+
+    mount_config_routes(app, active_workspace, session_manager)
+
     @app.middleware("http")
     async def no_cache(request, call_next):
         response = await call_next(request)
@@ -84,6 +89,15 @@ def create_app(
     def workspace_info() -> dict:
         workspace = active_workspace()
         return {"path": str(workspace), "name": workspace.name or str(workspace)}
+
+    @app.get("/api/workspace/status")
+    def workspace_status() -> dict:
+        workspace = active_workspace()
+        return {
+            "path": str(workspace),
+            "name": workspace.name or str(workspace),
+            "git_branch": _git_branch(workspace),
+        }
 
     @app.get("/api/workspaces")
     def workspaces() -> dict:
@@ -285,3 +299,30 @@ def create_app(
         app.mount("/", StaticFiles(directory=static_root, html=True), name="web")
 
     return app
+
+
+def _git_branch(workspace: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=workspace,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        branch = result.stdout.strip()
+        if branch:
+            return branch
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=workspace,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        commit = result.stdout.strip()
+        return f"detached:{commit}" if commit else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""

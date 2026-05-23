@@ -12,15 +12,16 @@ from typing import Any, Protocol
 
 import httpx
 
+# 导入浏览器相关的数据模型
 from pp_agent.browser.models import (
-    BrowserActRequest,
-    BrowserActResult,
-    BrowserBounds,
-    BrowserNode,
-    BrowserProfile,
-    BrowserSnapshot,
-    BrowserSnapshotOptions,
-    BrowserTab,
+    BrowserActRequest,   # 浏览器操作请求
+    BrowserActResult,    # 浏览器操作结果
+    BrowserBounds,       # 元素位置大小
+    BrowserNode,         # 页面元素节点
+    BrowserProfile,      # 浏览器配置文件
+    BrowserSnapshot,     # 页面快照
+    BrowserSnapshotOptions, # 快照选项
+    BrowserTab,          # 标签页
 )
 
 

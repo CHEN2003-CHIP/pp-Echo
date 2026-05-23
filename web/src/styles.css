@@ -1716,6 +1716,40 @@ body {
   color: var(--app-accent);
 }
 
+.composer-statusbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 20px 18px;
+  margin-top: -8px;
+}
+
+.composer-statusbar span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-panel);
+  color: var(--app-text);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-success {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(107, 216, 176, 0.24);
+  border-radius: 9px;
+  background: rgba(107, 216, 176, 0.08);
+  color: var(--app-success);
+  font-size: 12px;
+}
+
 .inspector-drawer {
   min-width: 0;
   min-height: 0;
@@ -2255,4 +2289,389 @@ body {
 
 .workspace-dialog-note {
   margin: 0;
+}
+
+.settings-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.44);
+  backdrop-filter: blur(8px);
+}
+
+.settings-dialog {
+  width: min(980px, 100%);
+  height: min(760px, calc(100vh - 48px));
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: var(--app-panel);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow);
+  overflow: hidden;
+}
+
+.settings-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.settings-dialog-head small,
+.settings-field-copy span {
+  color: var(--app-muted-2);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-dialog-head h2 {
+  margin: 3px 0;
+  font-size: 16px;
+}
+
+.settings-dialog-head p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.settings-dialog-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+
+.settings-category-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 12px;
+  border-right: 1px solid var(--app-border);
+  background: var(--app-bg-2);
+}
+
+.settings-category-list button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--app-muted);
+  text-align: left;
+}
+
+.settings-category-list button:hover,
+.settings-category-list button.active {
+  border-color: var(--app-border);
+  background: var(--app-panel);
+  color: var(--app-text);
+}
+
+.settings-editor {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 14px;
+}
+
+.settings-editor-toolbar,
+.settings-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.settings-editor-toolbar button,
+.settings-field button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel-2);
+}
+
+.settings-field {
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 320px) 76px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+  background: var(--app-bg-2);
+}
+
+.settings-field-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-field-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.settings-field input[type="text"],
+.settings-field input:not([type]) {
+  min-width: 0;
+}
+
+.settings-field input {
+  height: 34px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--app-panel);
+  color: var(--app-text);
+}
+
+.settings-toggle {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.settings-toggle input {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-field button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-workbench {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.settings-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.reload-badge,
+.settings-pending span,
+.settings-array-editor span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--app-border);
+  background: var(--app-panel-2);
+  color: var(--app-text);
+  font-size: 11px;
+}
+
+.reload-hot { color: var(--app-success); }
+.reload-next_turn { color: var(--app-accent); }
+.reload-rebuild_runtime { color: var(--app-warning); }
+.reload-restart_required { color: var(--app-danger); }
+
+.settings-scope-panel {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+  background: var(--app-panel);
+}
+
+.settings-scope-panel > span,
+.settings-editor-toolbar span,
+.settings-json-editor span {
+  color: var(--app-muted);
+  font-size: 11px;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.segmented-control button {
+  min-height: 30px;
+  padding: 0 6px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.settings-scope-panel select,
+.settings-scope-panel input,
+.settings-field select,
+.settings-field textarea,
+.settings-array-editor input,
+.settings-json-editor textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--app-panel);
+  color: var(--app-text);
+}
+
+.settings-scope-panel select,
+.settings-scope-panel input,
+.settings-field select {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.settings-editor-toolbar > div {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-pending {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(224, 188, 99, 0.24);
+  border-radius: 9px;
+  background: rgba(224, 188, 99, 0.07);
+}
+
+.settings-field.dirty {
+  border-color: rgba(89, 189, 243, 0.42);
+  background: var(--app-panel);
+}
+
+.settings-field.invalid {
+  border-color: rgba(239, 141, 141, 0.44);
+}
+
+.settings-field-copy em,
+.settings-field-copy b {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.settings-field-copy em { color: var(--app-muted); }
+.settings-field-copy b { color: var(--app-danger); }
+
+.settings-field-state {
+  color: var(--app-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.settings-array-editor {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-array-editor > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 24px;
+}
+
+.settings-inline-json {
+  min-height: 74px;
+  padding: 8px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.settings-json-editor {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+  background: var(--app-bg-2);
+}
+
+.settings-json-editor > div {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-json-editor textarea {
+  min-height: 180px;
+  padding: 10px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.settings-json-editor button {
+  justify-self: end;
+}
+
+.settings-action-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-panel);
+}
+
+.settings-action-bar span {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.settings-action-bar button,
+.settings-json-editor button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel-2);
+}
+
+.settings-action-bar button.primary {
+  border-color: rgba(89, 189, 243, 0.36);
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
+}
+
+.settings-action-bar button:disabled,
+.settings-scope-panel button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 141, 141, 0.28);
+  border-radius: 9px;
+  background: rgba(239, 141, 141, 0.08);
+  color: var(--app-danger);
+  font-size: 12px;
 }
