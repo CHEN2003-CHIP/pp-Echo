@@ -71,46 +71,61 @@ class BrowserController(Protocol):
 
 class LocalCDPBrowserController:
     """
-    Local Chrome/Edge bridge via the DevTools protocol.
+    通过Chrome开发者工具协议(CDP)连接本地Chrome/Edge浏览器的桥接类
+    负责：启动浏览器、建立CDP连接、执行所有页面操作
     """
 
     def __init__(
         self,
         *,
-        workspace: Path,
-        browser_executable: str = "",
-        user_data_dir: str = "",
-        screenshot_dir: str = "",
-        launch_flags: list[str] | None = None,
-        connect_timeout_seconds: int = 20,
-        navigation_timeout_ms: int = 5000,
-        cdp_http_timeout_seconds: int = 3,
-        cdp_response_timeout_seconds: int | None = None,
-        action_timeout_ms: int = 1500,
-        shutdown_timeout_seconds: int = 5,
+        workspace: Path,                # 工作目录
+        browser_executable: str = "",   # 浏览器可执行文件路径
+        user_data_dir: str = "",        # 用户数据目录（保存登录信息）
+        screenshot_dir: str = "",        # 截图保存目录
+        launch_flags: list[str] | None = None, # 浏览器启动参数
+        connect_timeout_seconds: int = 20,     # 连接超时
+        navigation_timeout_ms: int = 5000,     # 页面导航超时
+        cdp_http_timeout_seconds: int = 3,     # CDP HTTP请求超时
+        cdp_response_timeout_seconds: int | None = None, # CDP响应超时
+        action_timeout_ms: int = 1500,   # 操作超时
+        shutdown_timeout_seconds: int = 5, # 关闭超时
     ) -> None:
         self.workspace = workspace.resolve()
         self.browser_executable = browser_executable.strip()
+        # 解析用户数据目录（默认在工作目录下）
         self.user_data_dir = self._resolve_workspace_path(user_data_dir, self.workspace / ".pp-agent" / "browser" / "profile")
         self.screenshot_dir = self._resolve_workspace_path(screenshot_dir, self.workspace / ".pp-agent" / "browser" / "screenshots")
         self.launch_flags = list(launch_flags or [])
+        # 初始化各类超时时间（确保最小值合理）
         self.connect_timeout_seconds = max(5, int(connect_timeout_seconds))
         self.navigation_timeout_ms = max(0, int(navigation_timeout_ms))
         self.cdp_http_timeout_seconds = max(1, int(cdp_http_timeout_seconds))
         self.cdp_response_timeout_seconds = max(1, int(cdp_response_timeout_seconds or self.connect_timeout_seconds))
         self.action_timeout_ms = max(0, int(action_timeout_ms))
         self.shutdown_timeout_seconds = max(1, int(shutdown_timeout_seconds))
+        # 浏览器进程对象
         self._process: subprocess.Popen[str] | None = None
+        # 页面WebSocket客户端缓存：target_id -> websocket连接
         self._clients: dict[str, Any] = {}
+        # 浏览器级WebSocket URL
         self._browser_ws_url: str | None = None
+        # 当前激活页面的WebSocket URL
         self._page_ws_url: str | None = None
+        # CDP调试端口
         self._devtools_port: int | None = None
+        # CDP请求ID（自增）
         self._request_id = 0
+        # 标签页自定义名称映射
         self._tab_labels: dict[str, str] = {}
+        # 元素引用映射：target_id -> {ref: BrowserNode}
         self._ref_maps: dict[str, dict[str, BrowserNode]] = {}
+        # 快照ID映射
         self._snapshot_ids: dict[str, str] = {}
+        # 已失效的目标标签页集合
         self._stale_targets: set[str] = set()
+        # 最后一次错误信息
         self._last_error = ""
+        # 最近操作记录（最多50条）
         self._actions: deque[dict[str, Any]] = deque(maxlen=50)
 
     def doctor(self) -> dict[str, Any]:
@@ -169,32 +184,44 @@ class LocalCDPBrowserController:
     def open_tab(self, url: str, *, label: str = "") -> BrowserTab:
         return self._record_action("tabs.open", lambda: self._open_tab_impl(url, label=label), {"url": url, "label": label})
 
+    # 打开标签页的具体实现
     def _open_tab_impl(self, url: str, *, label: str = "") -> BrowserTab:
+        # 确保浏览器已启动
         self._start_browser_if_needed()
+        # 连接浏览器WebSocket
         browser_client = self._connect_browser_client(self._browser_ws_url or "")
         try:
+            # 调用CDP接口创建新标签页
             payload = self._call(browser_client, "Target.createTarget", {"url": url})
             target_id = str(payload.get("result", {}).get("targetId") or "")
         finally:
             browser_client.close()
+        # 设置标签页名称
         if label:
             self._tab_labels[target_id] = label
+        # 标记为需要重新快照
         self._stale_targets.add(target_id)
+        # 聚焦新标签页
         self.focus_tab(target_id)
+        # 等待页面加载完成
         self._wait_ready(self._client_for_target(target_id), wait_ms=self.navigation_timeout_ms)
         return self._tab_for_target(target_id)
 
     def focus_tab(self, target_id: str) -> BrowserTab:
         return self._record_action("tabs.focus", lambda: self._focus_tab_impl(target_id), {"target_id": target_id})
 
+    # 聚焦标签页具体实现
     def _focus_tab_impl(self, target_id: str) -> BrowserTab:
         self._start_browser_if_needed()
+        # 解析目标ID
         resolved = self._resolve_target_id(target_id)
         browser_client = self._connect_browser_client(self._browser_ws_url or "")
         try:
+            # 调用CDP激活标签页
             self._call(browser_client, "Target.activateTarget", {"targetId": resolved})
         finally:
             browser_client.close()
+        # 更新当前页面WebSocket
         self._page_ws_url = self._ws_url_for_target(resolved)
         self._stale_targets.add(resolved)
         return self._tab_for_target(resolved)
@@ -202,19 +229,23 @@ class LocalCDPBrowserController:
     def close_tab(self, target_id: str) -> dict[str, Any]:
         return self._record_action("tabs.close", lambda: self._close_tab_impl(target_id), {"target_id": target_id})
 
+    # 关闭标签页具体实现
     def _close_tab_impl(self, target_id: str) -> dict[str, Any]:
         self._start_browser_if_needed()
         resolved = self._resolve_target_id(target_id)
         browser_client = self._connect_browser_client(self._browser_ws_url or "")
         try:
+            # 调用CDP关闭标签页
             self._call(browser_client, "Target.closeTarget", {"targetId": resolved})
         finally:
             browser_client.close()
+        # 清理缓存数据
         self._clients.pop(resolved, None)
         self._tab_labels.pop(resolved, None)
         self._ref_maps.pop(resolved, None)
         self._snapshot_ids.pop(resolved, None)
         self._stale_targets.discard(resolved)
+        # 如果关闭的是当前激活页，重新发现激活页
         if self._page_ws_url and self._target_id_from_ws(self._page_ws_url) == resolved:
             self._page_ws_url = self._discover_page_ws_url(self._devtools_port or 0)
         return {"closed": True, "target_id": resolved}
@@ -226,12 +257,17 @@ class LocalCDPBrowserController:
             {"url": url, "target_id": target_id, "wait_ms": wait_ms},
         )
 
+    # 导航具体实现
     def _navigate_impl(self, url: str, *, target_id: str | None = None, wait_ms: int = 5000) -> BrowserSnapshot:
+        # 获取页面客户端
         client = self._client_for_target_id(target_id)
+        # 执行导航
         self._call(client, "Page.navigate", {"url": url})
+        # 等待加载完成
         self._wait_ready(client, wait_ms=wait_ms)
         resolved = self._target_id_for_client(client, target_id)
         self._stale_targets.add(resolved)
+        # 返回新页面快照
         return self.snapshot(target_id=resolved)
 
     def snapshot(self, *, target_id: str | None = None, options: BrowserSnapshotOptions | None = None) -> BrowserSnapshot:
@@ -241,17 +277,22 @@ class LocalCDPBrowserController:
             {"target_id": target_id, "options": options.model_dump(mode="python") if options is not None else {}},
         )
 
+    # 快照具体实现（核心）
     def _snapshot_impl(self, *, target_id: str | None = None, options: BrowserSnapshotOptions | None = None) -> BrowserSnapshot:
         options = options or BrowserSnapshotOptions()
         client = self._client_for_target_id(target_id)
         target = self._target_id_for_client(client, target_id)
+        # 执行JS获取页面结构和元素信息
         payload = self._evaluate(client, self._snapshot_expression(options))
         value = self._response_value(payload)
+        # 转换为BrowserNode对象
         nodes = [self._node_from_payload(index + 1, item) for index, item in enumerate(value.get("nodes", []) or [])]
         snapshot_id = str(uuid.uuid4())
+        # 缓存元素引用映射
         self._ref_maps[target] = {node.ref: node for node in nodes}
         self._snapshot_ids[target] = snapshot_id
         self._stale_targets.discard(target)
+        # 返回快照对象
         return BrowserSnapshot(
             snapshot_id=snapshot_id,
             target_id=target,
@@ -263,7 +304,7 @@ class LocalCDPBrowserController:
             nodes=nodes,
             stats={"node_count": len(nodes), "compact": options.compact, "interactive": options.interactive},
         )
-
+    
     def act(self, request: BrowserActRequest, *, target_id: str | None = None) -> BrowserActResult:
         return self._record_action(
             "act",
@@ -271,27 +312,44 @@ class LocalCDPBrowserController:
             {"target_id": target_id, "kind": request.kind, "ref": request.ref},
         )
 
+    # 交互操作具体实现（核心）
     def _act_impl(self, request: BrowserActRequest, *, target_id: str | None = None) -> BrowserActResult:
         client = self._client_for_target_id(target_id)
         target = self._target_id_for_client(client, target_id)
+        
+        # 处理无需元素引用的操作：resize、close、wait
         if request.kind in {"resize", "close", "wait"}:
             self._act_without_ref(client, target, request)
             snapshot = self.snapshot(target_id=target)
             return BrowserActResult(snapshot=snapshot, action=request.kind, requires_resnapshot=request.kind != "wait")
+        
+        # 必须提供元素引用
         if not request.ref:
             raise ValueError(f"browser.act kind '{request.kind}' requires ref from browser.snapshot.")
+        
+        # 如果目标已失效，返回新快照
         if target in self._stale_targets:
             stale = self.snapshot(target_id=target)
             return BrowserActResult(snapshot=stale, action=request.kind, requires_resnapshot=True, stale_ref=True)
+        
+        # 获取要操作的元素
         node = self._ref_maps.get(target, {}).get(request.ref)
         if node is None:
             stale = self.snapshot(target_id=target)
             return BrowserActResult(snapshot=stale, action=request.kind, requires_resnapshot=True, stale_ref=True)
+        
+        # 执行交互JS
         self._evaluate(client, self._act_expression(node.selector, request))
+        # 等待操作完成
         self._wait_ready(client, wait_ms=request.timeout_ms or self.action_timeout_ms)
         self._stale_targets.add(target)
+        # 返回操作后的快照
         snapshot = self.snapshot(target_id=target)
-        return BrowserActResult(snapshot=snapshot, action=request.kind, requires_resnapshot=request.kind in {"click", "type", "select", "fill", "press"})
+        return BrowserActResult(
+            snapshot=snapshot, 
+            action=request.kind, 
+            requires_resnapshot=request.kind in {"click", "type", "select", "fill", "press"}
+        )
 
     def screenshot(self, *, target_id: str | None = None, full_page: bool = True, filename: str | None = None) -> dict[str, Any]:
         return self._record_action(
