@@ -175,6 +175,90 @@ export type TimelineEntry = {
   details?: Record<string, unknown>;
 };
 
+export type LogEntry = {
+  timestamp?: string | number | null;
+  level: string;
+  source: string;
+  session_id?: string | null;
+  message: string;
+  details?: unknown;
+  raw?: string;
+};
+
+export type CapabilityInventory = {
+  workspace: string;
+  settings: {
+    mcp: Record<string, unknown>;
+    skills: Record<string, unknown>;
+    plugins: Record<string, unknown>;
+  };
+  mcp: {
+    enabled: boolean;
+    config_paths: string[];
+    settings: Record<string, unknown>;
+    servers: Array<Record<string, unknown>>;
+    errors: Array<{ path: string; code: string; message: string }>;
+  };
+  skills: {
+    roots: Array<Record<string, unknown>>;
+    items: Array<Record<string, unknown>>;
+  };
+  plugins: {
+    roots: Array<Record<string, unknown>>;
+    items: Array<Record<string, unknown>>;
+  };
+};
+
+export type MemoryFileEntry = {
+  path: string;
+  mtime: number;
+  size: number;
+  content_hash: string;
+  scope: string;
+};
+
+export type MemoryStatus = {
+  workspace: string;
+  enabled: boolean;
+  file_memory_enabled: boolean;
+  search_enabled: boolean;
+  memory_root: string;
+  index_path: string;
+  global_root: string;
+  file_count: number;
+  indexed_file_count: number;
+  files: MemoryFileEntry[];
+};
+
+export type MemorySearchHit = {
+  path: string;
+  source_scope: string;
+  line_start: number;
+  line_end: number;
+  score: number;
+  vector_score: number;
+  bm25_score: number;
+  sources: string[];
+  heading_path: string[];
+  snippet: string;
+};
+
+export type MemorySearchResponse = {
+  query: string;
+  mode: string;
+  semantic_available: boolean;
+  bm25_available: boolean;
+  results: MemorySearchHit[];
+  warnings: string[];
+};
+
+export type MemoryFileRead = {
+  path: string;
+  line_start: number;
+  line_end: number;
+  content: string;
+};
+
 export type OpenWorkspaceResponse = WorkspacesState & {
   requires_confirmation: boolean;
   candidate?: WorkspaceEntry | null;
@@ -249,6 +333,25 @@ export const api = {
         ? `/api/sessions/${encodeURIComponent(sessionId)}/timeline?limit=${limit}`
         : `/api/timeline?limit=${limit}`
     ),
+  logs: (params: { level?: string; source?: string; sessionId?: string; search?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.level) query.set("level", params.level);
+    if (params.source) query.set("source", params.source);
+    if (params.sessionId) query.set("session_id", params.sessionId);
+    if (params.search) query.set("search", params.search);
+    query.set("limit", String(params.limit || 200));
+    return request<{ logs: LogEntry[]; sources: string[] }>(`/api/logs?${query.toString()}`);
+  },
+  memoryStatus: () => request<MemoryStatus>("/api/memory/status"),
+  memorySearch: (query: string, scope = "auto", limit = 8) =>
+    request<MemorySearchResponse>(`/api/memory/search?query=${encodeURIComponent(query)}&scope=${encodeURIComponent(scope)}&limit=${limit}`),
+  memoryFiles: () => request<{ files: MemoryFileEntry[] }>("/api/memory/files"),
+  memoryFile: (path: string, startLine?: number, lineCount?: number) => {
+    const query = new URLSearchParams({ path });
+    if (startLine) query.set("start_line", String(startLine));
+    if (lineCount) query.set("line_count", String(lineCount));
+    return request<MemoryFileRead>(`/api/memory/file?${query.toString()}`);
+  },
   tree: (sessionId: string) => request<Record<string, unknown>>(`/api/sessions/${sessionId}/tree`),
   prompt: (sessionId: string, prompt: string) =>
     request<{ session_id: string; queued: boolean }>(`/api/sessions/${sessionId}/prompt`, {
@@ -264,6 +367,25 @@ export const api = {
   approvePending: (token: string) => request<ApprovalActionResponse>(`/api/approvals/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectPending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/reject`, { method: "POST" }),
   capabilities: () => request<{ capabilities: unknown[] }>("/api/capabilities"),
+  capabilityConfig: () => request<CapabilityInventory>("/api/capability-config"),
+  capabilitySettingsPatch: (capabilities: Record<string, unknown>) =>
+    request<{ snapshot: ConfigSnapshot; inventory: CapabilityInventory }>("/api/capability-config/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ capabilities })
+    }),
+  createMcpServer: (payload: Record<string, unknown>) =>
+    request<CapabilityInventory>("/api/mcp/servers", { method: "POST", body: JSON.stringify(payload) }),
+  updateMcpServer: (name: string, payload: Record<string, unknown>) =>
+    request<CapabilityInventory>(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteMcpServer: (name: string) => request<CapabilityInventory>(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  createSkill: (payload: Record<string, unknown>) =>
+    request<CapabilityInventory>("/api/skills", { method: "POST", body: JSON.stringify(payload) }),
+  updateSkill: (name: string, payload: Record<string, unknown>) =>
+    request<CapabilityInventory>(`/api/skills/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  createPlugin: (payload: Record<string, unknown>) =>
+    request<CapabilityInventory>("/api/plugins", { method: "POST", body: JSON.stringify(payload) }),
+  updatePlugin: (name: string, payload: Record<string, unknown>) =>
+    request<CapabilityInventory>(`/api/plugins/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(payload) }),
   mcp: () => request<Record<string, unknown>>("/api/mcp"),
   settings: () => request<Record<string, unknown>>("/api/settings"),
   config: (sessionId?: string) => request<ConfigSnapshot>(sessionId ? `/api/config?session_id=${encodeURIComponent(sessionId)}` : "/api/config"),

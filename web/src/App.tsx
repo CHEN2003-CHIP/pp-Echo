@@ -25,7 +25,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, ConfigField, ConfigSnapshot, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageContent } from "./rich-text";
 
 type ViewKey =
@@ -120,6 +120,8 @@ const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "扩展", views: ["plugins", "memory", "model"] },
   { title: "监控", views: ["logs", "usage", "skills", "users"] }
 ];
+
+const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
 
 const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activity }> = [
   { id: "status", label: "状态", icon: Activity },
@@ -317,7 +319,7 @@ export function App() {
       setWorkspaceDraft(workspace.active.path || "");
       return;
     }
-    if (view === "users" || view === "model" || view === "skills" || view === "plugins") {
+    if (view === "users" || view === "model") {
       setSettingsFocus(view === "users" ? "general" : view);
       setSettingsDialogOpen(true);
       return;
@@ -359,7 +361,7 @@ export function App() {
     }
 
     const item: any = navItems.find((entry) => entry.view === view);
-    if (item) {
+    if (item && comingSoonViews.has(view)) {
       showNotice(`${item.label} 功能开发中，敬请期待`, "info");
     }
   }
@@ -710,12 +712,20 @@ export function App() {
               setInspectorOpen={setInspectorOpen}
             />
           ) : activeView === "logs" ? (
-            <TimelinePanel
+            <ObservabilityPanel
               activeSessionId={activeSessionId}
               timeline={timeline}
               activeEvents={activeEvents}
               onReload={refreshTimeline}
             />
+          ) : activeView === "skills" || activeView === "plugins" || activeView === "channels" ? (
+            <CapabilityWorkbench
+              initialTab={activeView === "skills" ? "skills" : activeView === "plugins" ? "plugins" : "mcp"}
+              workspaceStatus={workspaceStatus}
+              activeSessionId={activeSessionId}
+            />
+          ) : activeView === "memory" ? (
+            <MemoryWorkbench />
           ) : (
             <ComingSoonPanel title={viewLabel} onComingSoon={handleComingSoon} onReload={refreshAll} />
           )}
@@ -1554,7 +1564,7 @@ function ComingSoonPanel({
   );
 }
 
-function TimelinePanel({
+function ObservabilityPanel({
   activeSessionId,
   timeline,
   activeEvents,
@@ -1565,35 +1575,678 @@ function TimelinePanel({
   activeEvents: RuntimeEvent[];
   onReload: () => void;
 }) {
+  const [tab, setTab] = useState<"timeline" | "logs">("timeline");
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [sources, setSources] = useState<string[]>([]);
+  const [level, setLevel] = useState("all");
+  const [source, setSource] = useState("all");
+  const [search, setSearch] = useState("");
+  const [follow, setFollow] = useState(true);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [error, setError] = useState("");
   const liveEvents = activeEvents.map(runtimeEventToTimelineLike);
   const items = latestAgentLoopItems([...timeline, ...liveEvents]);
   const text = formatTimelineText(items);
+
+  async function reloadLogs() {
+    try {
+      setError("");
+      const payload = await api.logs({ level, source, search, limit: 300 });
+      setLogs(payload.logs);
+      setSources(payload.sources);
+      if (follow) setSelectedIndex(Math.max(0, payload.logs.length - 1));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  useEffect(() => {
+    if (tab !== "logs") return;
+    reloadLogs().catch(() => undefined);
+  }, [tab, level, source, activeSessionId]);
+
+  useEffect(() => {
+    if (tab !== "logs" || !follow) return;
+    const timer = window.setInterval(() => reloadLogs().catch(() => undefined), 2500);
+    return () => window.clearInterval(timer);
+  }, [tab, follow, level, source, activeSessionId, search]);
 
   return (
     <section className="panel-page timeline-page">
       <header className="panel-header">
         <div>
-          <h2>Timeline</h2>
-          <p>{activeSessionId ? `Session ${shortId(activeSessionId)}` : "Recent workspace events"}</p>
+          <h2>Observability</h2>
+          <p>{activeSessionId ? `Session ${shortId(activeSessionId)}` : "Recent workspace events and persistent logs"}</p>
         </div>
-        <button onClick={onReload}>
-          <RefreshCw size={16} />
-          刷新
-        </button>
+        <div className="segmented-actions">
+          <button className={tab === "timeline" ? "active" : ""} onClick={() => setTab("timeline")}>Timeline</button>
+          <button className={tab === "logs" ? "active" : ""} onClick={() => setTab("logs")}>Logs</button>
+        </div>
       </header>
-      <textarea
-        className="timeline-textbox"
-        readOnly
-        value={text || "暂无最近一轮 agent loop 事件"}
-        aria-label="最近一轮 agent loop 时间线"
-      />
+      {tab === "timeline" ? (
+        <>
+          <div className="observability-toolbar">
+            <span>{items.length} events</span>
+            <button onClick={onReload}>
+              <RefreshCw size={16} />
+              Refresh
+            </button>
+          </div>
+          <textarea
+            className="timeline-textbox"
+            readOnly
+            value={text || "No recent agent loop timeline events."}
+            aria-label="Recent agent loop timeline"
+          />
+        </>
+      ) : (
+        <LogsPanel
+          logs={logs}
+          sources={sources}
+          level={level}
+          source={source}
+          search={search}
+          follow={follow}
+          selectedIndex={selectedIndex}
+          error={error}
+          setLevel={setLevel}
+          setSource={setSource}
+          setSearch={setSearch}
+          setFollow={setFollow}
+          setSelectedIndex={setSelectedIndex}
+          onReload={reloadLogs}
+        />
+      )}
     </section>
   );
+}
+
+function LogsPanel({
+  logs,
+  sources,
+  level,
+  source,
+  search,
+  follow,
+  selectedIndex,
+  error,
+  setLevel,
+  setSource,
+  setSearch,
+  setFollow,
+  setSelectedIndex,
+  onReload
+}: {
+  logs: LogEntry[];
+  sources: string[];
+  level: string;
+  source: string;
+  search: string;
+  follow: boolean;
+  selectedIndex: number;
+  error: string;
+  setLevel: (value: string) => void;
+  setSource: (value: string) => void;
+  setSearch: (value: string) => void;
+  setFollow: (value: boolean) => void;
+  setSelectedIndex: (value: number) => void;
+  onReload: () => void;
+}) {
+  const selected = logs[Math.min(selectedIndex, Math.max(0, logs.length - 1))];
+  return (
+    <div className="logs-workbench">
+      <div className="observability-toolbar logs-toolbar">
+        <select value={level} onChange={(event) => setLevel(event.target.value)}>
+          {["all", "debug", "info", "warning", "error", "critical"].map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <select value={source} onChange={(event) => setSource(event.target.value)}>
+          <option value="all">all sources</option>
+          {sources.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && onReload()} placeholder="Search logs" />
+        <label className="inline-check">
+          <input type="checkbox" checked={follow} onChange={(event) => setFollow(event.target.checked)} />
+          Follow
+        </label>
+        <button onClick={onReload}>
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </div>
+      {error ? <p className="settings-error">{error}</p> : null}
+      <div className="logs-grid">
+        <div className="log-list">
+          {logs.length ? logs.map((entry, index) => (
+            <button key={`${entry.source}-${index}`} className={index === selectedIndex ? "log-row active" : "log-row"} onClick={() => setSelectedIndex(index)}>
+              <span>{formatLogTime(entry.timestamp)}</span>
+              <em className={`log-level level-${String(entry.level || "info").toLowerCase()}`}>{entry.level || "info"}</em>
+              <strong>{entry.source || "log"}</strong>
+              <p>{entry.message || entry.raw || ""}</p>
+            </button>
+          )) : (
+            <div className="empty-state">
+              <FileText size={24} />
+              <strong>No logs match the current filters</strong>
+              <span>pp-Echo checked timeline events, session JSONL files, and .pp-agent/logs/*.log and *.jsonl.</span>
+            </div>
+          )}
+        </div>
+        <aside className="log-detail">
+          {selected ? (
+            <>
+              <div className="log-detail-head">
+                <strong>{selected.source}</strong>
+                <span className={`log-level level-${String(selected.level || "info").toLowerCase()}`}>{selected.level || "info"}</span>
+              </div>
+              <p>{selected.message}</p>
+              <pre>{JSON.stringify({ timestamp: selected.timestamp, session_id: selected.session_id, details: selected.details, raw: selected.raw }, null, 2)}</pre>
+              <button onClick={() => navigator.clipboard?.writeText(selected.raw || selected.message || "")}>Copy</button>
+            </>
+          ) : (
+            <span>Select a log row to inspect details.</span>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function MemoryWorkbench() {
+  const [status, setStatus] = useState<MemoryStatus | null>(null);
+  const [selectedPath, setSelectedPath] = useState("");
+  const [selectedFile, setSelectedFile] = useState<MemoryFileRead | null>(null);
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState("auto");
+  const [searchResult, setSearchResult] = useState<MemorySearchResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const files = status?.files || [];
+
+  async function reload() {
+    try {
+      setError("");
+      const nextStatus = await api.memoryStatus();
+      setStatus(nextStatus);
+      const nextPath = selectedPath || nextStatus.files[0]?.path || "";
+      setSelectedPath(nextPath);
+      if (nextPath) {
+        setSelectedFile(await api.memoryFile(nextPath, 1, 220));
+      } else {
+        setSelectedFile(null);
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  async function readFile(path: string, startLine = 1) {
+    try {
+      setError("");
+      setSelectedPath(path);
+      setSelectedFile(await api.memoryFile(path, startLine, 220));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  async function searchMemory() {
+    if (!query.trim()) return;
+    try {
+      setLoading(true);
+      setError("");
+      setSearchResult(await api.memorySearch(query.trim(), scope, 8));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    reload().catch(() => undefined);
+  }, []);
+
+  return (
+    <section className="panel-page memory-page">
+      <header className="panel-header memory-header">
+        <div>
+          <h2>Memory</h2>
+          <p>{status?.memory_root || "Long-term Markdown memory"}</p>
+        </div>
+        <button onClick={reload}>
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </header>
+
+      {error ? <p className="settings-error">{error}</p> : null}
+
+      <div className="memory-stats">
+        <MemoryStat label="Memory" value={status?.enabled ? "enabled" : "disabled"} />
+        <MemoryStat label="File memory" value={status?.file_memory_enabled ? "enabled" : "disabled"} />
+        <MemoryStat label="Search" value={status?.search_enabled ? "enabled" : "disabled"} />
+        <MemoryStat label="Files" value={`${status?.file_count || 0} files / ${status?.indexed_file_count || 0} indexed`} />
+      </div>
+
+      <div className="memory-layout">
+        <aside className="memory-sidebar">
+          <div className="memory-searchbar">
+            <Search size={15} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchMemory()} placeholder="Search memory" />
+            <select value={scope} onChange={(event) => setScope(event.target.value)}>
+              <option value="auto">auto</option>
+              <option value="workspace">workspace</option>
+              <option value="global">global</option>
+              <option value="all">all</option>
+            </select>
+            <button onClick={searchMemory} disabled={!query.trim() || loading}>{loading ? "Searching" : "Search"}</button>
+          </div>
+
+          <div className="memory-results">
+            {searchResult?.warnings?.map((warning) => <p className="settings-error" key={warning}>{warning}</p>)}
+            {searchResult?.results?.map((hit) => (
+              <button key={`${hit.path}-${hit.line_start}`} className="memory-hit" onClick={() => readFile(hit.path, hit.line_start)}>
+                <strong>{hit.path}</strong>
+                <span>{hit.source_scope} · lines {hit.line_start}-{hit.line_end} · {hit.score.toFixed(2)}</span>
+                <p>{hit.snippet}</p>
+              </button>
+            ))}
+          </div>
+
+          <div className="memory-file-list">
+            <div className="capability-list-head">
+              <span>{files.length} memory files</span>
+            </div>
+            {files.map((file) => (
+              <button key={file.path} className={selectedPath === file.path ? "memory-file-row active" : "memory-file-row"} onClick={() => readFile(file.path)}>
+                <strong>{file.path}</strong>
+                <span>{file.scope} · {formatBytes(file.size)}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <div className="memory-reader">
+          {selectedFile ? (
+            <>
+              <div className="memory-reader-head">
+                <div>
+                  <small>{selectedFile.line_start}-{selectedFile.line_end}</small>
+                  <h3>{selectedFile.path}</h3>
+                </div>
+                <span>{status?.index_path || ""}</span>
+              </div>
+              <pre>{selectedFile.content || "This memory file is empty."}</pre>
+            </>
+          ) : (
+            <div className="empty-state">
+              <BookOpen size={24} />
+              <strong>No memory files found</strong>
+              <span>Create MEMORY.md or memory/**/*.md to populate this view.</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MemoryStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+type CapabilityTab = "mcp" | "skills" | "plugins";
+
+function CapabilityWorkbench({
+  initialTab,
+  workspaceStatus,
+  activeSessionId
+}: {
+  initialTab: CapabilityTab;
+  workspaceStatus: WorkspaceStatus | null;
+  activeSessionId: string;
+}) {
+  const [tab, setTab] = useState<CapabilityTab>(initialTab);
+  const [inventory, setInventory] = useState<CapabilityInventory | null>(null);
+  const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
+  const [selectedName, setSelectedName] = useState("");
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const items = capabilityItems(inventory, tab);
+  const selected = selectedName ? items.find((item) => String(item.name || "") === selectedName) : undefined;
+
+  async function reload() {
+    const [nextInventory, nextSnapshot] = await Promise.all([api.capabilityConfig(), api.config(activeSessionId || undefined)]);
+    setInventory(nextInventory);
+    setSnapshot(nextSnapshot);
+    const nextItems = capabilityItems(nextInventory, tab);
+    if (!selectedName && nextItems[0]) setSelectedName(String(nextItems[0].name || ""));
+    setSettingsDraft(capabilitySettingsToDraft(nextInventory, tab));
+  }
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    reload().catch((nextError) => setError(nextError instanceof Error ? nextError.message : String(nextError)));
+  }, [tab, activeSessionId]);
+
+  useEffect(() => {
+    setDraft(capabilityItemToDraft(selected, tab));
+  }, [selectedName, tab, inventory]);
+
+  async function applySettings() {
+    try {
+      setError("");
+      const patch = capabilitySettingsFromDraft(settingsDraft, tab);
+      const response = await api.capabilitySettingsPatch({ [tab]: patch });
+      setInventory(response.inventory);
+      setSnapshot(response.snapshot);
+      setNotice("Settings applied.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  async function saveItem() {
+    try {
+      setError("");
+      const payload = capabilityPayloadFromDraft(draft, tab);
+      let nextInventory: CapabilityInventory;
+      if (tab === "mcp") {
+        nextInventory = selected ? await api.updateMcpServer(String(selected.name), payload) : await api.createMcpServer(payload);
+      } else if (tab === "skills") {
+        nextInventory = selected ? await api.updateSkill(String(selected.name), payload) : await api.createSkill(payload);
+      } else {
+        nextInventory = selected ? await api.updatePlugin(String(selected.name), payload) : await api.createPlugin(payload);
+      }
+      setInventory(nextInventory);
+      setSelectedName(String(payload.name || ""));
+      setNotice("Saved.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  async function deleteMcp() {
+    if (tab !== "mcp" || !selected) return;
+    try {
+      const nextInventory = await api.deleteMcpServer(String(selected.name));
+      setInventory(nextInventory);
+      setSelectedName("");
+      setNotice("Deleted.");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  function newItem() {
+    setSelectedName("");
+    setDraft(capabilityItemToDraft(null, tab));
+  }
+
+  return (
+    <section className="panel-page capability-page">
+      <header className="panel-header">
+        <div>
+          <h2>Capability Workbench</h2>
+          <p>{workspaceStatus?.path || inventory?.workspace || "Workspace capability configuration"}</p>
+        </div>
+        <div className="capability-meta">
+          <span>{workspaceStatus?.git_branch || "no branch"}</span>
+          <span>{snapshot?.effective_hash ? snapshot.effective_hash.slice(0, 10) : "hash pending"}</span>
+          <span className={`reload-badge reload-${snapshot?.reload_policy || "hot"}`}>{snapshot?.reload_policy || "hot"}</span>
+        </div>
+      </header>
+
+      <div className="segmented-actions capability-tabs">
+        {(["mcp", "skills", "plugins"] as CapabilityTab[]).map((item) => (
+          <button key={item} className={tab === item ? "active" : ""} onClick={() => { setTab(item); setSelectedName(""); }}>{item.toUpperCase()}</button>
+        ))}
+      </div>
+
+      {error ? <p className="settings-error">{error}</p> : null}
+      {notice ? <p className="settings-success">{notice}</p> : null}
+
+      <div className="capability-layout">
+        <aside className="capability-sidebar">
+          <div className="capability-settings-card">
+            <strong>{tab.toUpperCase()} settings</strong>
+            {renderCapabilitySettings(settingsDraft, setSettingsDraft, tab)}
+            <button onClick={applySettings}>Apply settings</button>
+          </div>
+          <div className="capability-list-head">
+            <span>{items.length} items</span>
+            <button onClick={newItem}>
+              <Plus size={14} />
+              New
+            </button>
+          </div>
+          <div className="capability-list">
+            {items.map((item) => (
+              <button
+                key={String(item.name)}
+                className={String(item.name) === String(selected?.name || "") ? "capability-row active compact" : "capability-row compact"}
+                title={String(item.description || item.path || item.resolved_transport || "")}
+                onClick={() => setSelectedName(String(item.name || ""))}
+              >
+                <strong>{String(item.name || "unnamed")}</strong>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <div className="capability-editor">
+          <div className="capability-editor-head">
+            <div>
+              <small>{selected ? "EDIT" : "CREATE"}</small>
+              <h3>{selected ? String(selected.name) : `New ${tab.slice(0, -1)}`}</h3>
+            </div>
+            <div className="capability-editor-actions">
+              {tab === "mcp" && selected ? <button onClick={deleteMcp}>Delete</button> : null}
+              <button onClick={() => setDraft(capabilityItemToDraft(selected, tab))}>Revert</button>
+              <button className="primary" onClick={saveItem}>Apply</button>
+            </div>
+          </div>
+          {renderCapabilityEditor(tab, draft, setDraft)}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function capabilityItems(inventory: CapabilityInventory | null, tab: CapabilityTab): Array<Record<string, unknown>> {
+  if (!inventory) return [];
+  if (tab === "mcp") return inventory.mcp.servers;
+  return inventory[tab].items;
+}
+
+function capabilitySettingsToDraft(inventory: CapabilityInventory, tab: CapabilityTab): Record<string, string> {
+  const settings = inventory.settings[tab] || {};
+  return {
+    enable: String(Boolean(settings.enable ?? settings.enable_project)),
+    enable_project: String(Boolean(settings.enable_project ?? true)),
+    enable_user: String(Boolean(settings.enable_user ?? true)),
+    enable_builtin: String(Boolean(settings.enable_builtin ?? tab === "skills")),
+    config_paths: stringifyList(settings.config_paths),
+    server_filters: stringifyList(settings.server_filters),
+    custom_directories: stringifyList(settings.custom_directories),
+    include: stringifyList(settings.include),
+    ignored: stringifyList(settings.ignored)
+  };
+}
+
+function capabilitySettingsFromDraft(draft: Record<string, string>, tab: CapabilityTab): Record<string, unknown> {
+  if (tab === "mcp") {
+    return {
+      enable: draft.enable === "true",
+      config_paths: parseLines(draft.config_paths),
+      server_filters: parseLines(draft.server_filters)
+    };
+  }
+  return {
+    enable_project: draft.enable_project === "true",
+    enable_user: draft.enable_user === "true",
+    enable_builtin: draft.enable_builtin === "true",
+    custom_directories: parseLines(draft.custom_directories),
+    include: parseLines(draft.include),
+    ignored: parseLines(draft.ignored)
+  };
+}
+
+function capabilityItemToDraft(item: Record<string, unknown> | undefined | null, tab: CapabilityTab): Record<string, string> {
+  if (tab === "mcp") {
+    return {
+      name: String(item?.name || ""),
+      description: String(item?.description || ""),
+      transport: String(item?.transport || item?.resolved_transport || "stdio"),
+      protocol: String(item?.protocol || "auto"),
+      command: String(item?.command || ""),
+      args: stringifyList(item?.args),
+      url: String(item?.url || ""),
+      cwd: String(item?.cwd || ""),
+      env: stringifyJson(item?.env || {}),
+      headers: stringifyJson(item?.headers || {}),
+      bearer_token_env: String(item?.bearer_token_env || ""),
+      timeout_seconds: String(item?.timeout_seconds || 30)
+    };
+  }
+  if (tab === "skills") {
+    return {
+      name: String(item?.name || ""),
+      description: String(item?.description || ""),
+      body: String(item?.body || "")
+    };
+  }
+  return {
+    name: String(item?.name || ""),
+    description: String(item?.description || ""),
+    entrypoint: String(item?.entrypoint || ""),
+    provides: stringifyList(item?.provides)
+  };
+}
+
+function capabilityPayloadFromDraft(draft: Record<string, string>, tab: CapabilityTab): Record<string, unknown> {
+  if (tab === "mcp") {
+    return {
+      name: draft.name,
+      description: draft.description,
+      transport: draft.transport,
+      protocol: draft.protocol || "auto",
+      command: draft.command || null,
+      args: parseLines(draft.args),
+      url: draft.url || null,
+      cwd: draft.cwd || null,
+      env: parseJsonObject(draft.env),
+      headers: parseJsonObject(draft.headers),
+      bearer_token_env: draft.bearer_token_env || null,
+      timeout_seconds: Number(draft.timeout_seconds || 30)
+    };
+  }
+  if (tab === "skills") return { name: draft.name, description: draft.description, body: draft.body };
+  return { name: draft.name, description: draft.description, entrypoint: draft.entrypoint || null, provides: parseLines(draft.provides) };
+}
+
+function renderCapabilitySettings(draft: Record<string, string>, setDraft: (value: Record<string, string>) => void, tab: CapabilityTab) {
+  const update = (key: string, value: string) => setDraft({ ...draft, [key]: value });
+  if (tab === "mcp") {
+    return (
+      <div className="capability-settings-fields">
+        <label className="settings-toggle"><input type="checkbox" checked={draft.enable === "true"} onChange={(event) => update("enable", String(event.target.checked))} /> Enabled</label>
+        <label><span>Config paths</span><textarea value={draft.config_paths || ""} onChange={(event) => update("config_paths", event.target.value)} /></label>
+        <label><span>Server filters</span><textarea value={draft.server_filters || ""} onChange={(event) => update("server_filters", event.target.value)} /></label>
+      </div>
+    );
+  }
+  return (
+    <div className="capability-settings-fields">
+      {["enable_project", "enable_user", "enable_builtin"].map((key) => (
+        <label key={key} className="settings-toggle"><input type="checkbox" checked={draft[key] === "true"} onChange={(event) => update(key, String(event.target.checked))} /> {key}</label>
+      ))}
+      <label><span>Custom directories</span><textarea value={draft.custom_directories || ""} onChange={(event) => update("custom_directories", event.target.value)} /></label>
+      <label><span>Include</span><textarea value={draft.include || ""} onChange={(event) => update("include", event.target.value)} /></label>
+      <label><span>Ignored</span><textarea value={draft.ignored || ""} onChange={(event) => update("ignored", event.target.value)} /></label>
+    </div>
+  );
+}
+
+function renderCapabilityEditor(tab: CapabilityTab, draft: Record<string, string>, setDraft: (value: Record<string, string>) => void) {
+  const update = (key: string, value: string) => setDraft({ ...draft, [key]: value });
+  const field = (key: string, label: string, multiline = false) => (
+    <label className="capability-field">
+      <span>{label}</span>
+      {multiline ? <textarea value={draft[key] || ""} onChange={(event) => update(key, event.target.value)} /> : <input value={draft[key] || ""} onChange={(event) => update(key, event.target.value)} />}
+    </label>
+  );
+  if (tab === "mcp") {
+    return (
+      <div className="capability-form">
+        {field("name", "Name")}
+        {field("description", "Description")}
+        <label className="capability-field"><span>Transport</span><select value={draft.transport || "stdio"} onChange={(event) => update("transport", event.target.value)}><option value="stdio">stdio</option><option value="http">http</option><option value="auto">auto</option></select></label>
+        <label className="capability-field"><span>Protocol</span><select value={draft.protocol || "auto"} onChange={(event) => update("protocol", event.target.value)}><option value="auto">auto</option><option value="standard">standard</option><option value="compat">compat</option></select></label>
+        {field("command", "Command")}
+        {field("args", "Args", true)}
+        {field("url", "URL")}
+        {field("cwd", "CWD")}
+        {field("env", "Env JSON", true)}
+        {field("headers", "Headers JSON", true)}
+        {field("bearer_token_env", "Bearer token env")}
+        {field("timeout_seconds", "Timeout seconds")}
+      </div>
+    );
+  }
+  if (tab === "skills") {
+    return <div className="capability-form">{field("name", "Name")}{field("description", "Description")}{field("body", "Skill body", true)}</div>;
+  }
+  return <div className="capability-form">{field("name", "Name")}{field("description", "Description")}{field("entrypoint", "Entrypoint")}{field("provides", "Provides", true)}</div>;
+}
+
+function stringifyList(value: unknown): string {
+  return Array.isArray(value) ? value.map(String).join("\n") : "";
+}
+
+function parseLines(value?: string): string[] {
+  return String(value || "").split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+}
+
+function stringifyJson(value: unknown): string {
+  return JSON.stringify(value || {}, null, 2);
+}
+
+function parseJsonObject(value?: string): Record<string, string> {
+  const text = String(value || "").trim();
+  if (!text) return {};
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected a JSON object");
+  return parsed as Record<string, string>;
 }
 
 function formatEventTime(value?: number) {
   if (!value) return "--:--:--";
   return new Date(value * 1000).toLocaleTimeString();
+}
+
+function formatLogTime(value?: string | number | null) {
+  if (!value) return "--:--:--";
+  const date = typeof value === "number" ? new Date(value > 10_000_000_000 ? value : value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleTimeString();
+}
+
+function formatBytes(value?: number) {
+  const size = Number(value || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function latestAgentLoopItems(items: Array<TimelineEntry | ReturnType<typeof runtimeEventToTimelineLike>>) {

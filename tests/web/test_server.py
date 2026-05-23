@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -134,6 +135,123 @@ def test_web_api_session_timeline_endpoint(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["timeline"][0]["event_type"] == "error"
     assert response.json()["timeline"][0]["message"] == "timed out"
+
+
+def test_web_api_logs_reads_text_and_jsonl_logs(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    logs_dir = workspace / ".pp-agent" / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / "server.log").write_text("2026-05-23T10:00:00 [ERROR] failed to start\n", encoding="utf-8")
+    (logs_dir / "agent.jsonl").write_text(
+        json.dumps({"timestamp": "2026-05-23T10:01:00", "level": "info", "logger": "agent", "session_id": "s1", "message": "ready"}) + "\n",
+        encoding="utf-8",
+    )
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    response = client.get("/api/logs", params={"level": "error", "search": "failed"})
+
+    assert response.status_code == 200
+    assert response.json()["logs"][0]["level"] == "error"
+    assert response.json()["logs"][0]["source"] == "server.log"
+
+
+def test_web_api_logs_include_timeline_entries(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server_module.bootstrap.timeline_store_for(workspace).append(
+        "session-1",
+        AgentEvent(type="tool_call", session_id="session-1", message="ran memory_search", tool_name="memory_search"),
+    )
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    response = client.get("/api/logs", params={"source": "timeline", "session_id": "session-1"})
+
+    assert response.status_code == 200
+    assert response.json()["logs"][0]["source"] == "timeline"
+    assert response.json()["logs"][0]["message"] == "ran memory_search"
+
+
+def test_web_api_logs_include_session_jsonl_entries(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session_store = SessionStore(workspace / ".pp-agent" / "sessions")
+    record = session_store.create("system prompt", StoredModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="hello logs")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="ready")], timestamp=2.0),
+    ]
+    session_store.save(record)
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    response = client.get("/api/logs", params={"source": "session-jsonl", "session_id": record.id})
+
+    assert response.status_code == 200
+    assert any(item["source"] == "session-jsonl" for item in response.json()["logs"])
+    assert any(item["session_id"] == record.id for item in response.json()["logs"])
+
+
+def test_web_api_memory_status_search_and_read(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("# Memory\n\nUse focused pytest for web changes.\n", encoding="utf-8")
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    status = client.get("/api/memory/status")
+    search = client.get("/api/memory/search", params={"query": "focused pytest"})
+    read = client.get("/api/memory/file", params={"path": "MEMORY.md"})
+
+    assert status.status_code == 200
+    assert status.json()["file_count"] == 1
+    assert search.status_code == 200
+    assert search.json()["results"][0]["path"] == "MEMORY.md"
+    assert read.status_code == 200
+    assert "focused pytest" in read.json()["content"]
+
+
+def test_web_api_capability_config_inventory_and_project_templates(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    mcp = client.post(
+        "/api/mcp/servers",
+        json={"name": "fetch", "transport": "stdio", "command": "node", "args": ["server.js"], "protocol": "standard"},
+    )
+    skill = client.post("/api/skills", json={"name": "repo-helper", "description": "Repository helper", "body": "Use rg first."})
+    plugin = client.post("/api/plugins", json={"name": "audit", "description": "Audit plugin", "provides": ["review"]})
+    inventory = client.get("/api/capability-config")
+
+    assert mcp.status_code == 200
+    assert skill.status_code == 200
+    assert plugin.status_code == 200
+    assert any(item["name"] == "fetch" for item in inventory.json()["mcp"]["servers"])
+    assert any(item["name"] == "repo-helper" for item in inventory.json()["skills"]["items"])
+    assert any(item["name"] == "audit" for item in inventory.json()["plugins"]["items"])
+    assert (workspace / ".pp-agent" / "mcp.json").exists()
+    assert (workspace / ".pp-agent" / "skills" / "repo-helper" / "SKILL.md").exists()
+    assert (workspace / ".pp-agent" / "extensions" / "audit" / "EXTENSION.json").exists()
+
+
+def test_web_api_mcp_validation_error_is_structured(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    client = TestClient(_app(tmp_path))
+
+    response = client.post("/api/mcp/servers", json={"name": "bad", "transport": "stdio"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["errors"][0]["path"] == "command"
 
 
 def test_web_api_approves_pending_action_token(tmp_path: Path, monkeypatch) -> None:

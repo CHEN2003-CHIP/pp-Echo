@@ -72,8 +72,10 @@ def create_app(
         return workspace_manager.active_session_manager()
 
     from pp_agent.server.routes.config import mount_config_routes
+    from pp_agent.server.routes.capability_config import mount_capability_config_routes
 
     mount_config_routes(app, active_workspace, session_manager)
+    mount_capability_config_routes(app, active_workspace)
 
     @app.middleware("http")
     async def no_cache(request, call_next):
@@ -272,10 +274,6 @@ def create_app(
     def mcp() -> dict:
         settings = bootstrap.load_settings(active_workspace())
         return settings.capabilities.mcp.model_dump(mode="json")
-
-    @app.get("/favicon.ico")
-    def favicon() -> dict:
-        return {}
 
     @app.websocket("/api/sessions/{session_id}/events")
     async def events(websocket: WebSocket, session_id: str) -> None:
