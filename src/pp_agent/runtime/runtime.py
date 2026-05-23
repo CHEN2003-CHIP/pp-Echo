@@ -74,6 +74,7 @@ from pp_agent.tools.registry import ToolRegistry
 
 Subscriber = Callable[[AgentEvent], None]
 ConfirmCallback = Callable[[str, dict], bool]
+ConfigRefreshCallback = Callable[["AgentRuntime", object], None]
 logger = logging.getLogger(__name__)
 TEXT_TOOL_NAME_RE = re.compile(r"([A-Za-z0-9_.-]+)\s*$")
 TEXT_TOOL_CALL_FALLBACK_ALLOWLIST = {"list_files", "search_text", "grep_code", "git_status"}
@@ -120,6 +121,9 @@ class AgentRuntime:
         learning_runtime: Optional[object] = None,
         enforce_orchestrated_edit_contract: bool = True,
         require_patch_artifact_for_code_change: bool = True,
+        config_manager: Optional[object] = None,
+        config_snapshot: Optional[object] = None,
+        config_refresh_callback: Optional[ConfigRefreshCallback] = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -169,6 +173,11 @@ class AgentRuntime:
         self.learning_runtime = learning_runtime
         self.enforce_orchestrated_edit_contract = bool(enforce_orchestrated_edit_contract)
         self.require_patch_artifact_for_code_change = bool(require_patch_artifact_for_code_change)
+        self.config_manager = config_manager
+        self.config_snapshot = config_snapshot
+        self.config_version = getattr(config_snapshot, "config_version", None)
+        self.pending_config_effects: list[str] = []
+        self._config_refresh_callback = config_refresh_callback
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -315,6 +324,7 @@ class AgentRuntime:
 
     def _run_loop(self, *, turn_persist_context: _TurnPersistContext) -> Iterator[AgentEvent]:
         """开始一轮 → 看有没有待审批计划 → 没有就先问模型 → 有工具就执行工具 → 处理成功/失败 → 必要时压缩上下文 → 结束这一轮"""
+        yield from self._refresh_config_for_turn()
         self.state.is_streaming = True
         self.state.error_message = None
         #把积压通知发完，再广播‘这轮开始了
@@ -1702,6 +1712,57 @@ class AgentRuntime:
         set_token = getattr(self.tool_registry, "set_cancellation_token", None)
         if callable(set_token):
             set_token(self._cancellation_token)
+
+    def _refresh_config_for_turn(self) -> Iterator[AgentEvent]:
+        manager = self.config_manager
+        if manager is None or not hasattr(manager, "get_effective_snapshot"):
+            return
+        snapshot = manager.get_effective_snapshot(session_id=self.session_id)
+        previous_version = self.config_version
+        self.config_snapshot = snapshot
+        self.config_version = getattr(snapshot, "config_version", None)
+        settings = getattr(snapshot, "settings", None)
+        if settings is not None:
+            model_name = getattr(getattr(settings, "model", None), "model", None)
+            if model_name and getattr(self.llm_client.model, "model", None) != model_name:
+                try:
+                    from pp_agent.llm.models import ModelConfig, ProviderConfig
+                    from pp_agent.llm.registry import create_llm_client
+
+                    self.llm_client = create_llm_client(
+                        provider=ProviderConfig(**settings.provider.model_dump(mode="python")),
+                        model=ModelConfig(**settings.model.model_dump(mode="python")),
+                    )
+                    self.state.model = self.llm_client.model.model_copy(deep=True)
+                except Exception as exc:  # noqa: BLE001
+                    yield from self._emit(
+                        self._event(
+                            ERROR,
+                            message=f"Failed to refresh model configuration: {exc}",
+                            is_error=True,
+                            details={"source": "config_refresh"},
+                        )
+                    )
+            self.require_plan_approval = bool(settings.tool_policy.confirm_high_risk_plan)
+            self.enforce_orchestrated_edit_contract = bool(settings.subagents.enforce_orchestrated_edit_contract)
+            self.require_patch_artifact_for_code_change = bool(settings.subagents.require_patch_artifact_for_code_change)
+        reload_policy = str(getattr(snapshot, "reload_policy", "hot"))
+        changed = previous_version is not None and previous_version != self.config_version
+        if changed and reload_policy in {"rebuild_runtime", "restart_required"} and self._config_refresh_callback is not None:
+            self._config_refresh_callback(self, snapshot)
+            self._attach_runtime_context_to_tool_registry()
+        if changed:
+            yield from self._emit(
+                self._event(
+                    "config_reloaded",
+                    message=f"Applied config snapshot {self.config_version}",
+                    details={
+                        "config_version": self.config_version,
+                        "config_hash": getattr(snapshot, "config_hash", None),
+                        "reload_policy": reload_policy,
+                    },
+                )
+            )
 
     def _provider_name(self) -> str:
         provider = getattr(self.llm_client, "provider", None)

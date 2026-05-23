@@ -129,6 +129,12 @@ export type WorkspacesState = {
   recent: WorkspaceEntry[];
 };
 
+export type WorkspaceStatus = {
+  path: string;
+  name: string;
+  git_branch?: string;
+};
+
 export type RuntimeDoctorReport = {
   workspace: string;
   status: string;
@@ -174,6 +180,39 @@ export type OpenWorkspaceResponse = WorkspacesState & {
   candidate?: WorkspaceEntry | null;
 };
 
+export type ConfigField = {
+  path: string;
+  type: string;
+  category: string;
+  reload_policy: "hot" | "next_turn" | "rebuild_runtime" | "restart_required";
+  description?: string;
+  session_override?: boolean;
+  runtime_override?: boolean;
+  editor?: string;
+  options?: string[];
+  minimum?: number | null;
+  maximum?: number | null;
+  item_type?: string;
+};
+
+export type ConfigSnapshot = {
+  settings: Record<string, unknown>;
+  project_config: Record<string, unknown>;
+  profile_config: Record<string, unknown>;
+  session_config: Record<string, unknown>;
+  runtime_config: Record<string, unknown>;
+  effective_config: Record<string, unknown>;
+  config_hash: string;
+  effective_hash: string;
+  config_version: string;
+  reload_policy: string;
+  pending_effects: string[];
+  source_map: Record<string, string>;
+  active_profile?: string | null;
+  profiles: string[];
+  schema: { fields: ConfigField[]; categories: string[] };
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
@@ -181,7 +220,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || response.statusText);
+    const detail = payload.detail;
+    if (detail && typeof detail === "object") {
+      throw new Error(JSON.stringify(detail));
+    }
+    throw new Error(detail || response.statusText);
   }
   return response.json() as Promise<T>;
 }
@@ -189,6 +232,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ ok: boolean; workspace: string }>("/api/health"),
   workspace: () => request<{ path: string; name: string }>("/api/workspace"),
+  workspaceStatus: () => request<WorkspaceStatus>("/api/workspace/status"),
   workspaces: () => request<WorkspacesState>("/api/workspaces"),
   openWorkspace: (path: string, confirmed = false) =>
     request<OpenWorkspaceResponse>("/api/workspaces/open", {
@@ -221,5 +265,47 @@ export const api = {
   rejectPending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/reject`, { method: "POST" }),
   capabilities: () => request<{ capabilities: unknown[] }>("/api/capabilities"),
   mcp: () => request<Record<string, unknown>>("/api/mcp"),
-  settings: () => request<Record<string, unknown>>("/api/settings")
+  settings: () => request<Record<string, unknown>>("/api/settings"),
+  config: (sessionId?: string) => request<ConfigSnapshot>(sessionId ? `/api/config?session_id=${encodeURIComponent(sessionId)}` : "/api/config"),
+  configSet: (path: string, value: unknown, baseHash?: string) =>
+    request<ConfigSnapshot>("/api/config/set", {
+      method: "POST",
+      body: JSON.stringify({ path, value, base_hash: baseHash })
+    }),
+  configPatch: (patch: Record<string, unknown>, baseHash?: string) =>
+    request<ConfigSnapshot>("/api/config", {
+      method: "PATCH",
+      body: JSON.stringify({ patch, base_hash: baseHash })
+    }),
+  setProjectProfile: (profile: string | null, baseHash?: string, sessionId?: string) =>
+    request<ConfigSnapshot>("/api/config/profile", {
+      method: "POST",
+      body: JSON.stringify({ profile, base_hash: baseHash, session_id: sessionId })
+    }),
+  configProfileSet: (profile: string, path: string, value: unknown, baseHash?: string, sessionId?: string) =>
+    request<ConfigSnapshot>("/api/config/profile/set", {
+      method: "POST",
+      body: JSON.stringify({ profile, path, value, base_hash: baseHash, session_id: sessionId })
+    }),
+  sessionConfigSet: (sessionId: string, path: string, value: unknown) =>
+    request<ConfigSnapshot>(`/api/sessions/${encodeURIComponent(sessionId)}/config/set`, {
+      method: "POST",
+      body: JSON.stringify({ path, value })
+    }),
+  setSessionProfile: (sessionId: string, profile: string | null) =>
+    request<ConfigSnapshot>(`/api/sessions/${encodeURIComponent(sessionId)}/profile`, {
+      method: "POST",
+      body: JSON.stringify({ profile })
+    }),
+  setSessionModel: (sessionId: string, model: string) =>
+    request<ConfigSnapshot & { pending_next_turn?: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, {
+      method: "POST",
+      body: JSON.stringify({ model })
+    }),
+  debugSet: (path: string, value: unknown, sessionId?: string) =>
+    request<ConfigSnapshot>("/api/debug/set", {
+      method: "POST",
+      body: JSON.stringify({ path, value, session_id: sessionId })
+    }),
+  sessionTools: (sessionId: string) => request<Record<string, unknown>>(`/api/sessions/${encodeURIComponent(sessionId)}/tools`)
 };

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+from pp_agent.config import ConfigValidationError, get_config_manager
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.sessions import SessionStore
 
@@ -96,6 +97,23 @@ def build_runtime_doctor_report(
     pending_items = pending_store.list()
     patch_artifacts = list_pending_patch_artifacts(pending_store, session_id=session_id)
     findings: list[dict[str, Any]] = []
+    config_status: dict[str, Any] = {"status": "ok", "pending_effects": []}
+
+    try:
+        config_snapshot = get_config_manager(workspace).get_effective_snapshot(session_id=session_id)
+        config_status = {
+            "status": "ok",
+            "active_profile": config_snapshot.active_profile,
+            "config_version": config_snapshot.config_version,
+            "reload_policy": config_snapshot.reload_policy,
+            "pending_effects": list(config_snapshot.pending_effects),
+        }
+    except ConfigValidationError as exc:
+        config_status = {"status": "invalid", "pending_effects": [], "errors": exc.errors}
+        findings.append({"kind": "invalid_config", "errors": exc.errors})
+    except (ValueError, TypeError) as exc:
+        config_status = {"status": "invalid", "pending_effects": [], "error": str(exc)}
+        findings.append({"kind": "invalid_config", "error": str(exc)})
 
     for item in pending_items:
         token = str(item.get("token") or "").strip()
@@ -172,7 +190,9 @@ def build_runtime_doctor_report(
             "pending_action_count": len(pending_items),
             "pending_artifact_count": len(patch_artifacts),
             "finding_count": len(findings),
+            "pending_config_effect_count": len(config_status.get("pending_effects") or []),
         },
+        "config": config_status,
         "sessions": session_summaries,
         "pending_artifacts": patch_artifacts,
         "findings": findings,

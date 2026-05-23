@@ -325,8 +325,17 @@ class Settings(BaseModel):
             return
         # 读取并解析JSON配置文件
         data = json.loads(config_path.read_text(encoding="utf-8"))
+        self.apply_project_config_data(data)
+
+    def apply_project_config_data(self, data: dict) -> None:
+        """Apply project config data without reading from disk."""
         if "model" in data:
-            self.model.model = data["model"]
+            if isinstance(data["model"], dict):
+                self.model = self.model.model_copy(update=data["model"], deep=True)
+            else:
+                self.model.model = data["model"]
+        if "provider" in data and isinstance(data["provider"], dict):
+            self.provider = self.provider.model_copy(update=data["provider"], deep=True)
         if "base_url" in data:
             self.provider.base_url = data["base_url"]
         if "enable_thinking" in data:

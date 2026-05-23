@@ -266,6 +266,33 @@ if app:
 
         config_show_main(workspace)
 
+    @config_app.command("schema")
+    def config_schema(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        from pp_agent.cli.commands.config import config_schema_main
+
+        config_schema_main(workspace)
+
+    @config_app.command("set")
+    def config_set(
+        path: str,
+        value: str,
+        base_hash: Optional[str] = typer.Option(None, "--base-hash"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.config import config_set_main
+
+        config_set_main(workspace, path, value, base_hash=base_hash)
+
+    @config_app.command("patch")
+    def config_patch(
+        patch: str,
+        base_hash: Optional[str] = typer.Option(None, "--base-hash"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.config import config_patch_main
+
+        config_patch_main(workspace, patch, base_hash=base_hash)
+
 
     @timeline_app.command("show")
     def timeline_show(

@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from pp_agent.app.bootstrap import load_settings, timeline_store_for
+from pp_agent.config import ConfigConflictError, get_config_manager
 from pp_agent.cli.render.runtime import console
 
 
 def config_show_main(workspace: Path) -> None:
-    settings = load_settings(workspace)
+    manager = get_config_manager(workspace)
+    snapshot = manager.get_effective_snapshot()
+    settings = snapshot.settings
     payload = {
+        "config_hash": snapshot.config_hash,
+        "effective_hash": snapshot.effective_hash,
+        "config_version": snapshot.config_version,
+        "reload_policy": snapshot.reload_policy,
+        "source_map": snapshot.source_map,
         "workspace": str(settings.workspace),
         "session_dir": str(settings.session_store_dir()),
         "timeline_dir": str(timeline_store_for(workspace).root),
@@ -42,4 +51,46 @@ def config_show_main(workspace: Path) -> None:
     console.print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-__all__ = ["config_show_main"]
+def config_schema_main(workspace: Path) -> None:
+    console.print(json.dumps(get_config_manager(workspace).schema(), ensure_ascii=False, indent=2))
+
+
+def config_set_main(workspace: Path, path: str, raw_value: str, *, base_hash: str | None = None) -> dict[str, Any]:
+    value = parse_config_value(raw_value)
+    try:
+        snapshot = get_config_manager(workspace).set_path(path, value, base_hash=base_hash)
+    except ConfigConflictError as exc:
+        message = f"Config conflict: expected {exc.expected_hash}, current {exc.actual_hash}"
+        console.print(message)
+        return {"ok": False, "conflict": True, "message": message, "actual_hash": exc.actual_hash}
+    payload = snapshot.model_dump(mode="json")
+    console.print(json.dumps({"ok": True, "config_hash": payload["config_hash"], "reload_policy": payload["reload_policy"]}, ensure_ascii=False, indent=2))
+    return payload
+
+
+def config_patch_main(workspace: Path, raw_patch: str, *, base_hash: str | None = None) -> dict[str, Any]:
+    patch = parse_config_value(raw_patch)
+    if not isinstance(patch, dict):
+        raise ValueError("Config patch must be a JSON object")
+    try:
+        snapshot = get_config_manager(workspace).patch_project_config(patch, base_hash=base_hash)
+    except ConfigConflictError as exc:
+        message = f"Config conflict: expected {exc.expected_hash}, current {exc.actual_hash}"
+        console.print(message)
+        return {"ok": False, "conflict": True, "message": message, "actual_hash": exc.actual_hash}
+    payload = snapshot.model_dump(mode="json")
+    console.print(json.dumps({"ok": True, "config_hash": payload["config_hash"], "reload_policy": payload["reload_policy"]}, ensure_ascii=False, indent=2))
+    return payload
+
+
+def parse_config_value(raw: str) -> Any:
+    text = raw.strip()
+    if not text:
+        return ""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+__all__ = ["config_patch_main", "config_schema_main", "config_set_main", "config_show_main", "parse_config_value"]

@@ -31,6 +31,9 @@ from pp_agent.cli.commands.learning import (
     learning_status_payload,
     reject_learning_candidate,
 )
+from pp_agent.cli.commands.config import config_patch_main, config_set_main
+from pp_agent.cli.commands.debug import debug_set_main
+from pp_agent.cli.commands.model import model_set_main
 # 导入会话管理能力: 分支/回溯/恢复/解析会话ID与轮次
 from pp_agent.cli.commands.sessions import (
     branch_session,
@@ -45,6 +48,7 @@ from pp_agent.cli.render.approvals import render_approval_panel
 from pp_agent.cli.render.queue import render_queue_panel
 from pp_agent.cli.render.runtime import console, render_runtime_status, render_settings
 from pp_agent.cli.render.sessions import render_session_tree
+from pp_agent.runtime.tool_surface import active_tool_surface
 
 
 def handle_queue_command(agent, raw: str) -> bool:
@@ -110,6 +114,9 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
     if raw == "/status":
         render_runtime_status(agent)
         return "handled"
+    if raw == "/tools":
+        console.print(json.dumps(active_tool_surface(agent), ensure_ascii=False, indent=2))
+        return "handled"
     # 查看所有待审批动作面板
     if raw == "/approvals":
         render_approval_panel(workspace)
@@ -123,6 +130,27 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
         events = agent.compact_now()
         if not events:
             console.print("No new messages to compact.")
+        return "handled"
+    if raw.startswith("/config set "):
+        parts = raw.split(" ", 3)
+        if len(parts) != 4:
+            console.print("Usage: /config set <path> <json-value>")
+            return "handled"
+        config_set_main(workspace, parts[2], parts[3])
+        return "handled"
+    if raw.startswith("/config patch "):
+        patch = raw.split(" ", 2)[2].strip()
+        if not patch:
+            console.print("Usage: /config patch <json-merge-patch>")
+            return "handled"
+        config_patch_main(workspace, patch)
+        return "handled"
+    if raw.startswith("/debug set "):
+        parts = raw.split(" ", 3)
+        if len(parts) != 4:
+            console.print("Usage: /debug set <path> <json-value>")
+            return "handled"
+        debug_set_main(workspace, parts[2], parts[3], session_id=agent.session_id)
         return "handled"
     # 重载运行时插件/扩展/工具/技能
     if raw == "/reload":
@@ -443,9 +471,17 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
         return "handled"
     # 动态切换当前大模型
     if raw.startswith("/model "):
-        agent.llm_client.model.model = raw.split(" ", 1)[1].strip()
-        agent.state.model.model = agent.llm_client.model.model
-        console.print(f"model set to {agent.llm_client.model.model}")
+        model = raw.split(" ", 2)[2].strip() if raw.startswith("/model set ") else raw.split(" ", 1)[1].strip()
+        if not model:
+            console.print("Usage: /model set <provider/model>")
+            return "handled"
+        model_set_main(workspace, agent.session_id, model, busy=bool(getattr(agent.state, "is_streaming", False)))
+        manager = getattr(agent, "config_manager", None)
+        if manager is not None:
+            agent.config_snapshot = manager.get_effective_snapshot(session_id=agent.session_id)
+            agent.config_version = getattr(agent.config_snapshot, "config_version", None)
+        agent.llm_client.model.model = model
+        agent.state.model.model = model
         return "handled"
     # 恢复切入指定历史会话
     if raw.startswith("/resume "):
