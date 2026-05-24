@@ -255,7 +255,13 @@ def create_app(
     @app.post("/api/approvals/{token}/approve")
     def approve_pending_action(token: str) -> dict:
         try:
-            return approve_or_execute_pending_action(active_workspace(), token, render=False)
+            result = approve_or_execute_pending_action(active_workspace(), token, render=False)
+            session_id = result.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                handle = session_manager().get_active_handle(session_id)
+                if handle is not None:
+                    handle.record_external_approval_result(result)
+            return result
         except (FileNotFoundError, RuntimeError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -57,9 +57,14 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
         if result.details:
             console.print(json.dumps(result.details, ensure_ascii=False, indent=2))
     lifecycle = result.details.get("lifecycle") if isinstance(result.details, dict) else None
+    details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
     return {
         "token": token,
         "action_type": payload["action_type"],
+        "session_id": payload.get("session_id") or details.get("session_id"),
+        "turn_id": payload.get("turn_id") or details.get("turn_id"),
+        "tool_call_id": payload.get("tool_call_id") or details.get("tool_call_id"),
+        "source_tool_name": details.get("tool_name") or result.tool_name,
         "result": result.content,
         "success": not result.is_error,
         "lifecycle": lifecycle,

@@ -1575,6 +1575,19 @@ class AgentRuntime:
     def _latest_pending_action_note(self, state: AgentState) -> str:
         latest_user_index = self._latest_user_index(state)
         start = 0 if latest_user_index is None else latest_user_index + 1
+        consumed_tokens: set[str] = set()
+        for message in state.messages[start:]:
+            if message.role != "tool":
+                continue
+            details = dict(message.metadata.get("tool_details") or {})
+            lifecycle = details.get("lifecycle") or {}
+            state_name = str(lifecycle.get("state") or "").strip()
+            token = str(details.get("token") or "").strip()
+            if token and (
+                state_name in {"grant_consumed", "execution_succeeded"}
+                or bool(details.get("external_approval_result"))
+            ):
+                consumed_tokens.add(token)
         staged_tokens: list[str] = []
         staged_tools: list[str] = []
         staged_kinds: list[str] = []
@@ -1589,6 +1602,8 @@ class AgentRuntime:
             ):
                 continue
             token = str(details.get("token") or "").strip()
+            if token and token in consumed_tokens:
+                continue
             if token and token not in staged_tokens:
                 staged_tokens.append(token)
             tool_name = str(message.tool_name or details.get("tool_name") or "").strip()

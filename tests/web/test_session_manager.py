@@ -106,6 +106,32 @@ def test_web_session_manager_approval_flow(tmp_path: Path) -> None:
     assert events[0]["type"] == "planner_gate_approved"
 
 
+def test_web_session_manager_records_external_approval_result(tmp_path: Path) -> None:
+    manager = WebSessionManager(tmp_path, runtime_factory=_factory)
+    handle = manager.get_handle("session-1")
+
+    handle.record_external_approval_result(
+        {
+            "session_id": "session-1",
+            "token": "token-1",
+            "action_type": "write_file",
+            "source_tool_name": "write_file",
+            "tool_call_id": "call-1",
+            "result": "Write applied successfully.",
+            "success": True,
+            "lifecycle": {"state": "grant_consumed"},
+            "details": {"path": "test_637.py"},
+        }
+    )
+
+    message = handle.agent.state.messages[-1]
+    assert message.role == "tool"
+    assert message.tool_name == "write_file"
+    assert message.tool_call_id == "call-1"
+    assert message.metadata["tool_details"]["external_approval_result"] is True
+    assert message.metadata["tool_details"]["lifecycle"]["state"] == "grant_consumed"
+
+
 def test_web_session_manager_cancel_marks_running_handle(tmp_path: Path) -> None:
     manager = WebSessionManager(tmp_path, runtime_factory=_factory)
     handle = manager.get_handle("session-1")

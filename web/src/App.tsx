@@ -508,6 +508,17 @@ export function App() {
               approval_details: result.details
             }
           });
+          if (result.success !== false && result.session_id === activeSessionId) {
+            setStatus("Continuing after approved action");
+            try {
+              await api.continueSession(activeSessionId);
+              ensureEventPolling(activeSessionId);
+            } catch (continueError) {
+              const continueMessage = continueError instanceof Error ? continueError.message : String(continueError);
+              setStatus(`Approved, but continue failed: ${continueMessage}`);
+              showNotice(`审批已执行，但自动继续失败：${continueMessage}`, "warning");
+            }
+          }
         }
       }
       await refreshApprovals();
@@ -1631,7 +1642,7 @@ function ObservabilityPanel({
   const [source, setSource] = useState("all");
   const [search, setSearch] = useState("");
   const [follow, setFollow] = useState(true);
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedLogKey, setSelectedLogKey] = useState("");
   const [error, setError] = useState("");
   const liveEvents = activeEvents.map(runtimeEventToTimelineLike);
   const items = latestAgentLoopItems([...timeline, ...liveEvents]);
@@ -1643,7 +1654,11 @@ function ObservabilityPanel({
       const payload = await api.logs({ level, source, search, limit: 300 });
       setLogs(payload.logs);
       setSources(payload.sources);
-      if (follow) setSelectedIndex(Math.max(0, payload.logs.length - 1));
+      if (follow) {
+        setSelectedLogKey(payload.logs.length ? logEntryKey(payload.logs[payload.logs.length - 1], payload.logs.length - 1) : "");
+      } else if (selectedLogKey && !payload.logs.some((entry, index) => logEntryKey(entry, index) === selectedLogKey)) {
+        setSelectedLogKey(payload.logs.length ? logEntryKey(payload.logs[Math.min(payload.logs.length - 1, 0)], 0) : "");
+      }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
@@ -1696,13 +1711,13 @@ function ObservabilityPanel({
           source={source}
           search={search}
           follow={follow}
-          selectedIndex={selectedIndex}
+          selectedLogKey={selectedLogKey}
           error={error}
           setLevel={setLevel}
           setSource={setSource}
           setSearch={setSearch}
           setFollow={setFollow}
-          setSelectedIndex={setSelectedIndex}
+          setSelectedLogKey={setSelectedLogKey}
           onReload={reloadLogs}
         />
       )}
@@ -1717,13 +1732,13 @@ function LogsPanel({
   source,
   search,
   follow,
-  selectedIndex,
+  selectedLogKey,
   error,
   setLevel,
   setSource,
   setSearch,
   setFollow,
-  setSelectedIndex,
+  setSelectedLogKey,
   onReload
 }: {
   logs: LogEntry[];
@@ -1732,15 +1747,16 @@ function LogsPanel({
   source: string;
   search: string;
   follow: boolean;
-  selectedIndex: number;
+  selectedLogKey: string;
   error: string;
   setLevel: (value: string) => void;
   setSource: (value: string) => void;
   setSearch: (value: string) => void;
   setFollow: (value: boolean) => void;
-  setSelectedIndex: (value: number) => void;
+  setSelectedLogKey: (value: string) => void;
   onReload: () => void;
 }) {
+  const selectedIndex = Math.max(0, logs.findIndex((entry, index) => logEntryKey(entry, index) === selectedLogKey));
   const selected = logs[Math.min(selectedIndex, Math.max(0, logs.length - 1))];
   return (
     <div className="logs-workbench">
@@ -1766,7 +1782,14 @@ function LogsPanel({
       <div className="logs-grid">
         <div className="log-list">
           {logs.length ? logs.map((entry, index) => (
-            <button key={`${entry.source}-${index}`} className={index === selectedIndex ? "log-row active" : "log-row"} onClick={() => setSelectedIndex(index)}>
+            <button
+              key={logEntryKey(entry, index)}
+              className={logEntryKey(entry, index) === selectedLogKey ? "log-row active" : "log-row"}
+              onClick={() => {
+                setFollow(false);
+                setSelectedLogKey(logEntryKey(entry, index));
+              }}
+            >
               <span>{formatLogTime(entry.timestamp)}</span>
               <em className={`log-level level-${String(entry.level || "info").toLowerCase()}`}>{entry.level || "info"}</em>
               <strong>{entry.source || "log"}</strong>
@@ -1798,6 +1821,17 @@ function LogsPanel({
       </div>
     </div>
   );
+}
+
+function logEntryKey(entry: LogEntry, index: number) {
+  return [
+    entry.timestamp ?? "",
+    entry.session_id ?? "",
+    entry.source ?? "",
+    entry.level ?? "",
+    entry.message ?? entry.raw ?? "",
+    index,
+  ].join("\u001f");
 }
 
 function MemoryWorkbench() {

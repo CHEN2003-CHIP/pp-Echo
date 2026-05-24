@@ -113,6 +113,10 @@ export type ApprovalsSummary = {
 export type ApprovalActionResponse = {
   token: string;
   action_type: string;
+  session_id?: string | null;
+  turn_id?: string | number | null;
+  tool_call_id?: string | null;
+  source_tool_name?: string | null;
   result: string;
   success?: boolean;
   lifecycle?: { state?: string } | null;
@@ -363,6 +367,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ prompt })
     }),
+  continueSession: (sessionId: string) => request<{ session_id: string }>(`/api/sessions/${sessionId}/continue`, { method: "POST" }),
   approve: (sessionId: string) => request(`/api/sessions/${sessionId}/approve`, { method: "POST" }),
   reject: (sessionId: string) => request(`/api/sessions/${sessionId}/reject`, { method: "POST" }),
   cancel: (sessionId: string) => request(`/api/sessions/${sessionId}/cancel`, { method: "POST" }),

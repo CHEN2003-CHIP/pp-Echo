@@ -3,12 +3,14 @@ from __future__ import annotations
 import queue
 import threading
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from pp_agent.app import bootstrap
+from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.runtime.control_plane import list_pending_patch_artifacts, summarize_runtime_control
 from pp_agent.runtime import AgentEvent
 
@@ -23,7 +25,7 @@ MAX_WEB_MEDIA_URL_CHARS = 4_096
 MAX_WEB_EVENT_TEXT_CHARS = 12_000
 MAX_WEB_EVENT_COLLECTION_ITEMS = 24
 MAX_WEB_EVENT_OBJECT_KEYS = 80
-WEB_MESSAGE_ROLES = {"user", "assistant", "tool"}
+WEB_MESSAGE_ROLES = {"user", "assistant"}
 
 
 @dataclass
@@ -138,6 +140,38 @@ class WebSessionHandle:
             {"cancel_requested": True},
         )
         return {"session_id": self.session_id, "cancel_requested": True, "busy": self.is_busy()}
+
+    def record_external_approval_result(self, result: dict) -> None:
+        if result.get("session_id") and str(result.get("session_id")) != self.session_id:
+            return
+        token = str(result.get("token") or "").strip()
+        action_type = str(result.get("action_type") or "").strip()
+        tool_name = str(result.get("source_tool_name") or action_type or "approve_pending_action").strip()
+        tool_call_id = str(result.get("tool_call_id") or token or "").strip()
+        details = dict(result.get("details") or {})
+        details.update(
+            {
+                "token": token,
+                "action_type": action_type,
+                "source_tool_name": tool_name,
+                "external_approval_result": True,
+                "success": bool(result.get("success", True)),
+                "lifecycle": result.get("lifecycle") or details.get("lifecycle"),
+            }
+        )
+        self.agent.state.messages.append(
+            ChatMessage(
+                role="tool",
+                tool_call_id=tool_call_id or None,
+                tool_name=tool_name,
+                content=[TextPart(text=str(result.get("result") or ""))],
+                metadata={"tool_details": details, "is_error": result.get("success") is False},
+                timestamp=time.time(),
+            )
+        )
+        persist = getattr(self.agent, "_persist", None)
+        if callable(persist):
+            persist()
 
     def cancel_requested(self) -> bool:
         checker = getattr(self.agent, "cancellation_requested", None)
