@@ -163,6 +163,8 @@ class BrowserCapabilityConfig(BaseModel):
     screenshot_dir: str = ""
     launch_flags: list[str] = Field(default_factory=list)
     default_profile: str = "isolated"
+    profile_mode: str = "isolated"
+    remote_cdp_url: str = ""
     allow_private_network: bool = False
     allowed_hostnames: list[str] = Field(default_factory=list)
     deny_hostnames: list[str] = Field(default_factory=list)
@@ -183,7 +185,20 @@ class WebCapabilityConfig(BaseModel):
     """
     Static web search/fetch configuration.
     """
+    primary_providers: list[str] = Field(default_factory=lambda: ["brave", "tavily", "serpapi", "exa"])
     search_providers: list[str] = Field(default_factory=lambda: ["baidu", "zhipu", "bing", "duckduckgo"])
+    provider_keys_env: dict[str, str] = Field(default_factory=lambda: {
+        "brave": "BRAVE_SEARCH_API_KEY",
+        "tavily": "TAVILY_API_KEY",
+        "serpapi": "SERPAPI_API_KEY",
+        "exa": "EXA_API_KEY",
+        "github": "GITHUB_TOKEN",
+    })
+    cache_ttl_seconds: int = 900
+    news_freshness_hours: int = 48
+    github_token_env: str = "GITHUB_TOKEN"
+    guard_allow_private_network: bool = False
+    guard_max_redirects: int = 5
     search_timeout_seconds: int = 10
     fetch_timeout_seconds: int = 10
     zhipu_api_key_env: str = "ZHIPUAI_API_KEY"
@@ -479,6 +494,10 @@ class Settings(BaseModel):
             self.capabilities.browser.launch_flags = [str(value) for value in browser_config["launch_flags"]]
         if "default_profile" in browser_config:
             self.capabilities.browser.default_profile = str(browser_config["default_profile"])
+        if "profile_mode" in browser_config:
+            self.capabilities.browser.profile_mode = str(browser_config["profile_mode"])
+        if "remote_cdp_url" in browser_config:
+            self.capabilities.browser.remote_cdp_url = str(browser_config["remote_cdp_url"])
         if "allow_private_network" in browser_config:
             self.capabilities.browser.allow_private_network = bool(browser_config["allow_private_network"])
         if "allowed_hostnames" in browser_config:
@@ -509,8 +528,28 @@ class Settings(BaseModel):
             self.capabilities.browser.shutdown_timeout_seconds = max(1, int(browser_config["shutdown_timeout_seconds"]))
 
         web_config = capability_config.get("web", {})
+        if "primary_providers" in web_config:
+            self.capabilities.web.primary_providers = [str(value).lower() for value in web_config["primary_providers"]]
         if "search_providers" in web_config:
             self.capabilities.web.search_providers = [str(value).lower() for value in web_config["search_providers"]]
+        if "provider_keys_env" in web_config and isinstance(web_config["provider_keys_env"], dict):
+            self.capabilities.web.provider_keys_env = {str(key).lower(): str(value) for key, value in web_config["provider_keys_env"].items()}
+        if "cache_ttl_seconds" in web_config:
+            self.capabilities.web.cache_ttl_seconds = max(1, int(web_config["cache_ttl_seconds"]))
+        if "news_freshness_hours" in web_config:
+            self.capabilities.web.news_freshness_hours = max(1, int(web_config["news_freshness_hours"]))
+        if "github_token_env" in web_config:
+            self.capabilities.web.github_token_env = str(web_config["github_token_env"])
+        if "guard_allow_private_network" in web_config:
+            self.capabilities.web.guard_allow_private_network = bool(web_config["guard_allow_private_network"])
+        if "guard_max_redirects" in web_config:
+            self.capabilities.web.guard_max_redirects = max(0, int(web_config["guard_max_redirects"]))
+        guard_config = web_config.get("guard", {})
+        if isinstance(guard_config, dict):
+            if "allow_private_network" in guard_config:
+                self.capabilities.web.guard_allow_private_network = bool(guard_config["allow_private_network"])
+            if "max_redirects" in guard_config:
+                self.capabilities.web.guard_max_redirects = max(0, int(guard_config["max_redirects"]))
         if "search_timeout_seconds" in web_config:
             self.capabilities.web.search_timeout_seconds = max(1, int(web_config["search_timeout_seconds"]))
         if "fetch_timeout_seconds" in web_config:

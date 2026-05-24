@@ -1,15 +1,7 @@
 # Workflows
 
 <!-- pp-echo-detail-memory:begin -->
-9-96ec-d910f764b7a1 turn=turn-3
-
-### Subagent orchestration workflow
-
-To use subagents, trigger explicit handoff with @subagent in chat or use the orchestrate_agents tool for parallel read-only analysis. Built-in specs include repo-researcher, change-reviewer, test-investigator, api-scout, memory-scout, implementation-planner, and code-worker. Child execution forks a session, narrows tools, runs a constrained prompt, and returns a summary.
-
-Evidence: README.md section 'Subagent Progress' and 'Core Workflows > 1A. Explicit subagent handoff'. Lists specific built-in child specs and describes the narrow, bounded nature of current subagent support.
-
-Source: session=e82d84e7-f854-4e9a-b08a-9af4cd1298df turn=turn-1
+e7-f854-4e9a-b08a-9af4cd1298df turn=turn-1
 
 ### README.md Smoke Test Line Replacement Protocol
 
@@ -170,4 +162,12 @@ There is a strong trend towards integrating Model Context Protocol (MCP) into co
 Evidence: Trending items explicitly mention 'MCP Registry', 'Chrome DevTools for coding agents', and 'Making ALL Software Agent-Native'.
 
 Source: session=99f5237f-850b-4b14-a5f2-fe2cf15b7de1 turn=turn-7
+
+### Layered memory and learning system
+
+Knowledge management uses a layered approach: Bootstrap memory (`MEMORY.md`) for stable conventions, daily files (`memory/daily/*.md`) for transient notes, and retrievable file memory with optional vector recall for project-specific knowledge. The learning runtime extracts durable facts from interactions to update these stores.
+
+Evidence: Documentation Guide mentions 'Memory stack is layered rather than monolithic' and points to `docs/agent-learning-en.md` and `docs/source-map.md` for details on how the learning modules feed back into workspace or global memory.
+
+Source: session=867d92a1-8239-4fdf-8fd8-981a5a2deafd turn=turn-3
 <!-- pp-echo-detail-memory:end -->

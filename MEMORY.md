@@ -7,11 +7,7 @@ Short-lived prompt memory for durable preferences, project decisions, and naviga
 Use `memory_search` and `memory_get` for detailed notes in `memory/**/*.md`.
 
 ### Learned Notes
-Evidence: Existence of MEMORY.md, PROJECT_LEARNING.md, and a 'memory' directory in the root.
-- **Smoke Test Documentation Naming**: Use the naming convention 'docs/worktree-smoke-[component].md' for isolated smoke test documentation files.
-  Evidence: The task explicitly requested creating 'docs/worktree-smoke-web.md' with a specific content line indicating an isolated worktree smoke test.
-  Source: session=8778eb07-2fa5-4bc2-8529-d8028df354d9 turn=turn-1
-- **Smoke Test Documentation Naming**: Isolated worktree smoke tests for web components should be documented in files named `docs/worktree-smoke-web.md` containing a single line summary.
+Source: session=8778eb07-2fa5-4bc2-8529-d8028df354d9 turn=turn-1
   Evidence: The specific task requested creating `docs/worktree-smoke-web.md` with the content 'pp-Echo isolated worktree smoke test'.
   Source: session=b1b826c9-027b-410e-b7a9-30f3ea5d0285 turn=turn-1
 - **Orchestration Requirement for Code Changes**: Code changes must be executed using the 'orchestrate_agents' workflow rather than direct file editing tools.
@@ -32,6 +28,9 @@ Evidence: Existence of MEMORY.md, PROJECT_LEARNING.md, and a 'memory' directory 
 - **Browser Testing Procedure**: When testing browser tools, avoid using approve_pending_action and do not request user interaction. Use direct tool calls like navigate, read_state, type, click, and screenshot.
   Evidence: User instructions: '只使用 browser 工具完成，不要使用 approve_pending_action，不要请求我点击 Approve。'
   Source: session=1734d14d-9803-4fae-903a-c6800b780bad turn=turn-1
+- **Windows-first platform strategy**: pp-Echo is explicitly designed as a Windows-first coding agent. While Linux and macOS support are planned, the current stable implementation, tooling (PowerShell), and documentation prioritize Windows. Users should treat non-Windows platforms as future compatibility work.
+  Evidence: README.md states: 'Windows-first is the accurate description today... Linux and macOS should be treated as future compatibility work rather than current parity.'
+  Source: session=867d92a1-8239-4fdf-8fd8-981a5a2deafd turn=turn-3
 
 ### Detailed Memory Index
 - `memory/architecture.md` - Architecture

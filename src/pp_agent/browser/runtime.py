@@ -6,8 +6,9 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from pp_agent.browser.controller import BrowserController, LocalCDPBrowserController
+from pp_agent.browser.controller import BrowserController
 from pp_agent.browser.models import BrowserActRequest, BrowserNode, BrowserSnapshot, BrowserToolArgs
+from pp_agent.browser.managed_controller import ManagedBrowserController
 from pp_agent.browser.policy import BrowserPolicy
 from pp_agent.storage.settings import BrowserCapabilityConfig, Settings
 from pp_agent.tools.base import ToolExecutionResult
@@ -36,6 +37,8 @@ class BrowserRuntime:
         controller_status = self._browser_controller.status() if self._browser_controller is not None else {}
         return {
             "enabled": bool(self.settings.capabilities.browser.enable),
+            "profile_mode": self.settings.capabilities.browser.profile_mode,
+            "remote_cdp_url": self.settings.capabilities.browser.remote_cdp_url,
             "tools": list(self._registered_tool_names),
             "controller_ready": self._browser_controller is not None,
             **controller_status,
@@ -78,12 +81,14 @@ class BrowserRuntime:
         return self._browser_controller
 
     def _default_controller_factory(self, workspace: Path, config: BrowserCapabilityConfig) -> BrowserController:
-        return LocalCDPBrowserController(
+        return ManagedBrowserController(
             workspace=workspace,
             browser_executable=config.browser_executable,
             user_data_dir=config.user_data_dir,
             screenshot_dir=config.screenshot_dir,
             launch_flags=list(config.launch_flags),
+            profile_mode=config.profile_mode,
+            remote_cdp_url=config.remote_cdp_url,
             connect_timeout_seconds=config.connect_timeout_seconds,
             navigation_timeout_ms=config.navigation_timeout_ms,
             cdp_http_timeout_seconds=config.cdp_http_timeout_seconds,

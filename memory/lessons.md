@@ -1,15 +1,7 @@
 # Lessons
 
 <!-- pp-echo-detail-memory:begin -->
-ior agents may incorrectly assume write capabilities are unavailable. Always verify the actual toolset (e.g., `write_file`) before concluding a task is impossible due to constraints.
-
-Evidence: The prior agent manifest claimed no write tools were available, but the current session successfully used `write_file` to create the target file.
-
-Source: session=0d412130-1fda-483b-b34e-811cd7820214 turn=turn-1
-
-### Capability Mismatch in Subagent Tasks
-
-When a subagent's available tools are strictly read-only (read_file, list_files, search_text, grep_code), it cannot fulfill tasks requiring file creation or modification, even if the high-level task allows edits. The agent must report inability to proceed rather than attempting forbidden calls.
+or modification, even if the high-level task allows edits. The agent must report inability to proceed rather than attempting forbidden calls.
 
 Evidence: Agent output confirms: 'I cannot invoke orchestrate_agents or perform write operations directly' due to 'read-only constraint'.
 
@@ -165,6 +157,14 @@ Using browser.navigate with a data: URL may cause a timeout if the browser fails
 Evidence: tool:browser.navigate: Timed out waiting for browser page target.
 
 Source: session=1734d14d-9803-4fae-903a-c6800b780bad turn=turn-1
+
+### Safety via approval gates and Git-backed rewind
+
+The project enforces safety through a multi-layered approach: planning before acting, explicit user approval for risky actions (shell execution, file writes), and Git-backed checkpoints that allow safe rewinding of both repository state and conversation history.
+
+Evidence: Technical Highlights section details 'Planner approval', 'exact-effect approvals', and 'Git-backed rewind' as core architectural pillars implemented in `src/pp_agent/runtime/git_checkpoint.py` and `policy.py`.
+
+Source: session=867d92a1-8239-4fdf-8fd8-981a5a2deafd turn=turn-3
 <!-- pp-echo-detail-memory:end -->
 t... memory confusion'. Recommended actions 1 and 4.
 

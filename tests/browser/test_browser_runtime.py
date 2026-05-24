@@ -184,6 +184,22 @@ def test_browser_error_returns_diagnostics(tmp_path: Path, monkeypatch) -> None:
     assert result.details["diagnostics"]["runtime"]["controller_ready"] is True
 
 
+def test_browser_status_includes_profile_and_remote_config(tmp_path: Path, monkeypatch) -> None:
+    settings = _settings(
+        tmp_path,
+        monkeypatch,
+        {"profile_mode": "remote", "remote_cdp_url": "http://127.0.0.1:9222"},
+    )
+    registry, loaded = _registry(tmp_path, settings, FakeBrowserController())
+
+    result = registry.execute("browser", {"action": "status"})
+
+    assert loaded.browser_runtime is not None
+    assert result.is_error is False
+    assert loaded.browser_runtime.status()["profile_mode"] == "remote"
+    assert loaded.browser_runtime.status()["remote_cdp_url"] == "http://127.0.0.1:9222"
+
+
 def _browser_agent(tmp_path: Path, monkeypatch, llm_client, controller) -> AgentRuntime:
     settings = _settings(tmp_path, monkeypatch)
     registry, _loaded = _registry(tmp_path, settings, controller)
