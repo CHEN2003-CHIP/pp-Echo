@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class LearningRuntime:
-    """负责在对话的每个轮次被持久化后，
-    自动从中提取“可学习”的知识（比如用户偏好、项目约定等），并将这些候选内容存储下来，同时尝试自动写入文件形式的记忆。"""
+    """Best-effort learning extraction after each persisted turn."""
+
     def __init__(
         self,
         *,
@@ -30,6 +30,17 @@ class LearningRuntime:
         self.store = store or LearningStore(self.workspace / ".pp-agent" / "learning")
         self.extractor = extractor or LearningExtractor(llm_client, settings)
         self.file_memory_writer = FileMemoryWriter(workspace=self.workspace, settings=settings, store=self.store)
+        self._extraction_disabled = False
+        self._extraction_disabled_reason: str | None = None
+
+    def refresh_llm_client(self, llm_client: Any, *, settings: LearningSettings | None = None) -> None:
+        if settings is not None:
+            self.settings = settings
+            self.file_memory_writer.settings = settings
+        self.extractor.llm_client = llm_client
+        if self._extraction_disabled and self._extraction_disabled_reason:
+            self._extraction_disabled = False
+            self._extraction_disabled_reason = None
 
     def on_turn_persisted(
         self,
@@ -38,8 +49,14 @@ class LearningRuntime:
         turn_id: str,
         new_messages: list[ChatMessage],
     ) -> list[LearningCandidate]:
-        """当一个新的对话轮次（turn）被持久化（即保存到对话历史）后调用，触发学习流程。"""
         if not self.settings.enable or not self.settings.auto_extract:
+            return []
+        if self._extraction_disabled:
+            logger.debug(
+                "Learning extraction is disabled for session=%s turn=%s; skipping extraction",
+                session_id,
+                turn_id,
+            )
             return []
         try:
             candidates = self.extractor.extract(
@@ -48,6 +65,16 @@ class LearningRuntime:
                 messages=new_messages,
             )
         except Exception as exc:  # noqa: BLE001
+            if self._is_quota_exhausted_error(exc):
+                self._extraction_disabled = True
+                self._extraction_disabled_reason = str(exc)
+                logger.warning(
+                    "Learning extraction disabled for session=%s turn=%s after quota exhaustion: %s",
+                    session_id,
+                    turn_id,
+                    exc,
+                )
+                return []
             logger.warning("Learning extraction failed for session=%s turn=%s: %s", session_id, turn_id, exc)
             raise
         self.store.append_candidates(candidates)
@@ -56,3 +83,12 @@ class LearningRuntime:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Automatic file memory write failed for session=%s turn=%s: %s", session_id, turn_id, exc)
         return candidates
+
+    @staticmethod
+    def _is_quota_exhausted_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return (
+            "allocationquota.freetieronly" in text
+            or "free tier of the model has been exhausted" in text
+            or ("use free tier only" in text and "403" in text)
+        )

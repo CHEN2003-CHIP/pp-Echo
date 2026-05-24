@@ -2056,6 +2056,9 @@ class AgentRuntime:
                         model=ModelConfig(**settings.model.model_dump(mode="python")),
                     )
                     self.state.model = self.llm_client.model.model_copy(deep=True)
+                    refresh_learning_client = getattr(self.learning_runtime, "refresh_llm_client", None)
+                    if callable(refresh_learning_client):
+                        refresh_learning_client(self.llm_client, settings=settings.learning)
                 except Exception as exc:  # noqa: BLE001
                     yield from self._emit(
                         self._event(

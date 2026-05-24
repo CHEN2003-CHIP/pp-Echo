@@ -17,7 +17,9 @@
   <a href="https://github.com/CHEN2003-CHIP/pp-Echo/releases"><img alt="Releases" src="https://img.shields.io/badge/Releases-F8D66D?style=for-the-badge&logo=github&logoColor=111827"></a>
 </p>
 
-![pp-Echo hero](docs/assets/hero.svg)
+<p align="center">
+  <img src="docs/assets/hero.gif" alt="pp-Echo demo: visible planning, approval-first execution, Git-backed rewind, layered memory, and bounded subagents" width="920">
+</p>
 
 <p align="center">
   <code>Plan before act</code> | <code>Approve risky actions</code> | <code>Git-backed rewind</code> | <code>Layered memory</code> | <code>Bounded subagents</code> | <code>CLI + TUI + Web UI</code>
