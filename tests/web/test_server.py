@@ -291,7 +291,9 @@ def test_web_api_approve_pending_action_applies_write_and_removes_token(tmp_path
     assert response.json()["lifecycle"]["state"] == "grant_consumed"
     assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == "# Memory\n"
     assert token not in approvals.json()["tokens"]
-    assert all(item["token"] != token for item in approvals.json()["items"])
+    assert all(item["token"] != token for item in approvals.json()["active_items"])
+    archived = next(item for item in approvals.json()["archived_items"] if item["token"] == token)
+    assert archived["lifecycle"]["state"] == "grant_consumed"
 
 
 def test_web_api_lists_patch_artifact_with_session_metadata_and_applies_it(tmp_path: Path) -> None:

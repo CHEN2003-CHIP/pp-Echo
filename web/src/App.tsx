@@ -471,7 +471,15 @@ export function App() {
       if (approval.kind === "planner" && activeSessionId) {
         await api.approve(activeSessionId);
         clearPlannerToken(activeSessionId);
-        setApprovalFeedback("Plan approved. Waiting for the concrete action.");
+        const message = "Plan approved. Waiting for the concrete action.";
+        setApprovalFeedback(message);
+        appendEvent(activeSessionId, {
+          type: "approval_result",
+          session_id: activeSessionId,
+          message,
+          timestamp: Date.now() / 1000,
+          details: { action_type: "planner_approval", token: approval.token, success: true }
+        });
         ensureEventPolling(activeSessionId);
       } else {
         const result = await api.approvePending(approval.token);
@@ -479,6 +487,22 @@ export function App() {
         const message = approvalSuccessMessage(approval.actionType || "", result);
         setApprovalFeedback(message);
         setStatus(message);
+        if (activeSessionId) {
+          appendEvent(activeSessionId, {
+            type: "approval_result",
+            session_id: activeSessionId,
+            message,
+            timestamp: Date.now() / 1000,
+            details: {
+              action_type: approval.actionType || result.action_type,
+              token: approval.token,
+              success: result.success !== false,
+              result: result.result,
+              lifecycle: result.lifecycle,
+              approval_details: result.details
+            }
+          });
+        }
       }
       await refreshApprovals();
       if (activeSessionId) await refreshSessionState(activeSessionId);
@@ -799,7 +823,7 @@ export function App() {
                   </div>
                 </>
               ) : (
-                <p className="muted">{approvalFeedback || approvalEmptyText(busy, approvalSummary.count)}</p>
+                <p className="muted">{approvalFeedback || approvalEmptyText(busy, approvalSummary.active_count ?? approvalSummary.count)}</p>
               )}
             </InspectorCard>
           )}
@@ -808,7 +832,7 @@ export function App() {
             <dl className="compact-meta">
               <dt>消息</dt><dd>{activeSnapshot?.messages?.length || 0}</dd>
               <dt>事件</dt><dd>{activeEvents.length}</dd>
-              <dt>审批</dt><dd>{approvalSummary.count}</dd>
+              <dt>审批</dt><dd>{approvalSummary.active_count ?? approvalSummary.count}</dd>
               <dt>状态</dt><dd>{displayStatus}</dd>
             </dl>
           </InspectorCard>
@@ -1462,7 +1486,7 @@ function ChatWorkspace({
           )}
           {transcript.map((item) => (
             <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id}>
-              <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : <MessageSquare size={15} />}</div>
+              <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : item.role === "tool" ? <Code2 size={15} /> : <MessageSquare size={15} />}</div>
               <div className="bubble">
                 <span>{roleLabel(item.role)}</span>
                 <RichMessageContent
@@ -2648,6 +2672,17 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
       }
       continue;
     }
+    if (event.type === "approval_result") {
+      flushStream();
+      const text = (event.message || "").trim() || formatApprovalEvent(event);
+      runtime.push({
+        id: `approval:${runtime.length}`,
+        role: "assistant",
+        body: { text, attachments: [] },
+        timestamp: event.timestamp
+      });
+      continue;
+    }
     if (event.type === "turn_end" || event.type === "agent_end" || event.type === "agent_start") {
       flushStream();
       continue;
@@ -2657,7 +2692,18 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
       runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: formatErrorEvent(event), attachments: [] }, timestamp: event.timestamp });
       continue;
     }
-    if (event.type.includes("tool")) flushStream();
+    if (event.type.includes("tool")) {
+      flushStream();
+      if (event.type === "tool_end" || event.type === "tool_result") {
+        runtime.push({
+          id: `assistant-tool:${runtime.length}`,
+          role: "assistant",
+          body: { text: formatToolEvent(event), attachments: [] },
+          timestamp: event.timestamp
+        });
+      }
+      continue;
+    }
   }
 
   flushStream();
@@ -2711,6 +2757,64 @@ function formatErrorEvent(event: RuntimeEvent) {
     appendDiagnosticLines(lines, "controller", controller);
   }
   return lines.join("\n");
+}
+
+function formatToolEvent(event: RuntimeEvent) {
+  const details = event.details || {};
+  const toolName = event.tool_name || "工具";
+  const status = toolEventStatus(details, event.is_error);
+  const lines = [status, `${toolName}`];
+  const path = details.path;
+  const command = details.command;
+  const token = details.token;
+  const output = typeof event.message === "string" ? event.message.trim() : "";
+  if (typeof path === "string" && path.trim()) lines.push(`文件：${path}`);
+  if (typeof command === "string" && command.trim()) lines.push(`命令：${command}`);
+  if (typeof token === "string" && token.trim()) lines.push(`token：${token}`);
+  const returncode = details.returncode;
+  if (typeof returncode === "number") lines.push(`退出码：${returncode}`);
+  if (details.approval_token && typeof details.approval_token === "string") lines.push(`审批 token：${details.approval_token}`);
+  if (output) {
+    lines.push("");
+    lines.push(output);
+  }
+  return lines.join("\n").trim();
+}
+
+function formatApprovalEvent(event: RuntimeEvent) {
+  const details = event.details || {};
+  const approvalDetails = (details.approval_details as Record<string, unknown> | undefined) || {};
+  const lines: string[] = [];
+  const actionType = typeof details.action_type === "string" ? details.action_type : "";
+  if (actionType === "run_shell") {
+    lines.push("Command completed.");
+  } else if (actionType === "write_file" || actionType === "edit_file") {
+    const path = approvalDetails.path || approvalDetails.absolute_path || details.path;
+    lines.push(typeof path === "string" && path.trim() ? `Applied successfully: ${path}` : "Applied successfully.");
+  } else if (actionType === "apply_patch_artifact") {
+    const changedPaths = Array.isArray(approvalDetails.changed_paths)
+      ? approvalDetails.changed_paths.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : [];
+    lines.push(changedPaths.length > 0 ? `Patch applied successfully: ${changedPaths.join(", ")}` : "Patch artifact applied successfully.");
+  } else if (event.message) {
+    lines.push(event.message);
+  } else {
+    lines.push("Approval completed.");
+  }
+  const result = details.result;
+  if (typeof result === "string" && result.trim()) {
+    lines.push("");
+    lines.push(result.trim());
+  }
+  return lines.join("\n").trim();
+}
+
+function toolEventStatus(details: Record<string, unknown>, isError?: boolean) {
+  if (details.persisted === true) return "已完成";
+  if (details.staged === true) return "已进入审批";
+  if (details.approval_unavailable === true) return "无法安全执行";
+  if (isError) return "执行失败";
+  return "执行完成";
 }
 
 function appendDiagnosticLines(lines: string[], label: string, value: unknown) {
@@ -2891,7 +2995,8 @@ function buildActiveApproval(snapshot: SessionSnapshot | undefined, events: Runt
   }
   const sessionId = snapshot?.session_id || "";
   const eventTokens = eventPendingTokens(events);
-  const pending = summary.items.find(
+  const sourceItems = summary.active_items || summary.items;
+  const pending = sourceItems.find(
     (item) => item.action_type !== "planner_approval" && isActionableApproval(item) && approvalBelongsToSession(item, sessionId, eventTokens)
   );
   if (!pending) return null;
@@ -2957,9 +3062,13 @@ function approvalSuccessMessage(actionType: string, result: ApprovalActionRespon
   }
   const path = result.details?.absolute_path || result.details?.path;
   if (actionType === "write_file" || actionType === "edit_file") {
-    return typeof path === "string" && path.trim() ? `Applied successfully: ${path}` : "Applied successfully.";
+    const base = typeof path === "string" && path.trim() ? `Applied successfully: ${path}` : "Applied successfully.";
+    return typeof result.result === "string" && result.result.trim() ? `${base}\n\n${result.result.trim()}` : base;
   }
-  if (actionType === "run_shell") return "Command completed.";
+  if (actionType === "run_shell") {
+    const output = typeof result.result === "string" ? result.result.trim() : "";
+    return output ? `Command completed.\n\n${output}` : "Command completed.";
+  }
   return result.result || "Approval completed.";
 }
 

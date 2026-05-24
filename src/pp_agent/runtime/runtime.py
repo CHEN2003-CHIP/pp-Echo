@@ -1039,9 +1039,14 @@ class AgentRuntime:
             action_type="planner_approval",
             details={
                 "session_id": self.session_id,
+                "turn_id": self.state.turn.turn_id,
                 "tool_calls": [call.model_dump(mode="json") for call in tool_calls],
                 **preview,
             },
+            session_id=self.session_id,
+            turn_id=self.state.turn.turn_id,
+            origin={"source": "runtime", "kind": "planner_approval", "session_id": self.session_id},
+            expires_at=time.time() + 24 * 60 * 60,
         )
 
     def _messages_for_model(self) -> list[ChatMessage]:
@@ -1364,9 +1369,19 @@ class AgentRuntime:
             return
         details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
         details.setdefault("session_id", self.session_id)
+        details.setdefault("turn_id", self.state.turn.turn_id)
         details.setdefault("tool_name", result.tool_name)
         details.setdefault("tool_call_id", result.tool_call_id)
+        details.setdefault("origin", {"source": "runtime", "session_id": self.session_id})
         payload["details"] = details
+        payload.setdefault("session_id", self.session_id)
+        payload.setdefault("turn_id", self.state.turn.turn_id)
+        payload.setdefault("tool_call_id", result.tool_call_id)
+        payload.setdefault("origin", {"source": "runtime", "session_id": self.session_id})
+        effect = result.details.get("effect") if isinstance(result.details, dict) else None
+        if isinstance(effect, dict) and effect.get("payload_digest"):
+            payload.setdefault("canonical_key", effect.get("payload_digest"))
+            payload.setdefault("normalized_arguments", effect.get("normalized_arguments"))
         store.save(token, payload)
 
     def _dequeue_next_message(self, delivery: Optional[str] = None) -> Optional[QueuedMessage]:
@@ -1410,15 +1425,9 @@ class AgentRuntime:
                 "The current turn requires orchestrated code_change edits, but the latest orchestration produced no apply_patch_artifact. "
                 "Report that failure; do not switch to direct edit_file/write_file fallback."
             )
-        pending_patch = self._latest_pending_patch_artifact_since_latest_user(state)
-        if pending_patch is not None:
-            paths = ", ".join(pending_patch.get("changed_paths") or []) or "unknown"
-            tokens = ", ".join(pending_patch.get("tokens") or []) or "unknown"
-            notes.append(
-                "A code_change patch artifact is staged but not applied to the main workspace. "
-                f"Pending tokens: {tokens}. Pending changed paths: {paths}. "
-                "Do not keep probing with read_file, list_files, or run_shell before approval; tell the user to use the Approval panel or approve_pending_action first."
-            )
+        pending_action_note = self._latest_pending_action_note(state)
+        if pending_action_note:
+            notes.append(pending_action_note)
         if not notes:
             return messages
         directive = ChatMessage(
@@ -1563,6 +1572,41 @@ class AgentRuntime:
             )
         return ""
 
+    def _latest_pending_action_note(self, state: AgentState) -> str:
+        latest_user_index = self._latest_user_index(state)
+        start = 0 if latest_user_index is None else latest_user_index + 1
+        staged_tokens: list[str] = []
+        staged_tools: list[str] = []
+        staged_kinds: list[str] = []
+        for message in state.messages[start:]:
+            if message.role != "tool":
+                continue
+            details = dict(message.metadata.get("tool_details") or {})
+            if not (
+                bool(details.get("staged"))
+                or bool(details.get("patch_artifact_pending"))
+                or (details.get("lifecycle") or {}).get("state") == "grant_attached"
+            ):
+                continue
+            token = str(details.get("token") or "").strip()
+            if token and token not in staged_tokens:
+                staged_tokens.append(token)
+            tool_name = str(message.tool_name or details.get("tool_name") or "").strip()
+            if tool_name and tool_name not in staged_tools:
+                staged_tools.append(tool_name)
+            kind = "patch_artifact" if bool(details.get("patch_artifact_pending")) else "staged_tool"
+            if kind not in staged_kinds:
+                staged_kinds.append(kind)
+        if not staged_tokens and not staged_tools:
+            return ""
+        token_text = ", ".join(staged_tokens[:4]) or "unknown"
+        tool_text = ", ".join(staged_tools[:4]) or "unknown"
+        kind_text = ", ".join(staged_kinds[:2]) or "pending"
+        return (
+            f"A {kind_text} approval is still pending for tool(s): {tool_text}. "
+            f"Pending tokens: {token_text}. Do not repeat the same call or probe for results until approval is granted."
+        )
+
     def _default_before_tool_call(self, state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
         """Agent 工具执行前的「最终安全校验钩子」"""
         child_runtime = self._is_subagent_runtime()
@@ -1653,6 +1697,24 @@ class AgentRuntime:
                     "subagent_failure": True,
                     "failure_kind": _result.details.get("failure_kind"),
                     "next_action_hint": "Explain the subagent failure and recommend retrying or switching to direct execution.",
+                },
+            )
+        result_details = getattr(_result, "details", {}) or {}
+        if bool(result_details.get("staged")) or bool(result_details.get("patch_artifact_pending")):
+            return AfterToolCallDecision(
+                continue_loop=False,
+                details={
+                    "approval_pending": True,
+                    "approval_token": result_details.get("token"),
+                    "next_action_hint": "Stop the turn and wait for host approval before continuing.",
+                },
+            )
+        if bool(result_details.get("approval_unavailable")):
+            return AfterToolCallDecision(
+                continue_loop=False,
+                details={
+                    "approval_unavailable": True,
+                    "next_action_hint": "Stop the turn and report that the requested tool cannot be represented for safe approval.",
                 },
             )
         return AfterToolCallDecision(continue_loop=True)

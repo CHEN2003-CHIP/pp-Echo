@@ -45,7 +45,13 @@ class PowerShellTool(BaseTool):
             timeout_seconds=timeout,
             workspace=self.workspace,
         )
-        payload = store.stage(action_type="run_shell", command=command, details={"timeout_seconds": timeout}, effect=effect)
+        payload = store.stage(
+            action_type="run_shell",
+            command=command,
+            details={"timeout_seconds": timeout},
+            effect=effect,
+            origin={"source": "tool", "tool_name": self.spec.name, "kind": "shell"},
+        )
         return ToolExecutionResult(
             tool_call_id="",
             tool_name=self.spec.name,

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from pp_agent.config import ConfigValidationError, get_config_manager
-from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.approvals import PendingActionStore, classify_pending_action, is_active_pending_action, pending_action_state
 from pp_agent.storage.sessions import SessionStore
 
 
@@ -30,6 +30,8 @@ def list_pending_patch_artifacts(
     artifacts: list[dict[str, Any]] = []
     for item in pending_store.list():
         if item.get("action_type") != "apply_patch_artifact":
+            continue
+        if not is_active_pending_action(item):
             continue
         details = item.get("details") if isinstance(item.get("details"), dict) else {}
         item_session_id = str(details.get("session_id") or "").strip()
@@ -98,6 +100,11 @@ def build_runtime_doctor_report(
     patch_artifacts = list_pending_patch_artifacts(pending_store, session_id=session_id)
     findings: list[dict[str, Any]] = []
     config_status: dict[str, Any] = {"status": "ok", "pending_effects": []}
+    active_pending_items = [item for item in pending_items if classify_pending_action(item) == "active"]
+    pending_state_counts: dict[str, int] = {}
+    for item in pending_items:
+        state = pending_action_state(item)
+        pending_state_counts[state] = pending_state_counts.get(state, 0) + 1
 
     try:
         config_snapshot = get_config_manager(workspace).get_effective_snapshot(session_id=session_id)
@@ -118,6 +125,7 @@ def build_runtime_doctor_report(
     for item in pending_items:
         token = str(item.get("token") or "").strip()
         action_type = str(item.get("action_type") or "").strip()
+        lifecycle_state = str((item.get("lifecycle") or {}).get("state") or "").strip()
         details = item.get("details") if isinstance(item.get("details"), dict) else {}
         item_session_id = str(details.get("session_id") or "").strip()
         if session_id is not None and item_session_id and item_session_id != session_id:
@@ -141,6 +149,14 @@ def build_runtime_doctor_report(
                     }
                 )
         if action_type == "apply_patch_artifact":
+            if lifecycle_state in {"expired", "quarantined"}:
+                findings.append(
+                    {
+                        "kind": lifecycle_state,
+                        "token": token,
+                        "session_id": item_session_id,
+                    }
+                )
             target_path = str(item.get("target_path") or "").strip()
             if not target_path:
                 findings.append(
@@ -188,6 +204,8 @@ def build_runtime_doctor_report(
         "summary": {
             "session_count": len(session_summaries) if session_id is not None else len(sessions),
             "pending_action_count": len(pending_items),
+            "active_pending_action_count": len(active_pending_items),
+            "pending_action_state_counts": pending_state_counts,
             "pending_artifact_count": len(patch_artifacts),
             "finding_count": len(findings),
             "pending_config_effect_count": len(config_status.get("pending_effects") or []),

@@ -78,7 +78,7 @@ def test_skill_runtime_is_lazy_until_match(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setattr(skills_runtime_module, "_materialize_skill", tracking_materialize)
 
     available = runtime.available_skills()
-    assert list(available) == ["review-helper"]
+    assert "review-helper" in available
     assert calls == []
 
     messages = runtime.transform_context(

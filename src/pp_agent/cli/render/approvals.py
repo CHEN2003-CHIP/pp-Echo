@@ -42,10 +42,19 @@ def approval_actions(item: dict) -> list[str]:
 
 def render_approval_panel(workspace: Path) -> None:
     summary = approvals_summary_payload(workspace)
-    items = summary["items"]
-    lines = ["== Approvals Queue ==", f"total     {summary['count']}", f"by_type   {summary['by_type']}"]
+    items = summary.get("active_items") or summary["items"]
+    lines = [
+        "== Approvals Queue ==",
+        f"active    {summary.get('active_count', summary['count'])}",
+        f"total     {summary['count']}",
+        f"by_type   {summary['by_type']}",
+    ]
     if not items:
-        lines.extend(["", "No pending actions."])
+        archived_count = summary.get("archived_count", 0)
+        if archived_count:
+            lines.extend(["", f"No active pending actions. {archived_count} archived item(s) are hidden."])
+        else:
+            lines.extend(["", "No pending actions."])
         console.print("\n".join(lines))
         return
     for item in items[:5]:
