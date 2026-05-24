@@ -260,13 +260,12 @@ def create_app(
             details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
             session_id = str(payload.get("session_id") or details.get("session_id") or "").strip()
             handle = session_manager().get_handle(session_id) if session_id else None
-            result = approve_or_execute_pending_action(
+            return approve_or_execute_pending_action(
                 active_workspace(),
                 token,
                 render=False,
                 runtime=handle.agent if handle is not None else None,
             )
-            return result
         except (FileNotFoundError, RuntimeError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -277,13 +276,12 @@ def create_app(
             details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
             session_id = str(payload.get("session_id") or details.get("session_id") or "").strip()
             handle = session_manager().get_handle(session_id) if session_id else None
-            result = reject_pending_action_by_token(
+            return reject_pending_action_by_token(
                 active_workspace(),
                 token,
                 render=False,
                 runtime=handle.agent if handle is not None else None,
             )
-            return result
         except (FileNotFoundError, RuntimeError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

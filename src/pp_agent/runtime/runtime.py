@@ -377,6 +377,7 @@ class AgentRuntime:
         yield from self._emit(self._event(AGENT_START, details={}))
 
         keep_running = True
+        verification_gate_nudged = False
         persist_end_index = turn_persist_context.new_message_start_index
         while keep_running:
             if self._cancellation_token.cancelled:
@@ -479,6 +480,17 @@ class AgentRuntime:
                 #尝试做上下文压缩
                 yield from self._emit_compaction_if_needed()
                 yield from self._emit(self._event(TURN_END, details={"turn_id": self.state.turn.turn_id}))
+                verification_note = self._verification_gate_required_note(self.state)
+                if verification_note and not verification_gate_nudged and not self._assistant_declares_verification_blocker(assistant_text):
+                    self._append_runtime_system_note(
+                        verification_note,
+                        kind="verification_required",
+                        details={"verification_gate": self._verification_gate_state(self.state)},
+                    )
+                    verification_gate_nudged = True
+                    persist_end_index = len(self.state.messages)
+                    keep_running = True
+                    continue
                 #controller决策
                 decision = self.turn_controller.after_assistant_turn(self._dequeue_next_message())
                 yield from self._set_turn_phase(decision.phase, decision.reason)
@@ -1471,6 +1483,12 @@ class AgentRuntime:
         pending_action_note = self._latest_pending_action_note(state)
         if pending_action_note:
             notes.append(pending_action_note)
+        verification_note = self._verification_gate_required_note(state)
+        if verification_note:
+            notes.append(verification_note)
+        reviewer_note = self._reviewer_escalation_note(state)
+        if reviewer_note:
+            notes.append(reviewer_note)
         if not notes:
             return messages
         directive = ChatMessage(
@@ -1623,24 +1641,21 @@ class AgentRuntime:
             "denied",
             "expired",
             "execution_failed",
+            "execution_succeeded",
             "grant_consumed",
             "grant_invalidated",
             "orphaned",
             "quarantined",
             "rejected",
-            "execution_succeeded",
         }
         for message in state.messages[start:]:
             if message.role != "tool":
                 continue
             details = dict(message.metadata.get("tool_details") or {})
+            token = str(details.get("token") or "").strip()
             lifecycle = details.get("lifecycle") or {}
             state_name = str(lifecycle.get("state") or "").strip()
-            token = str(details.get("token") or "").strip()
-            if token and (
-                state_name in terminal_states
-                or bool(details.get("external_approval_result"))
-            ):
+            if token and (state_name in terminal_states or bool(details.get("external_approval_result"))):
                 consumed_tokens.add(token)
         staged_tokens: list[str] = []
         staged_tools: list[str] = []
@@ -1674,6 +1689,174 @@ class AgentRuntime:
         return (
             f"A {kind_text} approval is still pending for tool(s): {tool_text}. "
             f"Pending tokens: {token_text}. Do not repeat the same call or probe for results until approval is granted."
+        )
+
+    def _append_runtime_system_note(self, text: str, *, kind: str, details: dict[str, object] | None = None) -> None:
+        self.state.messages.append(
+            ChatMessage(
+                role="system",
+                content=[TextPart(text=text)],
+                metadata={"runtime_note": kind, **(details or {})},
+                timestamp=time.time(),
+            )
+        )
+
+    def _verification_gate_required_note(self, state: AgentState) -> str:
+        if self._is_subagent_runtime():
+            return ""
+        gate = self._verification_gate_state(state)
+        if not gate["file_changed"] or gate["verification_passed"]:
+            return ""
+        return (
+            "Verification required before final answer: this coding task changed workspace files, but no verification evidence is visible yet. "
+            "Do not claim success. Inspect the changed file or diff, run the smallest relevant test/check when possible, then continue. "
+            "If verification cannot be run, state the blocker explicitly."
+        )
+
+    def _reviewer_escalation_note(self, state: AgentState) -> str:
+        if self._is_subagent_runtime():
+            return ""
+        gate = self._verification_gate_state(state)
+        latest_text = self._latest_user_text(state).lower()
+        explicit_review = any(token in latest_text for token in ("review", "审查", "评审", "diff review", "code review"))
+        reasons: list[str] = []
+        if gate["changed_file_count"] > 1:
+            reasons.append("multiple changed files")
+        if gate["patch_artifact"]:
+            reasons.append("patch artifact involved")
+        if gate["consecutive_failures"] >= 2:
+            reasons.append("repeated tool failures")
+        if explicit_review:
+            reasons.append("user requested review")
+        if not reasons:
+            return ""
+        return (
+            "Reviewer escalation is optional, not mandatory. "
+            f"Consider `change-reviewer` only because: {', '.join(reasons)}. "
+            "For simple changes with clear verification evidence, proceed without reviewer."
+        )
+
+    def _verification_gate_state(self, state: AgentState) -> dict[str, object]:
+        latest_user_index = self._latest_user_index(state)
+        start = 0 if latest_user_index is None else latest_user_index + 1
+        file_changed_paths: list[str] = []
+        file_changed = False
+        command_failed = False
+        verification_passed = False
+        verification_failed = False
+        patch_failed = False
+        patch_artifact = False
+        consecutive_failures = 0
+        trailing_failures = 0
+        saw_file_change_before_inspect = False
+        for message in state.messages[start:]:
+            if message.role != "tool":
+                continue
+            details = dict(message.metadata.get("tool_details") or {})
+            tool_name = str(message.tool_name or details.get("tool_name") or details.get("source_tool_name") or "").strip()
+            action_type = str(details.get("action_type") or tool_name or "").strip()
+            is_error = bool(message.metadata.get("is_error") or details.get("success") is False)
+            returncode = details.get("returncode")
+            if isinstance(returncode, int) and returncode != 0:
+                is_error = True
+            if action_type == "apply_patch_artifact" or bool(details.get("patch_artifact_pending")):
+                patch_artifact = True
+            if self._tool_message_changed_file(message, details, action_type):
+                file_changed = True
+                saw_file_change_before_inspect = True
+                path = str(details.get("path") or details.get("absolute_path") or "").strip()
+                if not path:
+                    changed = details.get("changed_paths")
+                    if isinstance(changed, list) and changed:
+                        for changed_path in changed:
+                            value = str(changed_path).strip()
+                            if value and value not in file_changed_paths:
+                                file_changed_paths.append(value)
+                        path = ""
+                if path and path not in file_changed_paths:
+                    file_changed_paths.append(path)
+            if action_type == "run_shell":
+                command = str(details.get("command") or "").strip()
+                if is_error:
+                    command_failed = True
+                    if self._looks_like_verification_command(command):
+                        verification_failed = True
+                elif self._looks_like_verification_command(command):
+                    verification_passed = True
+            if action_type in {"edit_file", "apply_patch_artifact"} and is_error:
+                patch_failed = True
+            if saw_file_change_before_inspect and not is_error and tool_name in {"read_file", "git_diff_worktree", "git_status", "grep_code", "search_text"}:
+                verification_passed = True
+            if is_error:
+                trailing_failures += 1
+                consecutive_failures = max(consecutive_failures, trailing_failures)
+            else:
+                trailing_failures = 0
+        return {
+            "file_changed": file_changed,
+            "file_changed_paths": file_changed_paths,
+            "changed_file_count": len(file_changed_paths),
+            "command_failed": command_failed,
+            "verification_passed": verification_passed,
+            "verification_failed": verification_failed,
+            "patch_failed": patch_failed,
+            "patch_artifact": patch_artifact,
+            "consecutive_failures": consecutive_failures,
+        }
+
+    @staticmethod
+    def _tool_message_changed_file(message: ChatMessage, details: dict[str, object], action_type: str) -> bool:
+        if bool(details.get("persisted")) and action_type in {"write_file", "edit_file"}:
+            return True
+        if bool(details.get("external_approval_result")):
+            return (
+                str(details.get("approval_status") or "") == "approved"
+                and action_type in {"write_file", "edit_file", "apply_patch_artifact"}
+            )
+        return bool(details.get("patch_artifact_pending")) and action_type in {"write_file", "edit_file"}
+
+    @staticmethod
+    def _looks_like_verification_command(command: str) -> bool:
+        lowered = command.lower()
+        markers = (
+            "pytest",
+            "unittest",
+            "npm test",
+            "pnpm test",
+            "yarn test",
+            "cargo test",
+            "go test",
+            "mvn test",
+            "gradle test",
+            "ruff",
+            "mypy",
+            "tsc",
+            "eslint",
+            "vitest",
+            "jest",
+            "doctor",
+            "report",
+            "git diff",
+            "git status",
+        )
+        return any(marker in lowered for marker in markers)
+
+    @staticmethod
+    def _assistant_declares_verification_blocker(text: str) -> bool:
+        lowered = text.lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "cannot verify",
+                "could not verify",
+                "unable to verify",
+                "verification blocker",
+                "blocked from verifying",
+                "无法验证",
+                "不能验证",
+                "验证受阻",
+                "阻塞",
+            )
         )
 
     def _default_before_tool_call(self, state: AgentState, call: ToolCall, registry: ToolRegistry) -> BeforeToolCallDecision:
@@ -1789,7 +1972,15 @@ class AgentRuntime:
         return AfterToolCallDecision(continue_loop=True)
 
     def _default_tool_error_hook(self, _state: AgentState, _call: ToolCall, _error: Exception) -> ToolErrorDecision:
-        """Agent 工具执行出错时的「默认错误处理钩子」，默认不继续执行后续工具调用（如果有），直接进入回合结束流程"""
+        """Keep recoverable coding-tool failures in the loop so the model can inspect, fix, and rerun."""
+        if _call.name in {"write_file", "edit_file", "run_shell", "git_diff_worktree"}:
+            return ToolErrorDecision(
+                continue_loop=True,
+                details={
+                    "recoverable_tool_error": True,
+                    "next_action_hint": "Inspect the visible error output, fix the cause, and rerun the smallest relevant check before finalizing.",
+                },
+            )
         return ToolErrorDecision(continue_loop=False)
 
     def _event(self, event_type: str, **kwargs) -> AgentEvent:

@@ -91,17 +91,20 @@ class EditFileTool(BaseTool):
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         path = self.enforce_policy_for_path(PermissionDomain.EDIT, arguments["path"])
         original = path.read_text(encoding="utf-8")
-        if arguments.get("diff"):
-            updated, replacements = self._apply_search_replace_diff(original, arguments["diff"])
-        else:
-            old_text = arguments.get("old_text")
-            new_text = arguments.get("new_text")
-            if old_text is None or new_text is None:
-                raise ValueError("Provide either diff or old_text/new_text.")
-            updated = original.replace(old_text, new_text, 1)
-            if updated == original:
-                raise ValueError("old_text was not found in file")
-            replacements = 1
+        try:
+            if arguments.get("diff"):
+                updated, replacements = self._apply_search_replace_diff(original, arguments["diff"])
+            else:
+                old_text = arguments.get("old_text")
+                new_text = arguments.get("new_text")
+                if old_text is None or new_text is None:
+                    raise ValueError("Provide either diff or old_text/new_text.")
+                updated = original.replace(old_text, new_text, 1)
+                if updated == original:
+                    raise ValueError("old_text was not found in file")
+                replacements = 1
+        except ValueError as exc:
+            raise ValueError(self._edit_failure_message(path, original, arguments, str(exc))) from exc
         diff = "\n".join(difflib.unified_diff(original.splitlines(), updated.splitlines(), fromfile=f"a/{path.name}", tofile=f"b/{path.name}", lineterm=""))
         store = PendingActionStore(self.pending_root())
         effect = build_file_effect(
@@ -150,6 +153,40 @@ class EditFileTool(BaseTool):
             updated = updated.replace(old, new, 1)
             replacements += 1
         return updated, replacements
+
+    @staticmethod
+    def _edit_failure_message(path: Path, content: str, arguments: dict[str, Any], failure: str) -> str:
+        anchor = ""
+        if arguments.get("diff"):
+            matches = list(SEARCH_BLOCK_RE.finditer(str(arguments.get("diff") or "")))
+            if matches:
+                anchor = matches[0].group("old").splitlines()[0] if matches[0].group("old").splitlines() else ""
+        else:
+            anchor = str(arguments.get("old_text") or "").splitlines()[0] if arguments.get("old_text") else ""
+        excerpt = EditFileTool._context_excerpt(content, anchor=anchor)
+        return (
+            f"{failure}\n"
+            f"Path: {path}\n"
+            "Nearby current file context:\n"
+            f"{excerpt}\n"
+            "Retry advice: re-read or inspect the file, then prefer a unified diff or SEARCH/REPLACE block using the exact current context."
+        )
+
+    @staticmethod
+    def _context_excerpt(content: str, *, anchor: str = "", radius: int = 4) -> str:
+        lines = content.splitlines()
+        if not lines:
+            return "[empty file]"
+        index = 0
+        stripped_anchor = anchor.strip()
+        if stripped_anchor:
+            for candidate_index, line in enumerate(lines):
+                if stripped_anchor in line:
+                    index = candidate_index
+                    break
+        start = max(0, index - radius)
+        end = min(len(lines), index + radius + 1)
+        return "\n".join(f"{line_no}: {lines[line_no - 1]}" for line_no in range(start + 1, end + 1))
 
     @staticmethod
     def _apply_unified_diff(content: str, diff: str) -> tuple[str, int]:
@@ -397,16 +434,27 @@ class ApprovePendingActionTool(BaseTool):
             timeout = int(payload.get("details", {}).get("timeout_seconds", 30))
             try:
                 self.enforce_policy_for_command(PermissionDomain.BASH, payload["command"])
-                completed = subprocess.run(["powershell.exe", "-NoProfile", "-Command", payload["command"]], cwd=str(self.workspace), capture_output=True, text=True, timeout=timeout, check=False)
-                output = (completed.stdout or "") + (("\n" + completed.stderr) if completed.stderr else "")
+                completed = subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-Command", payload["command"]],
+                    cwd=str(self.workspace),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
                 if completed.returncode != 0:
-                    raise RuntimeError(f"PowerShell exited with code {completed.returncode}\n{output}".strip())
+                    raise RuntimeError(
+                        "PowerShell exited with code "
+                        f"{completed.returncode}\n"
+                        f"stdout:\n{completed.stdout or ''}\n"
+                        f"stderr:\n{completed.stderr or ''}".strip()
+                    )
             except Exception as exc:
                 return self._record_execution_failure(store, arguments["token"], effect, exc)
             return self._consume_success(
                 store,
                 token=arguments["token"],
-                content=output.strip() or "[no output]",
+                content=((completed.stdout or "") + (("\n" + completed.stderr) if completed.stderr else "")).strip() or "[no output]",
                 effect=effect,
                 details={
                     "token": arguments["token"],
@@ -522,17 +570,67 @@ class ApprovePendingActionTool(BaseTool):
             "latest_audit": audit,
             "failure_kind": "execution_failed",
         }
+        action_type = str(updated.get("action_type") or "").strip()
+        if action_type == "run_shell":
+            shell_failure = self._shell_failure_details(failure_detail)
+            details.update(shell_failure)
+        if action_type in {"edit_file", "apply_patch_artifact"}:
+            payload_details = updated.get("details") if isinstance(updated.get("details"), dict) else {}
+            details.update(
+                {
+                    "patch_failed": True,
+                    "action_type": action_type,
+                    "retry_hint": "Inspect the current target file/diff context, regenerate the patch against the current workspace, and rerun approval.",
+                }
+            )
+            if action_type == "apply_patch_artifact":
+                artifact = payload_details.get("artifact") if isinstance(payload_details, dict) else {}
+                details["changed_paths"] = payload_details.get("changed_paths", [])
+                if isinstance(artifact, dict):
+                    details["artifact_id"] = artifact.get("artifact_id")
+                    details["patch_path"] = artifact.get("patch_path")
+        content = f"Executor failed after approval: {failure_detail}"
+        retry_hint = details.get("retry_hint")
+        if retry_hint:
+            content += f"\nRetry advice: {retry_hint}"
+        if action_type == "apply_patch_artifact":
+            changed_paths = details.get("changed_paths") or []
+            if changed_paths:
+                content += f"\nChanged paths: {', '.join(str(path) for path in changed_paths)}"
+            artifact_id = details.get("artifact_id")
+            if artifact_id:
+                content += f"\nArtifact: {artifact_id}"
         if base_result is not None:
             base_result.is_error = True
             base_result.details = {**(base_result.details or {}), **details}
+            base_result.content = content
             return base_result
         return ToolExecutionResult(
             tool_call_id="",
             tool_name=self.spec.name,
-            content=f"Executor failed after approval: {failure_detail}",
+            content=content,
             is_error=True,
             details=details,
         )
+
+    @staticmethod
+    def _shell_failure_details(failure_detail: str) -> dict[str, Any]:
+        match = re.search(
+            r"PowerShell exited with code (?P<code>-?\d+)\nstdout:\n(?P<stdout>.*?)(?:\nstderr:\n(?P<stderr>.*))?\Z",
+            failure_detail,
+            flags=re.DOTALL,
+        )
+        if not match:
+            return {"command_failed": True}
+        stdout = (match.group("stdout") or "").strip()
+        stderr = (match.group("stderr") or "").strip()
+        return {
+            "command_failed": True,
+            "exit_code": int(match.group("code")),
+            "returncode": int(match.group("code")),
+            "stdout": stdout,
+            "stderr": stderr,
+        }
 
     def _consume_success(
         self,

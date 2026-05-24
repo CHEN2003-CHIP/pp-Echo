@@ -297,7 +297,77 @@ def test_web_api_approves_pending_action_token(tmp_path: Path, monkeypatch) -> N
     assert captured["runtime"].continue_calls == 0
 
 
-def test_web_api_approve_pending_action_does_not_override_backend_resume_decision(tmp_path: Path, monkeypatch) -> None:
+def test_web_api_approves_non_active_session_and_resumes_once(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    class ApprovalAgent:
+        def __init__(self, session_id: str, subscribers) -> None:
+            self.session_id = session_id or "session-1"
+            self.state = type(
+                "State",
+                (),
+                {
+                    "pending_plan_token": None,
+                    "pending_tool_calls": [],
+                    "queued_messages": [],
+                    "turn": type("Turn", (), {"phase": "idle", "model_dump": lambda self, mode="json": {"phase": "idle", "reason": None}})(),
+                    "messages": [],
+                },
+            )()
+            self.subscribers = subscribers
+            self.recorded: list[dict] = []
+            self.continue_calls = 0
+
+        def subscribe(self, callback):
+            self.subscribers.append(callback)
+
+        def record_external_approval_result(self, result: dict) -> None:
+            self.recorded.append(result)
+
+        def continue_(self):
+            self.continue_calls += 1
+            return []
+
+    def approval_factory(_workspace: Path, session_id, subscribers):
+        return ApprovalAgent(session_id, subscribers)
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = SessionStore(workspace / ".pp-agent" / "sessions")
+    record = store.create("system prompt", StoredModelConfig())
+    registry = ToolRegistry(workspace)
+    staged = registry.execute("write_file", {"path": "docs/approval-web.md", "content": "ok\n"})
+    payload = server_module.bootstrap.pending_action_store_for(workspace).load(staged.details["token"])
+    payload["session_id"] = record.id
+    payload.setdefault("details", {})["session_id"] = record.id
+    payload["details"]["turn_id"] = "turn-1"
+    payload["details"]["tool_call_id"] = "call-1"
+    server_module.bootstrap.pending_action_store_for(workspace).save(staged.details["token"], payload)
+
+    manager = WebSessionManager(workspace, runtime_factory=approval_factory)
+    workspace_manager = WebWorkspaceManager(
+        workspace,
+        initial_manager=manager,
+        session_manager_factory=lambda path: WebSessionManager(path, runtime_factory=approval_factory),
+        state_dir=tmp_path / "state",
+    )
+    client = TestClient(create_app(workspace, workspace_manager=workspace_manager))
+
+    assert manager.get_active_handle(record.id) is None
+
+    response = client.post(f"/api/approvals/{staged.details['token']}/approve")
+    handle = manager.get_active_handle(record.id)
+
+    assert response.status_code == 200
+    assert response.json()["resumed"] is True
+    assert response.json()["session_id"] == record.id
+    assert (workspace / "docs" / "approval-web.md").read_text(encoding="utf-8") == "ok\n"
+    assert handle is not None
+    assert handle.agent.continue_calls == 1
+    assert handle.agent.recorded and handle.agent.recorded[0]["session_id"] == record.id
+
+
+def test_web_api_approve_pending_action_applies_write_and_removes_token(tmp_path: Path, monkeypatch) -> None:
     from fastapi.testclient import TestClient
 
     class ApprovalAgent:

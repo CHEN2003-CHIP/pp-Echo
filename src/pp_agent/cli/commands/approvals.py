@@ -6,10 +6,10 @@ from pathlib import Path
 
 from pp_agent.api import sdk
 from pp_agent.app.bootstrap import create_tool_registry, pending_action_store_for
-from pp_agent.runtime import AgentRuntime
-from pp_agent.tools.base import ToolExecutionResult
 from pp_agent.cli.render.approvals import approvals_summary_payload, render_approval_panel
 from pp_agent.cli.render.runtime import console, render_event
+from pp_agent.runtime import AgentRuntime
+from pp_agent.tools.base import ToolExecutionResult
 
 
 def load_pending_action(workspace: Path, token: str) -> dict:
@@ -44,7 +44,8 @@ def _external_approval_base_result(
     session_id: str,
 ) -> dict:
     details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
-    lifecycle = result.details.get("lifecycle") if isinstance(result.details, dict) else None
+    result_details = result.details or {}
+    lifecycle = result_details.get("lifecycle") if isinstance(result_details, dict) else None
     if lifecycle is None:
         lifecycle = payload.get("lifecycle") or {}
     return {
@@ -57,7 +58,7 @@ def _external_approval_base_result(
         "result": result.content,
         "success": not result.is_error,
         "lifecycle": lifecycle,
-        "details": result.details or {},
+        "details": result_details,
         "approval_action": action,
         "approved": action == "approve" and not result.is_error,
         "rejected": action == "reject",
@@ -132,13 +133,7 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
         console.print(result.content)
         if result.details:
             console.print(json.dumps(result.details, ensure_ascii=False, indent=2))
-    response = _external_approval_base_result(
-        payload,
-        token,
-        "approve",
-        result,
-        session_id=_payload_session_id(payload),
-    )
+    response = _external_approval_base_result(payload, token, "approve", result, session_id=_payload_session_id(payload))
     return _record_and_maybe_resume(workspace, runtime, response, resume=True, render=render)
 
 
@@ -180,13 +175,7 @@ def reject_pending_action(workspace: Path, token: str, render: bool = True, *, r
             extension_runtime.close()
     if render:
         console.print(result.content)
-    response = _external_approval_base_result(
-        payload,
-        token,
-        "reject",
-        result,
-        session_id=_payload_session_id(payload),
-    )
+    response = _external_approval_base_result(payload, token, "reject", result, session_id=_payload_session_id(payload))
     return _record_and_maybe_resume(workspace, runtime, response, resume=True, render=render)
 
 
