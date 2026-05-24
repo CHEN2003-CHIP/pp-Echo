@@ -79,6 +79,8 @@ logger = logging.getLogger(__name__)
 TEXT_TOOL_NAME_RE = re.compile(r"([A-Za-z0-9_.-]+)\s*$")
 TEXT_TOOL_CALL_FALLBACK_ALLOWLIST = {"list_files", "search_text", "grep_code", "git_status"}
 TEXT_TOOL_CALL_FALLBACK_DENYLIST = {"spawn_subagent", "read_file", "write_file", "edit_file", "run_shell"}
+WEB_TOOL_NAMES = {"web.search", "web.news", "web.github_trending", "web.fetch"}
+WEB_LOOKUP_ATTEMPT_LIMIT = 2
 
 
 @dataclass(frozen=True)
@@ -1483,6 +1485,9 @@ class AgentRuntime:
         pending_action_note = self._latest_pending_action_note(state)
         if pending_action_note:
             notes.append(pending_action_note)
+        web_lookup_note = self._latest_web_lookup_note(state)
+        if web_lookup_note:
+            notes.append(web_lookup_note)
         verification_note = self._verification_gate_required_note(state)
         if verification_note:
             notes.append(verification_note)
@@ -1690,6 +1695,61 @@ class AgentRuntime:
             f"A {kind_text} approval is still pending for tool(s): {tool_text}. "
             f"Pending tokens: {token_text}. Do not repeat the same call or probe for results until approval is granted."
         )
+
+    def _latest_web_lookup_note(self, state: AgentState) -> str:
+        latest_user_index = self._latest_user_index(state)
+        start = 0 if latest_user_index is None else latest_user_index + 1
+        attempts = self._web_lookup_attempts_since(state, start=start)
+        if not attempts:
+            return ""
+        if attempts["count"] < WEB_LOOKUP_ATTEMPT_LIMIT and not attempts["terminal"]:
+            return ""
+        last = attempts["last"]
+        if last is None:
+            return ""
+        action = str(last.get("tool_name") or "web lookup").strip()
+        reason = str(last.get("reason") or "limited results").strip()
+        if attempts["terminal"]:
+            return (
+                f"Web lookup has already reached a terminal result after {attempts['count']} attempt(s) "
+                f"({action}: {reason}). Do not keep retrying the same site/provider. "
+                "Summarize the best available findings, or if nothing reliable was found, state the blocker and ask for a narrower source or query."
+            )
+        return (
+            f"Web lookup has already used {attempts['count']} attempt(s) in this turn. "
+            "Do not keep cycling through search/fetch on the same topic. Summarize what you have or ask for a narrower source."
+        )
+
+    def _web_lookup_attempts_since(self, state: AgentState, *, start: int) -> dict[str, object]:
+        count = 0
+        terminal = False
+        last: dict[str, object] | None = None
+        for message in state.messages[start:]:
+            if message.role != "tool":
+                continue
+            tool_name = str(message.tool_name or "").strip()
+            if tool_name not in WEB_TOOL_NAMES:
+                continue
+            details = dict(message.metadata.get("tool_details") or {})
+            count += 1
+            reason = ""
+            if bool(message.metadata.get("is_error")) or bool(details.get("is_error")):
+                terminal = True
+                content_text = ""
+                if message.content:
+                    first_part = message.content[0]
+                    content_text = str(getattr(first_part, "text", "") or "")
+                reason = str(details.get("error") or content_text or "error")
+            elif tool_name in {"web.search", "web.news"}:
+                result_count = details.get("result_count")
+                if result_count == 0:
+                    terminal = True
+                    reason = "no results"
+            elif tool_name == "web.fetch" and not details.get("text"):
+                terminal = True
+                reason = "empty response"
+            last = {"tool_name": tool_name, "reason": reason or str(details.get("error") or details.get("status_code") or "ok")}
+        return {"count": count, "terminal": terminal, "last": last}
 
     def _append_runtime_system_note(self, text: str, *, kind: str, details: dict[str, object] | None = None) -> None:
         self.state.messages.append(
@@ -1969,6 +2029,23 @@ class AgentRuntime:
                     "next_action_hint": "Stop the turn and report that the requested tool cannot be represented for safe approval.",
                 },
             )
+        if _call.name in WEB_TOOL_NAMES:
+            web_failure = bool(getattr(_result, "is_error", False))
+            if _call.name in {"web.search", "web.news", "web.github_trending"}:
+                web_failure = web_failure or int(result_details.get("result_count") or 0) <= 0
+            elif _call.name == "web.fetch":
+                web_failure = web_failure or not str(result_details.get("text") or "").strip()
+            if web_failure:
+                attempts = self._web_lookup_attempts_since(_state, start=0 if self._latest_user_index(_state) is None else self._latest_user_index(_state) + 1)
+                if attempts["count"] >= WEB_LOOKUP_ATTEMPT_LIMIT or attempts["terminal"]:
+                    return AfterToolCallDecision(
+                        continue_loop=False,
+                        details={
+                            "web_lookup_terminal": True,
+                            "attempt_count": attempts["count"],
+                            "next_action_hint": "Summarize the best available web findings or state the blocker; do not keep retrying the same search/fetch path.",
+                        },
+                    )
         return AfterToolCallDecision(continue_loop=True)
 
     def _default_tool_error_hook(self, _state: AgentState, _call: ToolCall, _error: Exception) -> ToolErrorDecision:

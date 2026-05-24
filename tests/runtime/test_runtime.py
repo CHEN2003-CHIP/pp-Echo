@@ -640,6 +640,35 @@ def test_agent_runtime_stops_after_failed_subagent_and_injects_failure_note(tmp_
     assert any("most recent subagent delegation failed" in part.text.lower() for message in transformed for part in message.content if isinstance(part, TextPart))
 
 
+def test_agent_runtime_stops_web_lookup_after_terminal_search_failure(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    agent.state.messages.append(ChatMessage(role="user", content=[TextPart(text="最近电视剧推荐")], timestamp=time.time()))
+    web_result = ToolExecutionResult(
+        tool_call_id="call-web",
+        tool_name="web.search",
+        content="No web.search results.",
+        details={
+            "query": "最近电视剧推荐",
+            "provider": "duckduckgo",
+            "routing": "provider_first",
+            "result_count": 0,
+            "attempts": [{"provider": "duckduckgo", "status": "no_results", "result_count": 0}],
+        },
+    )
+    agent.state.messages.append(web_result.as_chat_message())
+
+    decision = agent._default_after_tool_call(
+        agent.state,
+        ToolCall(id="call-web", name="web.search", arguments={"query": "最近电视剧推荐", "provider": "auto"}),
+        web_result,
+    )
+    transformed = agent._default_transform_context(agent.state, [ChatMessage(role="system", content=[TextPart(text="sys")], timestamp=0.0)])
+
+    assert decision.continue_loop is False
+    assert decision.details["web_lookup_terminal"] is True
+    assert any("Web lookup has already reached a terminal result" in part.text for message in transformed for part in message.content if isinstance(part, TextPart))
+
+
 def test_agent_runtime_stages_network_mcp_tool_for_host_approval(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions")
     record = store.create("system", ModelConfig())
