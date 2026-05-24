@@ -55,6 +55,12 @@ type TranscriptItem = {
   body: ReturnType<typeof extractMessageBody>;
   streaming?: boolean;
   timestamp?: number;
+  activity?: {
+    title: string;
+    summary: string;
+    detail: string;
+    tone?: "running" | "success" | "warning" | "error";
+  };
 };
 
 type Notice = {
@@ -1486,16 +1492,20 @@ function ChatWorkspace({
           )}
           {transcript.map((item) => (
             <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id}>
-              <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : item.role === "tool" ? <Code2 size={15} /> : <MessageSquare size={15} />}</div>
-              <div className="bubble">
-                <span>{roleLabel(item.role)}</span>
-                <RichMessageContent
-                  text={item.body.text}
-                  attachments={item.body.attachments}
-                  streaming={item.streaming}
-                  plain={activeSnapshot?.history?.source === "stored" && !item.streaming}
-                />
-              </div>
+              <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : item.role === "activity" ? <Code2 size={15} /> : <MessageSquare size={15} />}</div>
+              {item.role === "activity" && item.activity ? (
+                <ToolActivityBlock item={item} />
+              ) : (
+                <div className="bubble">
+                  <span>{roleLabel(item.role)}</span>
+                  <RichMessageContent
+                    text={item.body.text}
+                    attachments={item.body.attachments}
+                    streaming={item.streaming}
+                    plain={activeSnapshot?.history?.source === "stored" && !item.streaming}
+                  />
+                </div>
+              )}
             </article>
           ))}
         </section>
@@ -1554,6 +1564,21 @@ function ChatWorkspace({
         </div>
       </section>
     </div>
+  );
+}
+
+function ToolActivityBlock({ item }: { item: TranscriptItem }) {
+  const activity = item.activity;
+  if (!activity) return null;
+  return (
+    <details className={`tool-activity ${activity.tone || "success"}`}>
+      <summary>
+        <span className="tool-activity-status">{activity.title}</span>
+        <span>{activity.summary}</span>
+        <ChevronRight size={14} />
+      </summary>
+      <pre>{activity.detail}</pre>
+    </details>
   );
 }
 
@@ -2642,6 +2667,7 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     .filter(Boolean);
 
   const runtime: TranscriptItem[] = [];
+  const activitySignatures = new Set<string>();
   let streamBuffer = "";
   let streamIndex = 0;
   let streamTimestamp = 0;
@@ -2695,11 +2721,16 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     if (event.type.includes("tool")) {
       flushStream();
       if (event.type === "tool_end" || event.type === "tool_result") {
+        const activity = formatToolActivity(event);
+        const signature = normalizeText(`${activity.title} ${activity.summary} ${activity.detail}`);
+        if (activitySignatures.has(signature)) continue;
+        activitySignatures.add(signature);
         runtime.push({
-          id: `assistant-tool:${runtime.length}`,
-          role: "assistant",
-          body: { text: formatToolEvent(event), attachments: [] },
-          timestamp: event.timestamp
+          id: `activity-tool:${runtime.length}`,
+          role: "activity",
+          body: { text: activity.detail, attachments: [] },
+          timestamp: event.timestamp,
+          activity
         });
       }
       continue;
@@ -2779,6 +2810,35 @@ function formatToolEvent(event: RuntimeEvent) {
     lines.push(output);
   }
   return lines.join("\n").trim();
+}
+
+function formatToolActivity(event: RuntimeEvent): NonNullable<TranscriptItem["activity"]> {
+  const details = event.details || {};
+  const toolName = event.tool_name || "工具";
+  const status = toolActivityStatus(details, event.is_error);
+  const pieces: string[] = [toolName];
+  const command = details.command;
+  const path = details.path;
+  const token = details.token || details.approval_token;
+  const returncode = details.returncode;
+  if (typeof command === "string" && command.trim()) pieces.push(truncate(command, 64));
+  else if (typeof path === "string" && path.trim()) pieces.push(truncate(path, 64));
+  if (typeof returncode === "number") pieces.push(`exit ${returncode}`);
+  if (typeof token === "string" && token.trim()) pieces.push(`token ${String(token).slice(0, 8)}`);
+  return {
+    title: status.label,
+    summary: pieces.join(" - "),
+    detail: formatToolEvent(event),
+    tone: status.tone,
+  };
+}
+
+function toolActivityStatus(details: Record<string, unknown>, isError?: boolean): { label: string; tone: NonNullable<TranscriptItem["activity"]>["tone"] } {
+  if (isError) return { label: "执行失败", tone: "error" };
+  if (details.approval_unavailable === true) return { label: "已阻止", tone: "warning" };
+  if (details.staged === true) return { label: "等待确认", tone: "warning" };
+  if (details.persisted === true) return { label: "已完成", tone: "success" };
+  return { label: "已处理", tone: "success" };
 }
 
 function formatApprovalEvent(event: RuntimeEvent) {

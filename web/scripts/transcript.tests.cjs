@@ -18,18 +18,18 @@ function test(name, fn) {
   tests.push({ name, fn });
 }
 
-test("buildTranscript renders tool completion as assistant feedback", () => {
+test("buildTranscript renders tool completion as collapsed activity", () => {
   const transcript = app.buildTranscript(
     {
       messages: [
         {
           role: "user",
-          content: [{ type: "text", text: "运行 test.py，看看测试结果" }],
+          content: [{ type: "text", text: "Run test.py and show the result" }],
           timestamp: 1,
         },
         {
           role: "assistant",
-          content: [{ type: "text", text: "让我执行这个命令来查看测试结果。" }],
+          content: [{ type: "text", text: "I will run the command." }],
           timestamp: 2,
         },
       ],
@@ -49,12 +49,15 @@ test("buildTranscript renders tool completion as assistant feedback", () => {
   );
 
   const toolItems = transcript.filter((item) => item.role === "tool");
+  const activityItems = transcript.filter((item) => item.role === "activity");
   const assistantItems = transcript.filter((item) => item.role === "assistant");
 
   assert.equal(toolItems.length, 0);
-  assert.ok(assistantItems.some((item) => item.body.text.includes("执行完成")));
-  assert.ok(assistantItems.some((item) => item.body.text.includes("25")));
-  assert.ok(assistantItems.some((item) => item.body.text.includes("1026")));
+  assert.equal(activityItems.length, 1);
+  assert.ok(activityItems.some((item) => item.activity.summary.includes("run_shell")));
+  assert.ok(activityItems.some((item) => item.body.text.includes("25")));
+  assert.ok(activityItems.some((item) => item.body.text.includes("1026")));
+  assert.equal(assistantItems.some((item) => item.body.text.includes("25")), false);
 });
 
 test("buildTranscript renders approval results as assistant feedback", () => {
@@ -63,7 +66,7 @@ test("buildTranscript renders approval results as assistant feedback", () => {
       messages: [
         {
           role: "user",
-          content: [{ type: "text", text: "请运行 test.py 并告诉我结果" }],
+          content: [{ type: "text", text: "Please run test.py and tell me the result" }],
           timestamp: 1,
         },
       ],

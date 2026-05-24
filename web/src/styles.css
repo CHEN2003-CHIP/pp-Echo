@@ -430,6 +430,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   color: var(--accent);
 }
 .message.user .avatar { color: var(--warning); }
+.message.activity .avatar { color: var(--muted); }
 .message.error .avatar { color: var(--danger); }
 .bubble {
   padding: 12px 13px;
@@ -454,6 +455,69 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   text-transform: uppercase;
   color: var(--muted);
   letter-spacing: 0.05em;
+}
+
+.message.activity {
+  margin-bottom: 8px;
+}
+.message.activity .avatar {
+  width: 24px;
+  height: 24px;
+  align-self: start;
+}
+.tool-activity {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.tool-activity summary {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.3;
+  overflow: hidden;
+}
+.tool-activity summary::-webkit-details-marker {
+  display: none;
+}
+.tool-activity summary span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-activity summary svg {
+  flex: 0 0 auto;
+  transition: transform 0.16s ease;
+}
+.tool-activity[open] summary svg {
+  transform: rotate(90deg);
+}
+.tool-activity-status {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-weight: 700;
+}
+.tool-activity.success .tool-activity-status { color: var(--success); }
+.tool-activity.warning .tool-activity-status { color: var(--warning); }
+.tool-activity.error .tool-activity-status { color: var(--danger); }
+.tool-activity pre {
+  max-height: 320px;
+  margin: 6px 0 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .message-body {
