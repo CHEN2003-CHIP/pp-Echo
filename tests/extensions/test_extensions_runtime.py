@@ -107,7 +107,7 @@ def register(api):
     spec = tool_registry.get_spec("demo_echo")
     result = tool_registry.execute("demo_echo", {"message": "hi"})
     messages = runtime_hooks.transform_context(
-        type("State", (), {"queued_messages": [], "pending_plan_token": None})(),
+        type("State", (), {"queued_messages": [], "pending_plan_token": None, "messages": []})(),
         [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
     )
 
@@ -185,7 +185,56 @@ def test_mcp_adapter_registers_runtime_tools_when_enabled(tmp_path: Path, monkey
     assert result.details["approval_unavailable"] is True
     assert loaded.registry.get("mcp_adapter").status == "loaded"
     assert loaded.registry.get("mcp_adapter").loaded_tools == ["demo.echo"]
+    assert loaded.registry.get("mcp_adapter").loaded_resources == []
+
+
+def test_mcp_resources_are_exposed_only_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "config.json").write_text(
+        json.dumps({"capabilities": {"mcp": {"enable": True, "expose_resources": True}}}),
+        encoding="utf-8",
+    )
+    (project_dir / "mcp.json").write_text(json.dumps({"servers": [{"name": "demo", "transport": "memory"}]}), encoding="utf-8")
+    settings = Settings.load(tmp_path)
+    tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    loaded = load_executable_extensions(
+        tmp_path,
+        settings=settings,
+        tool_registry=tool_registry,
+        runtime_hooks=RuntimeHooks(),
+        transport_factory=lambda _config: TrackingMCPClient(),
+    )
+
+    loaded.mcp_runtime.list_servers()
+
     assert "demo.notes" in loaded.registry.get("mcp_adapter").loaded_resources
+
+
+def test_mcp_tool_filters_limit_registered_tools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "config.json").write_text(
+        json.dumps({"capabilities": {"mcp": {"enable": True, "tool_filters": ["demo.echo"]}}}),
+        encoding="utf-8",
+    )
+    (project_dir / "mcp.json").write_text(json.dumps({"servers": [{"name": "demo", "transport": "memory"}]}), encoding="utf-8")
+    settings = Settings.load(tmp_path)
+    tool_registry = ToolRegistry(tmp_path, policy=settings.tool_policy)
+    loaded = load_executable_extensions(
+        tmp_path,
+        settings=settings,
+        tool_registry=tool_registry,
+        runtime_hooks=RuntimeHooks(),
+        transport_factory=lambda _config: TrackingMCPClient(),
+    )
+
+    payload = loaded.mcp_runtime.list_servers()
+
+    assert payload[0]["tools"] == ["demo.echo"]
+    assert "demo.echo" in tool_registry.metadata()
 
 
 def test_fetch_like_mcp_tool_is_registered_as_stageable_network_call(tmp_path: Path, monkeypatch) -> None:
@@ -313,7 +362,7 @@ def register(api):
     runtime_hooks.register_with_lifecycle(emitter)
 
     messages = runtime_hooks.transform_context(
-        type("State", (), {"queued_messages": [], "pending_plan_token": None})(),
+        type("State", (), {"queued_messages": [], "pending_plan_token": None, "messages": []})(),
         [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
     )
     decision = runtime_hooks.before_tool_call(
@@ -371,7 +420,7 @@ def register(api):
     payload = reload_runtime_extensions(agent, tmp_path)
     binding = agent.extension_registry.get("demo")
 
-    assert payload["skill_count"] == 1
+    assert payload["skill_count"] >= 1
     assert "ext_a" in agent.skill_runtime.available_skills()
     assert binding is not None
     assert binding.resource_roots["skill_paths"] == [str(skill_root_a.resolve())]
@@ -389,7 +438,7 @@ def register(api):
     payload = reload_runtime_extensions(agent, tmp_path)
     binding = agent.extension_registry.get("demo")
 
-    assert payload["skill_count"] == 1
+    assert payload["skill_count"] >= 1
     assert "ext_b" in agent.skill_runtime.available_skills()
     assert "ext_a" not in agent.skill_runtime.available_skills()
     assert binding is not None

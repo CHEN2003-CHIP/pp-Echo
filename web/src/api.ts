@@ -100,9 +100,14 @@ export type PendingAction = {
 
 export type ApprovalsSummary = {
   count: number;
+  active_count?: number;
+  archived_count?: number;
   by_type?: Record<string, number>;
   tokens?: string[];
   items: PendingAction[];
+  active_items?: PendingAction[];
+  archived_items?: PendingAction[];
+  state_counts?: Record<string, number>;
 };
 
 export type ApprovalActionResponse = {

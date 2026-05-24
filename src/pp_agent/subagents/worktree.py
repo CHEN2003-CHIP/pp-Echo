@@ -231,6 +231,8 @@ class WorktreeManager:
                 "patch_path": artifact.patch_path,
             },
             effect=effect,
+            session_id=session_id,
+            origin={"source": "subagent_worktree", "kind": "apply_patch_artifact", "session_id": session_id},
         )
 
     def _copy_dirty_context(self, worktree_path: Path) -> str:

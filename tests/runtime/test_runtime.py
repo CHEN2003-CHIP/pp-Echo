@@ -332,6 +332,7 @@ def test_agent_runtime_rejects_sensitive_tool_without_host_approval(tmp_path: Pa
 
     assert any(event.type == "tool_error" and "host-side approval" in (event.message or "") for event in events)
     assert (tmp_path / "a.txt").exists() is False
+    assert agent.llm_client.calls == 1
 
 
 def test_agent_runtime_keeps_split_multi_tool_calls_separate(tmp_path: Path) -> None:
@@ -577,6 +578,7 @@ def test_agent_runtime_stages_network_mcp_tool_for_host_approval(tmp_path: Path)
 
     pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
     assert seen == []
+    assert agent.llm_client.calls == 1
     assert not any(event.type == "tool_error" for event in events)
     assert any(
         event.type == "tool_result"

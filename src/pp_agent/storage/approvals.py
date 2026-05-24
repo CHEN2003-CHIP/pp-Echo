@@ -7,7 +7,28 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-TERMINAL_LIFECYCLE_STATES = {"execution_failed", "grant_invalidated", "grant_consumed"}
+TERMINAL_LIFECYCLE_STATES = {
+    "denied",
+    "expired",
+    "execution_failed",
+    "grant_consumed",
+    "grant_invalidated",
+    "orphaned",
+    "quarantined",
+    "rejected",
+}
+ACTIVE_LIFECYCLE_STATES = {"staged_not_granted", "grant_attached"}
+ARCHIVED_LIFECYCLE_STATES = {
+    "denied",
+    "expired",
+    "execution_failed",
+    "grant_consumed",
+    "grant_invalidated",
+    "orphaned",
+    "quarantined",
+    "rejected",
+}
+KNOWN_LIFECYCLE_STATES = ACTIVE_LIFECYCLE_STATES | ARCHIVED_LIFECYCLE_STATES | {"execution_in_progress", "execution_succeeded"}
 
 
 def lifecycle_snapshot(
@@ -42,9 +63,30 @@ class PendingActionStore:
         details: Optional[dict[str, Any]] = None,
         effect: Optional[dict[str, Any]] = None,
         approval_grant: Optional[dict[str, Any]] = None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        tool_call_id: str | None = None,
+        origin: dict[str, Any] | str | None = None,
+        expires_at: float | None = None,
     ) -> dict[str, Any]:
         """将一个待处理操作添加到存储中"""
+        now = time.time()
+        if effect is not None:
+            existing = self._find_active_match(
+                action_type=action_type,
+                effect=effect,
+                target_path=target_path,
+                command=command,
+                session_id=session_id,
+            )
+            if existing is not None:
+                return existing
         token = str(uuid.uuid4())
+        normalized_arguments = effect.get("normalized_arguments") if isinstance(effect, dict) else None
+        lifecycle_state = "staged_not_granted" if effect is not None else None
+        effective_expires_at = expires_at
+        if effective_expires_at is None and effect is not None:
+            effective_expires_at = now + 7 * 24 * 60 * 60
         payload = {
             "token": token,
             "action_type": action_type,
@@ -52,17 +94,55 @@ class PendingActionStore:
             "before": before,
             "after": after,
             "command": command,
-            "created_at": time.time(),
+            "created_at": now,
             "details": details or {},
             "effect": effect,
             "approval_grant": approval_grant,
-            "lifecycle": lifecycle_snapshot("staged_not_granted") if effect is not None else None,
+            "session_id": session_id or (details or {}).get("session_id"),
+            "turn_id": turn_id or (details or {}).get("turn_id"),
+            "tool_call_id": tool_call_id or (details or {}).get("tool_call_id"),
+            "origin": origin or (details or {}).get("origin"),
+            "expires_at": effective_expires_at,
+            "canonical_key": effect.get("payload_digest") if isinstance(effect, dict) else None,
+            "normalized_arguments": normalized_arguments,
+            "lifecycle": lifecycle_snapshot(lifecycle_state) if lifecycle_state is not None else None,
             "latest_audit": None,
             "latest_audit_path": None,
         }
         target = self.root / f"{token}.json"
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return payload
+
+    def _find_active_match(
+        self,
+        *,
+        action_type: str,
+        effect: dict[str, Any],
+        target_path: Optional[Path] = None,
+        command: Optional[str] = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        payload_digest = effect.get("payload_digest")
+        if not isinstance(payload_digest, str) or not payload_digest:
+            return None
+        for item in self.list():
+            if item.get("action_type") != action_type:
+                continue
+            if not is_active_pending_action(item):
+                continue
+            existing_key = item.get("canonical_key") or (item.get("effect") or {}).get("payload_digest")
+            if existing_key != payload_digest:
+                continue
+            if session_id:
+                existing_session_id = item.get("session_id") or (item.get("details") or {}).get("session_id")
+                if existing_session_id and existing_session_id != session_id:
+                    continue
+            if target_path is not None and str(item.get("target_path") or "") != str(target_path):
+                continue
+            if command is not None and str(item.get("command") or "") != str(command):
+                continue
+            return item
+        return None
 
     def load(self, token: str) -> dict[str, Any]:
         target = self.root / f"{token}.json"
@@ -160,3 +240,38 @@ def create_approval_grant(effect: dict[str, Any], *, granted_by: str = "host") -
         "invalidated_at": None,
         "consumed_at": None,
     }
+
+
+def is_active_pending_action(item: dict[str, Any]) -> bool:
+    lifecycle = item.get("lifecycle") or {}
+    state = str(lifecycle.get("state") or "").strip()
+    if state and state not in ACTIVE_LIFECYCLE_STATES:
+        return False
+    expires_at = item.get("expires_at")
+    if isinstance(expires_at, (int, float)) and expires_at > 0 and time.time() > float(expires_at):
+        return False
+    return True
+
+
+def classify_pending_action(item: dict[str, Any]) -> str:
+    expires_at = item.get("expires_at")
+    if isinstance(expires_at, (int, float)) and expires_at > 0 and time.time() > float(expires_at):
+        return "expired"
+    lifecycle = item.get("lifecycle") or {}
+    state = str(lifecycle.get("state") or "").strip()
+    if not state or state in ACTIVE_LIFECYCLE_STATES:
+        return "active"
+    if state in {"orphaned", "quarantined"}:
+        return state
+    if state in ARCHIVED_LIFECYCLE_STATES:
+        return "archived"
+    return "unknown"
+
+
+def pending_action_state(item: dict[str, Any]) -> str:
+    classification = classify_pending_action(item)
+    if classification != "archived":
+        return classification
+    lifecycle = item.get("lifecycle") or {}
+    state = str(lifecycle.get("state") or "").strip()
+    return state if state in KNOWN_LIFECYCLE_STATES else "archived"

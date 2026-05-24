@@ -110,6 +110,10 @@ def _policy_allows_tool(policy, server_name: str, tool_name: str) -> bool:
     return not allowed_tools or qualified in allowed_tools
 
 
+def _settings_allows_tool(settings: Settings, server_name: str, tool_name: str) -> bool:
+    return settings.capabilities.mcp.includes_tool(server_name, tool_name)
+
+
 def _policy_allows_dynamic_tools(policy) -> bool:
     return True if policy is None else bool(getattr(policy, "allow_dynamic_tools", False))
 
@@ -159,6 +163,8 @@ class MCPRuntime:
             raise ValueError("MCP tool name must be qualified as <server>.<tool>")
         server_name, tool_name = qualified_name.split(".", 1)
         policy = _mcp_policy(self)
+        if not _settings_allows_tool(self.settings, server_name, tool_name):
+            raise PermissionError(f"MCP tool is filtered out by settings: {qualified_name}")
         if not _policy_allows_tool(policy, server_name, tool_name):
             raise PermissionError(f"MCP tool is not allowed by the active policy: {qualified_name}")
         self.ensure_server_ready(server_name)
@@ -211,6 +217,9 @@ class MCPRuntime:
         prompts = manager.list_mcp_prompts(server_name)
         for tool in tools:
             qualified_name = f"{server_name}.{tool.name}"
+            if not _settings_allows_tool(self.settings, server_name, tool.name):
+                logger.debug("MCP tool denied by settings", extra={"server": server_name, "tool": qualified_name})
+                continue
             if not _policy_allows_tool(policy, server_name, tool.name):
                 logger.debug("MCP tool denied by policy", extra={"server": server_name, "tool": qualified_name})
                 continue
@@ -244,18 +253,21 @@ class MCPRuntime:
                 runtime_risk_overrides={"destructive_hint": True} if tool.is_destructive else {},
                 replace=True,
             )
-        for item in resources:
-            qualified = f"{server_name}.{item.name or item.uri}"
-            if qualified not in self._resource_names:
-                self._resource_names.append(qualified)
-        for item in prompts:
-            qualified = f"{server_name}.{item.name}"
-            if qualified not in self._resource_names:
-                self._resource_names.append(qualified)
+        if self.settings.capabilities.mcp.expose_resources:
+            for item in resources:
+                qualified = f"{server_name}.{item.name or item.uri}"
+                if qualified not in self._resource_names:
+                    self._resource_names.append(qualified)
+        if self.settings.capabilities.mcp.expose_prompts:
+            for item in prompts:
+                qualified = f"{server_name}.{item.name}"
+                if qualified not in self._resource_names:
+                    self._resource_names.append(qualified)
         visible_tools = [
             f"{server_name}.{tool.name}"
             for tool in tools
-            if _policy_allows_tool(policy, server_name, tool.name)
+            if _settings_allows_tool(self.settings, server_name, tool.name)
+            and _policy_allows_tool(policy, server_name, tool.name)
         ]
         self._server_summaries[server_name] = {
             "server": server_name,

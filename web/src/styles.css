@@ -1578,6 +1578,8 @@ body {
 
 .message.user .avatar { color: var(--app-warning); }
 .message.error .avatar { color: var(--app-danger); }
+.message.tool .avatar { color: var(--app-accent); }
+.message.tool .avatar { color: var(--app-accent); }
 
 .bubble {
   padding: 12px 13px;
@@ -1595,6 +1597,16 @@ body {
 .message.error .bubble {
   background: rgba(239, 141, 141, 0.08);
   border-color: rgba(239, 141, 141, 0.24);
+}
+
+.message.tool .bubble {
+  background: rgba(89, 189, 243, 0.08);
+  border-color: rgba(89, 189, 243, 0.22);
+}
+
+.message.tool .bubble {
+  background: rgba(89, 189, 243, 0.08);
+  border-color: rgba(89, 189, 243, 0.22);
 }
 
 .message.assistant.streaming .bubble {

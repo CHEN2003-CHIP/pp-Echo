@@ -907,6 +907,7 @@ class ToolRegistry:
                 "analysis": analysis,
             },
             effect=effect,
+            origin={"source": "tool_registry", "tool_name": name, "kind": metadata.tool_family},
         )
         return ToolExecutionResult(
             tool_call_id="",

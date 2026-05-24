@@ -17,6 +17,7 @@ from pp_agent.tools.legacy_hints_readiness import (
 from pp_agent.tools.metadata import (
     ToolMetadata,
 )
+from pp_agent.runtime.session_host import SessionHost
 from pp_agent.tools import session_tools
 from storage.settings import ToolPolicyConfig
 from tools.pending_actions import PendingActionStore
@@ -44,6 +45,41 @@ def test_staged_edit_flow(tmp_path: Path) -> None:
     registry.host_execute("approve_pending_action", {"token": edit_token})
     search = registry.execute("search_text", {"query": "gamma"})
     assert "notes.txt" in search.content
+
+
+def test_staging_same_canonical_write_reuses_existing_pending_action(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    first = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    second = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+
+    assert first.details["token"] == second.details["token"]
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert len([item for item in pending if item["action_type"] == "write_file"]) == 1
+
+
+def test_approval_summary_separates_expired_and_archived_items(tmp_path: Path) -> None:
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    active = store.stage(action_type="planner_approval", details={"summary": ["active"]})
+    expired = store.stage(action_type="planner_approval", details={"summary": ["expired"]}, expires_at=1.0)
+    rejected = store.stage(action_type="planner_approval", details={"summary": ["rejected"]})
+    store.set_lifecycle(rejected["token"], "rejected")
+
+    host = SessionHost(
+        runtime_factory=lambda *_args, **_kwargs: None,
+        session_store_factory=lambda workspace: None,
+        pending_action_store_factory=lambda workspace: PendingActionStore(workspace / ".pp-agent" / "pending-edits"),
+        session_defaults_factory=lambda workspace: {},
+        checkpoint_store_factory=lambda workspace: None,
+    )
+    summary = host.approvals_summary(tmp_path)
+
+    assert active["token"] in summary["tokens"]
+    assert expired["token"] not in summary["tokens"]
+    assert rejected["token"] not in summary["tokens"]
+    assert summary["state_counts"]["active"] == 1
+    assert summary["state_counts"]["expired"] == 1
+    assert summary["state_counts"]["rejected"] == 1
 
 
 def test_write_file_requires_explicit_overwrite(tmp_path: Path) -> None:
@@ -124,6 +160,11 @@ def test_staged_shell_and_reject_flow(tmp_path: Path) -> None:
 
     rejected = registry.host_execute("reject_pending_action", {"token": token})
     assert token in rejected.content
+    rejected_again = registry.host_execute("reject_pending_action", {"token": token})
+    assert rejected_again.details["idempotent"] is True
+    archived = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").load(token)
+    assert archived["lifecycle"]["state"] == "rejected"
+    assert token not in registry.host_execute("list_pending_actions", {}).content
 
 
 def test_preview_pending_planner_approval(tmp_path: Path) -> None:
@@ -590,6 +631,21 @@ def test_attach_approval_grant_moves_pending_action_to_grant_attached(tmp_path: 
     assert payload["lifecycle"]["state"] == "grant_attached"
 
 
+def test_consumed_approval_is_archived_and_idempotent(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    token = staged.details["token"]
+
+    registry.host_execute("approve_pending_action", {"token": token})
+    repeated = registry.host_execute("approve_pending_action", {"token": token})
+
+    archived = store.load(token)
+    assert archived["lifecycle"]["state"] == "grant_consumed"
+    assert repeated.details["idempotent"] is True
+    assert repeated.details["success"] is True
+
+
 def test_modified_file_effect_is_rejected_after_prior_approval(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
@@ -717,8 +773,7 @@ def test_execution_failed_dynamic_effect_can_retry_same_token_after_revalidation
     assert retried.is_error is False
     assert retried.content == "ok:status"
     assert retried.details["lifecycle"]["state"] == "grant_consumed"
-    with pytest.raises(FileNotFoundError):
-        store.load(token)
+    assert store.load(token)["lifecycle"]["state"] == "grant_consumed"
 
 
 def test_shell_normalization_equivalent_commands_keep_same_digest() -> None:
@@ -1810,5 +1865,6 @@ def test_approval_grant_is_single_use_by_default(tmp_path: Path) -> None:
 
     registry.host_execute("approve_pending_action", {"token": token})
 
-    with pytest.raises(FileNotFoundError):
-        registry.host_execute("approve_pending_action", {"token": token})
+    second = registry.host_execute("approve_pending_action", {"token": token})
+    assert second.details["idempotent"] is True
+    assert second.details["lifecycle"]["state"] == "grant_consumed"

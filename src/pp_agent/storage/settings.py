@@ -100,6 +100,9 @@ class MCPCapabilityConfig(BaseModel):
     enable: bool = False
     config_paths: list[str] = Field(default_factory=list)
     server_filters: list[str] = Field(default_factory=list)
+    tool_filters: list[str] = Field(default_factory=list)
+    expose_resources: bool = False
+    expose_prompts: bool = False
 
     def resolved_config_paths(self, project_dir: Path) -> list[Path]:
         """
@@ -118,6 +121,15 @@ class MCPCapabilityConfig(BaseModel):
         if not self.server_filters:
             return True
         return any(fnmatch.fnmatch(name, pattern) for pattern in self.server_filters)
+
+    def includes_tool(self, server_name: str, tool_name: str) -> bool:
+        qualified = f"{server_name}.{tool_name}"
+        if not self.tool_filters:
+            return True
+        return any(
+            fnmatch.fnmatch(qualified, pattern) or fnmatch.fnmatch(tool_name, pattern)
+            for pattern in self.tool_filters
+        )
 
 
 class ExtensionCapabilityConfig(BaseModel):
@@ -450,6 +462,12 @@ class Settings(BaseModel):
             self.capabilities.mcp.config_paths = [str(value) for value in mcp_config["config_paths"]]
         if "server_filters" in mcp_config:
             self.capabilities.mcp.server_filters = [str(value) for value in mcp_config["server_filters"]]
+        if "tool_filters" in mcp_config:
+            self.capabilities.mcp.tool_filters = [str(value) for value in mcp_config["tool_filters"]]
+        if "expose_resources" in mcp_config:
+            self.capabilities.mcp.expose_resources = bool(mcp_config["expose_resources"])
+        if "expose_prompts" in mcp_config:
+            self.capabilities.mcp.expose_prompts = bool(mcp_config["expose_prompts"])
 
         #4. 扩展插件能力配置
         extension_config = capability_config.get("extensions", {})

@@ -157,13 +157,34 @@ class ChatEventRenderer:
             self._visible_output = True
             return
         if event.type == "tool_end":
-            label = "error" if event.is_error else "done"
+            details = event.details or {}
+            if details.get("persisted") is True:
+                label = "success"
+            elif details.get("staged") is True:
+                label = "staged"
+            elif details.get("approval_unavailable") is True:
+                label = "blocked"
+            else:
+                label = "error" if event.is_error else "done"
+            result_lines = [compact_text(event.message or "", limit=140)]
+            path = details.get("path")
+            command = details.get("command")
+            token = details.get("token")
+            returncode = details.get("returncode")
+            if isinstance(path, str) and path.strip():
+                result_lines.append(f"path: {path}")
+            if isinstance(command, str) and command.strip():
+                result_lines.append(f"command: {command}")
+            if isinstance(token, str) and token.strip():
+                result_lines.append(f"token: {token}")
+            if isinstance(returncode, int):
+                result_lines.append(f"exit code: {returncode}")
             render_kv_block(
                 "Tool Result",
                 [
                     ("tool", event.tool_name or "-"),
                     ("status", label),
-                    ("result", compact_text(event.message or "", limit=140)),
+                    ("result", "\n".join(result_lines)),
                 ],
             )
             self._visible_output = True

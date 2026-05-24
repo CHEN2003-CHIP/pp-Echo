@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pp_agent.domain import ToolSpec
-from pp_agent.storage.approvals import PendingActionStore, create_approval_grant
+from pp_agent.storage.approvals import PendingActionStore, create_approval_grant, classify_pending_action, is_active_pending_action
 from pp_agent.subagents.worktree import PatchArtifact, WorktreeManager
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.effects import build_file_effect, build_shell_effect, content_digest
@@ -64,6 +64,7 @@ class WriteFileTool(BaseTool):
             after=after,
             details={"overwrite": overwrite, "diff": diff},
             effect=effect,
+            origin={"source": "tool", "tool_name": self.spec.name, "kind": "file_write"},
         )
         return ToolExecutionResult(
             tool_call_id="",
@@ -118,6 +119,7 @@ class EditFileTool(BaseTool):
             after=updated,
             details={"replacements": replacements, "diff": diff},
             effect=effect,
+            origin={"source": "tool", "tool_name": self.spec.name, "kind": "file_edit"},
         )
         return ToolExecutionResult(
             tool_call_id="",
@@ -318,7 +320,26 @@ class ApprovePendingActionTool(BaseTool):
         if effect is None:
             raise ValueError("Pending action is missing an effect record.")
         lifecycle = payload.get("lifecycle") or {}
-        if lifecycle.get("state") in {"execution_in_progress", "grant_invalidated", "grant_consumed"}:
+        state = lifecycle.get("state")
+        if classify_pending_action(payload) == "expired":
+            store.set_lifecycle(arguments["token"], "expired", failure_reason_code="approval_expired")
+            raise ValueError("Pending action cannot be approved because it has expired.")
+        if state == "grant_consumed":
+            return ToolExecutionResult(
+                tool_call_id="",
+                tool_name=self.spec.name,
+                content=f"Pending action {arguments['token']} was already approved and consumed.",
+                details={
+                    "token": arguments["token"],
+                    "action_type": payload["action_type"],
+                    "success": True,
+                    "idempotent": True,
+                    "lifecycle": lifecycle,
+                    "effect": effect,
+                    "approval_grant": payload.get("approval_grant"),
+                },
+            )
+        if state in {"execution_in_progress", "grant_invalidated", "rejected", "denied", "quarantined", "orphaned", "expired"}:
             raise ValueError(f"Pending action cannot be approved from lifecycle state {lifecycle.get('state')}.")
         grant = payload.get("approval_grant")
         if grant is None:
@@ -537,7 +558,6 @@ class ApprovePendingActionTool(BaseTool):
             "lifecycle": updated["lifecycle"],
             "latest_audit": audit,
         }
-        store.remove(token)
         return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=content, details=result_details)
 
     def _current_effect(self, payload: dict[str, Any], stored_effect: dict[str, Any]) -> dict[str, Any]:
@@ -612,12 +632,17 @@ class ApprovePendingActionTool(BaseTool):
 class RejectPendingActionTool(BaseTool):
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec(name="reject_pending_action", description="Reject and remove a staged file edit or shell command by token.", parameters={"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}, requires_confirmation=True, permission_domain=PermissionDomain.APPROVAL, sensitive=True, model_callable=False)
+        return ToolSpec(name="reject_pending_action", description="Reject and archive a staged file edit or shell command by token.", parameters={"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}, requires_confirmation=True, permission_domain=PermissionDomain.APPROVAL, sensitive=True, model_callable=False)
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         store = PendingActionStore(self.pending_root())
         payload = store.load(arguments["token"])
-        if payload["action_type"] == "apply_patch_artifact":
+        lifecycle = payload.get("lifecycle") or {}
+        if lifecycle.get("state") != "rejected":
+            grant = payload.get("approval_grant")
+            if isinstance(grant, dict) and grant.get("status") == "active":
+                grant["status"] = "invalidated"
+                grant["invalidated_at"] = time.time()
             payload["lifecycle"] = {
                 "state": "rejected",
                 "updated_at": time.time(),
@@ -625,9 +650,18 @@ class RejectPendingActionTool(BaseTool):
                 "failure_reason_detail": None,
             }
             store.save(arguments["token"], payload)
-            return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=f"Rejected pending action {arguments['token']}", details={"token": arguments["token"], "action_type": payload["action_type"]})
-        store.remove(arguments["token"])
-        return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=f"Rejected pending action {arguments['token']}", details={"token": arguments["token"], "action_type": payload["action_type"]})
+            store.write_audit_record(arguments["token"], lifecycle_state="rejected")
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name=self.spec.name,
+            content=f"Rejected pending action {arguments['token']}",
+            details={
+                "token": arguments["token"],
+                "action_type": payload["action_type"],
+                "idempotent": lifecycle.get("state") == "rejected",
+                "lifecycle": (store.load(arguments["token"]).get("lifecycle") or {}),
+            },
+        )
 
 
 class ListPendingActionsTool(BaseTool):
@@ -637,7 +671,7 @@ class ListPendingActionsTool(BaseTool):
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         store = PendingActionStore(self.pending_root())
-        items = store.list()
+        items = [item for item in store.list() if is_active_pending_action(item)]
         content = "\n".join(
             f"{item['token']} {item['action_type']} [{(item.get('lifecycle') or {}).get('state', 'unknown')}] {item.get('target_path') or item.get('command') or ''}"
             for item in items

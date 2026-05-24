@@ -50,6 +50,29 @@ _STANDARD_INITIALIZE_PARAMS = {
     'clientInfo': {'name': 'pp-agent', 'version': '0.2.0'},
 }
 
+_SAFE_STDIO_ENV_KEYS = {
+    "APPDATA",
+    "COMSPEC",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PUBLIC",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "WINDIR",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+}
+
 
 class _StdioJsonMCPClient:
     def __init__(self, config: MCPServerConfig) -> None:
@@ -188,7 +211,11 @@ class _StdioJsonMCPClient:
         self._write_standard_json({'jsonrpc': '2.0', 'method': method, 'params': params})
 
     def _start_process(self) -> None:
-        env = os.environ.copy()
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key.upper() in _SAFE_STDIO_ENV_KEYS
+        }
         env.update(self._config.env)
         self._process = subprocess.Popen(
             [self._config.command, *self._config.args],

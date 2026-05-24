@@ -31,7 +31,7 @@ from pp_agent.runtime.lifecycle import (
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.safe_rewind import SafeRewindOrchestrator
 from pp_agent.runtime.state import AgentEvent
-from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.approvals import PendingActionStore, is_active_pending_action, pending_action_state
 from pp_agent.storage.checkpoints import CheckpointStore
 from pp_agent.storage.sessions import SessionRecord, SessionStore, SessionTreeEntry
 
@@ -316,10 +316,26 @@ class SessionHost:
         """获取当前会话的待审批操作的汇总信息，包括待审批操作的数量、类型分布、涉及的消息等，用于支持审批功能的展示和交互"""
         items = self._pending_action_store_factory(workspace).list()
         by_type: dict[str, int] = {}
+        active_items = [item for item in items if is_active_pending_action(item)]
+        archived_items = [item for item in items if not is_active_pending_action(item)]
         for item in items:
             action_type = item["action_type"]
             by_type[action_type] = by_type.get(action_type, 0) + 1
-        return {"count": len(items), "by_type": by_type, "tokens": [item["token"] for item in items], "items": items}
+        state_counts: dict[str, int] = {}
+        for item in items:
+            state = pending_action_state(item)
+            state_counts[state] = state_counts.get(state, 0) + 1
+        return {
+            "count": len(items),
+            "active_count": len(active_items),
+            "archived_count": len(archived_items),
+            "by_type": by_type,
+            "tokens": [item["token"] for item in active_items],
+            "items": items,
+            "active_items": active_items,
+            "archived_items": archived_items,
+            "state_counts": state_counts,
+        }
 
     def create_checkpoint(
         self,
