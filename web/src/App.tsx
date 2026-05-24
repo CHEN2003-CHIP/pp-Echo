@@ -465,6 +465,7 @@ export function App() {
   async function approve() {
     if (!activeApproval) return;
     const approval = activeApproval;
+    let approvalTargetSessionId = activeSessionId;
     setApprovalAction({ token: approval.token, action: "approve" });
     setApprovalFeedback("");
     try {
@@ -483,6 +484,7 @@ export function App() {
         ensureEventPolling(activeSessionId);
       } else {
         const result = await api.approvePending(approval.token);
+        approvalTargetSessionId = result.session_id || approvalTargetSessionId;
         removeApproval(approval.token);
         const message = approvalSuccessMessage(approval.actionType || "", result);
         setApprovalFeedback(message);
@@ -503,9 +505,14 @@ export function App() {
             }
           });
         }
+        if (result.resumed === false && result.session_id) {
+          await api.continueSession(result.session_id);
+          ensureEventPolling(result.session_id);
+        }
       }
       await refreshApprovals();
-      if (activeSessionId) await refreshSessionState(activeSessionId);
+      if (approvalTargetSessionId) await refreshSessionState(approvalTargetSessionId);
+      if (activeSessionId && activeSessionId !== approvalTargetSessionId) await refreshSessionState(activeSessionId);
       showNotice("审批已通过", "success");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

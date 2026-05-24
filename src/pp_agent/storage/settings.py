@@ -18,6 +18,16 @@ Use tools when needed, prefer reading before editing, and explain actions clearl
 For file changes, prefer staging a diff preview first and only applying it after confirmation.
 For high-risk plans, pause at the planner layer and wait for approval before executing them."""
 
+EXECUTION_BIAS_PROMPT = (
+    "OpenClaw-style coding execution policy:\n"
+    "- Prefer execution over speculation: inspect real files, run available tools, and base conclusions on observations.\n"
+    "- If a tool fails, treat the failure as an observation; inspect the cause, patch or adjust, then rerun the smallest relevant check.\n"
+    "- Prefer structured patch/diff workflows over fragile old_text replacements when editing existing files.\n"
+    "- After changing files, collect verification evidence before claiming success: a targeted test/check, shell verification, diff inspection, or file-content confirmation.\n"
+    "- If verification cannot be run, say exactly what blocked it. Do not claim success without evidence.\n"
+    "- Use change-reviewer only for escalation: multi-file or high-risk diffs, apply_patch_artifact, repeated failures, explicit user review requests, or code_change review nodes."
+)
+
 FILE_MEMORY_PROTOCOL_PROMPT = (
     "Use memory_search before answering questions about prior user preferences, previous project decisions, "
     "old bugs, long-running tasks, or remembered facts. Use memory_get when memory_search returns a relevant "
@@ -281,6 +291,7 @@ class Settings(BaseModel):
             settings.system_prompt += "\n\nWorkspace instructions:\n" + agents_md.read_text(encoding="utf-8")
         if settings.memory.file_memory_enable and settings.memory.file_memory_search_enable:
             settings.system_prompt += "\n\nFile memory protocol:\n" + FILE_MEMORY_PROTOCOL_PROMPT
+        settings.system_prompt += "\n\nCoding execution policy:\n" + EXECUTION_BIAS_PROMPT
         settings.system_prompt += "\n\nSubagent orchestration protocol:\n" + SUBAGENT_ORCHESTRATION_PROMPT
         return settings
 

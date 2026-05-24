@@ -113,8 +113,12 @@ export type ApprovalsSummary = {
 export type ApprovalActionResponse = {
   token: string;
   action_type: string;
+  session_id?: string | null;
+  source_tool_name?: string | null;
   result: string;
   success?: boolean;
+  resumed?: boolean;
+  event_count?: number;
   lifecycle?: { state?: string } | null;
   details?: Record<string, unknown>;
 };
@@ -365,6 +369,7 @@ export const api = {
     }),
   approve: (sessionId: string) => request(`/api/sessions/${sessionId}/approve`, { method: "POST" }),
   reject: (sessionId: string) => request(`/api/sessions/${sessionId}/reject`, { method: "POST" }),
+  continueSession: (sessionId: string) => request(`/api/sessions/${encodeURIComponent(sessionId)}/continue`, { method: "POST" }),
   cancel: (sessionId: string) => request(`/api/sessions/${sessionId}/cancel`, { method: "POST" }),
   approvals: () => request<ApprovalsSummary>("/api/approvals"),
   runtimeReport: (sessionId?: string) =>
