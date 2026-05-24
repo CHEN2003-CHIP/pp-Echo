@@ -94,6 +94,23 @@ def test_stream_chat_raises_on_http_error(monkeypatch) -> None:
         list(llm.stream_chat([ChatMessage(role="user", content=[TextPart(text="hi")], timestamp=0.0)]))
 
 
+def test_stream_chat_http_error_reads_streaming_body(monkeypatch) -> None:
+    monkeypatch.setenv("PP_AGENT_API_KEY", "test-key")
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, stream=httpx.ByteStream(b"streamed bad request"))
+        )
+    )
+    llm = LLMClient(client=client)
+
+    with pytest.raises(LLMClientError) as exc_info:
+        list(llm.stream_chat([ChatMessage(role="user", content=[TextPart(text="hi")], timestamp=0.0)]))
+
+    message = str(exc_info.value)
+    assert "streamed bad request" in message
+    assert "without having called `read()`" not in message
+
+
 def test_default_client_trusts_environment(monkeypatch) -> None:
     monkeypatch.delenv("PP_AGENT_HTTP_TRUST_ENV", raising=False)
 

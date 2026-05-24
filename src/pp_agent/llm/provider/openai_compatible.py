@@ -68,7 +68,11 @@ class LLMClient(BaseLLMClient):
                 },
                 json=payload,
             ) as response:
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    detail = self._response_error_text(response) or str(exc)
+                    raise LLMClientError(f"LLM request failed with status {response.status_code}: {detail}") from exc
                 for line in response.iter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -80,9 +84,6 @@ class LLMClient(BaseLLMClient):
                     except json.JSONDecodeError as exc:
                         raise LLMClientError(f"Invalid SSE payload: {data}") from exc
                     yield self._normalize_chunk(chunk)
-        except httpx.HTTPStatusError as exc:
-            detail = exc.response.text.strip() or str(exc)
-            raise LLMClientError(f"LLM request failed with status {exc.response.status_code}: {detail}") from exc
         except httpx.HTTPError as exc:
             raise LLMClientError(f"LLM request failed: {exc}") from exc
 
@@ -142,3 +143,13 @@ class LLMClient(BaseLLMClient):
                 }
             )
         return normalized
+
+    @staticmethod
+    def _response_error_text(response: httpx.Response) -> str:
+        try:
+            return response.text.strip()
+        except httpx.ResponseNotRead:
+            try:
+                return response.read().decode(response.encoding or "utf-8", errors="replace").strip()
+            except Exception:  # noqa: BLE001
+                return ""
