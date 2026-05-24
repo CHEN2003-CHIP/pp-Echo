@@ -11,6 +11,7 @@ from pp_agent.api import sdk
 from pp_agent.app import bootstrap
 from pp_agent.cli.commands.approvals import (
     approve_or_execute_pending_action,
+    load_pending_action_or_user_error,
     reject_pending_action as reject_pending_action_by_token,
 )
 from pp_agent.web.session_manager import WebSessionManager
@@ -255,12 +256,16 @@ def create_app(
     @app.post("/api/approvals/{token}/approve")
     def approve_pending_action(token: str) -> dict:
         try:
-            result = approve_or_execute_pending_action(active_workspace(), token, render=False)
-            session_id = result.get("session_id")
-            if isinstance(session_id, str) and session_id:
-                handle = session_manager().get_active_handle(session_id)
-                if handle is not None:
-                    handle.record_external_approval_result(result)
+            payload = load_pending_action_or_user_error(active_workspace(), token)
+            details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
+            session_id = str(payload.get("session_id") or details.get("session_id") or "").strip()
+            handle = session_manager().get_handle(session_id) if session_id else None
+            result = approve_or_execute_pending_action(
+                active_workspace(),
+                token,
+                render=False,
+                runtime=handle.agent if handle is not None else None,
+            )
             return result
         except (FileNotFoundError, RuntimeError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -268,7 +273,17 @@ def create_app(
     @app.post("/api/approvals/{token}/reject")
     def reject_pending_action(token: str) -> dict:
         try:
-            return reject_pending_action_by_token(active_workspace(), token, render=False)
+            payload = load_pending_action_or_user_error(active_workspace(), token)
+            details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
+            session_id = str(payload.get("session_id") or details.get("session_id") or "").strip()
+            handle = session_manager().get_handle(session_id) if session_id else None
+            result = reject_pending_action_by_token(
+                active_workspace(),
+                token,
+                render=False,
+                runtime=handle.agent if handle is not None else None,
+            )
+            return result
         except (FileNotFoundError, RuntimeError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

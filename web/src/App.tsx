@@ -508,7 +508,7 @@ export function App() {
               approval_details: result.details
             }
           });
-          if (result.success !== false && result.session_id === activeSessionId) {
+          if (result.success !== false && result.resumed !== true && result.session_id === activeSessionId) {
             setStatus("Continuing after approved action");
             try {
               await api.continueSession(activeSessionId);

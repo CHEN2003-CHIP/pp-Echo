@@ -144,6 +144,10 @@ class WebSessionHandle:
     def record_external_approval_result(self, result: dict) -> None:
         if result.get("session_id") and str(result.get("session_id")) != self.session_id:
             return
+        recorder = getattr(self.agent, "record_external_approval_result", None)
+        if callable(recorder):
+            recorder(result)
+            return
         token = str(result.get("token") or "").strip()
         action_type = str(result.get("action_type") or "").strip()
         tool_name = str(result.get("source_tool_name") or action_type or "approve_pending_action").strip()

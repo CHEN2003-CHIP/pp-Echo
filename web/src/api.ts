@@ -119,6 +119,8 @@ export type ApprovalActionResponse = {
   source_tool_name?: string | null;
   result: string;
   success?: boolean;
+  resumed?: boolean;
+  event_count?: number;
   lifecycle?: { state?: string } | null;
   details?: Record<string, unknown>;
 };

@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+import time
 
 from agent_core.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks
 from agent_core.runtime.monitor import RuntimeMonitor
@@ -29,6 +30,34 @@ class FakeLLMClient:
             }
         else:
             yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
+class ShellLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.model = ModelConfig()
+
+    def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "text": "",
+                "tool_calls": [{"id": "call-shell", "name": "run_shell", "arguments_chunk": '{"command":"Write-Output shell-ok"}'}],
+                "finish_reason": "tool_calls",
+                "raw": {},
+            }
+        else:
+            yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
+def stage_runtime_action(agent: AgentSession, tool_name: str, arguments: dict) -> dict:
+    agent.state.messages.append(ChatMessage(role="user", content=[TextPart(text=f"stage {tool_name}")], timestamp=time.time()))
+    result = agent.tool_registry.execute(tool_name, arguments)
+    result.tool_call_id = f"call-{tool_name}"
+    agent._attach_session_to_pending_action(result)
+    agent.state.messages.append(result.as_chat_message())
+    agent._persist()
+    return PendingActionStore(agent.tool_registry.workspace / ".pp-agent" / "pending-edits").load(result.details["token"])
 
 
 class BrokenLLMClient:
@@ -323,6 +352,70 @@ def test_agent_session_executes_pending_plan_after_approval(tmp_path: Path) -> N
     assert any(item["action_type"] == "write_file" and item.get("approval_grant") is None for item in pending)
     assert agent.state.pending_plan_token is None
     assert agent.state.pending_tool_calls == []
+
+
+def test_ordinary_write_file_approval_round_trip_persists_result_and_resumes(tmp_path: Path) -> None:
+    from pp_agent.cli.commands.approvals import approve_or_execute_pending_action
+
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+
+    result = approve_or_execute_pending_action(tmp_path, pending["token"], render=False, runtime=agent)
+    refreshed = SessionStore(tmp_path / "sessions").load(agent.session_id)
+
+    assert result["resumed"] is True
+    assert result["event_count"] > 0
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hi"
+    assert any(
+        message.role == "tool"
+        and message.metadata.get("tool_details", {}).get("external_approval_result") is True
+        and message.metadata.get("tool_details", {}).get("approval_status") == "approved"
+        for message in refreshed.messages
+    )
+    assert agent._latest_pending_action_note(agent.state) == ""
+    assert any(message.role == "assistant" and message.content for message in agent.state.messages)
+
+
+def test_ordinary_run_shell_approval_round_trip_persists_stdout_and_resumes(tmp_path: Path) -> None:
+    from pp_agent.cli.commands.approvals import approve_or_execute_pending_action
+
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "run_shell", {"command": "Write-Output shell-ok", "timeout_seconds": 5})
+
+    result = approve_or_execute_pending_action(tmp_path, pending["token"], render=False, runtime=agent)
+    refreshed = SessionStore(tmp_path / "sessions").load(agent.session_id)
+
+    assert result["resumed"] is True
+    assert result["success"] is True
+    assert "shell-ok" in result["result"]
+    assert result["details"]["returncode"] == 0
+    assert any(
+        message.role == "tool"
+        and message.metadata.get("tool_details", {}).get("external_approval_result") is True
+        and message.metadata.get("tool_details", {}).get("approval_action") == "approve"
+        for message in refreshed.messages
+    )
+    assert agent._latest_pending_action_note(agent.state) == ""
+
+
+def test_ordinary_reject_approval_round_trip_persists_rejection_and_continues(tmp_path: Path) -> None:
+    from pp_agent.cli.commands.approvals import reject_pending_action
+
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+
+    result = reject_pending_action(tmp_path, pending["token"], render=False, runtime=agent)
+    refreshed = SessionStore(tmp_path / "sessions").load(agent.session_id)
+
+    assert result["resumed"] is True
+    assert result["approval_action"] == "reject"
+    assert any(
+        message.role == "tool"
+        and message.metadata.get("tool_details", {}).get("approval_status") == "rejected"
+        and message.metadata.get("tool_details", {}).get("external_approval_result") is True
+        for message in refreshed.messages
+    )
+    assert agent._latest_pending_action_note(agent.state) == ""
 
 
 def test_agent_runtime_rejects_sensitive_tool_without_host_approval(tmp_path: Path) -> None:

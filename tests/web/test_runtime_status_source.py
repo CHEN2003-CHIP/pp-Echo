@@ -14,3 +14,5 @@ def test_web_runtime_status_uses_snapshot_and_terminal_events() -> None:
     assert 'snapshot?.cancel_requested' in source
     assert 'api.cancel(activeSessionId)' in source
     assert 'event.type.includes("subagent")' in source
+    assert 'result.resumed !== true' in source
+    assert 'result.success !== false' in source

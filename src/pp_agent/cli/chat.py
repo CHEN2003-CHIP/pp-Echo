@@ -175,7 +175,7 @@ def chat_main(workspace: Path, session_id: Optional[str] = None) -> None:
                     start_worker("approve", lambda: agent.approve_pending_plan(token))
                 #其他类型普通审批
                 else:
-                    approve_or_execute_pending_action(workspace, token, render=True)
+                    approve_or_execute_pending_action(workspace, token, render=True, runtime=agent)
                 continue
 
             # 处理拒绝命令

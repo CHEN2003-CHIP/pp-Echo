@@ -305,6 +305,49 @@ class AgentRuntime:
         list(self._emit(self._event(PLANNER_GATE_REJECTED, message=f"Rejected planner gate {token}", details={"token": token})))
         self._persist()
 
+    def record_external_approval_result(self, result: dict[str, object]) -> ChatMessage:
+        session_id = str(result.get("session_id") or "").strip()
+        if session_id and session_id != self.session_id:
+            raise ValueError(f"External approval result belongs to session {session_id}, not {self.session_id}")
+        token = str(result.get("token") or "").strip()
+        action_type = str(result.get("action_type") or "").strip()
+        source_tool_name = str(result.get("source_tool_name") or action_type or "approve_pending_action").strip()
+        tool_call_id = str(result.get("tool_call_id") or token or "").strip()
+        details = dict(result.get("details") or {})
+        lifecycle = dict(result.get("lifecycle") or details.get("lifecycle") or {})
+        success = bool(result.get("success", True))
+        approval_action = str(result.get("approval_action") or "").strip()
+        approved = bool(result.get("approved", approval_action == "approve" and success))
+        rejected = bool(result.get("rejected", approval_action == "reject" or action_type == "reject_pending_action"))
+        payload = {
+            **details,
+            "token": token,
+            "action_type": action_type,
+            "source_tool_name": source_tool_name,
+            "tool_call_id": tool_call_id,
+            "success": success,
+            "result": result.get("result"),
+            "result_details": details,
+            "lifecycle": lifecycle,
+            "external_approval_result": True,
+            "approval_action": approval_action or None,
+            "approval_status": "rejected" if rejected else ("approved" if approved else "failed"),
+            "approved": approved,
+            "rejected": rejected,
+            "timestamp": result.get("timestamp") or time.time(),
+        }
+        message = ChatMessage(
+            role="tool",
+            tool_call_id=tool_call_id or None,
+            tool_name=source_tool_name,
+            content=[TextPart(text=str(result.get("result") or ""))],
+            metadata={"tool_details": payload, "is_error": not success},
+            timestamp=float(payload["timestamp"]),
+        )
+        self.state.messages.append(message)
+        self._persist()
+        return message
+
     def request_cancel(self, reason: str = "cancel_requested") -> None:
         self._cancellation_token.cancel(reason)
 
@@ -1576,6 +1619,17 @@ class AgentRuntime:
         latest_user_index = self._latest_user_index(state)
         start = 0 if latest_user_index is None else latest_user_index + 1
         consumed_tokens: set[str] = set()
+        terminal_states = {
+            "denied",
+            "expired",
+            "execution_failed",
+            "grant_consumed",
+            "grant_invalidated",
+            "orphaned",
+            "quarantined",
+            "rejected",
+            "execution_succeeded",
+        }
         for message in state.messages[start:]:
             if message.role != "tool":
                 continue
@@ -1584,7 +1638,7 @@ class AgentRuntime:
             state_name = str(lifecycle.get("state") or "").strip()
             token = str(details.get("token") or "").strip()
             if token and (
-                state_name in {"grant_consumed", "execution_succeeded"}
+                state_name in terminal_states
                 or bool(details.get("external_approval_result"))
             ):
                 consumed_tokens.add(token)

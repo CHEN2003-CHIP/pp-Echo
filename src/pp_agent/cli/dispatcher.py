@@ -449,7 +449,7 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
             agent.approve_pending_plan(token)
             console.print()
         else:
-            approve_or_execute_pending_action(workspace, token, render=True)
+            approve_or_execute_pending_action(workspace, token, render=True, runtime=agent)
         return "handled"
     
     if raw.startswith("/reject "):
@@ -467,7 +467,7 @@ def handle_command(agent, raw: str, workspace: Path) -> str:
             agent.reject_pending_plan(token)
             console.print(f"Rejected planner approval {token}")
         else:
-            reject_pending_action(workspace, token, render=True)
+            reject_pending_action(workspace, token, render=True, runtime=agent)
         return "handled"
     # 动态切换当前大模型
     if raw.startswith("/model "):

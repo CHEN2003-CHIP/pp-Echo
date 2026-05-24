@@ -259,41 +259,79 @@ def test_web_api_approves_pending_action_token(tmp_path: Path, monkeypatch) -> N
 
     captured = {}
 
-    def fake_approve(workspace: Path, token: str, render: bool = True) -> dict:
-        captured.update({"workspace": workspace, "token": token, "render": render})
-        return {"token": token, "result": "approved"}
+    class ApprovalAgent:
+        def __init__(self, session_id: str, subscribers) -> None:
+            self.session_id = session_id
+            self._subscribers = subscribers
+            self.continue_calls = 0
 
-    manager = WebSessionManager(tmp_path / "workspace", runtime_factory=_factory)
+        def continue_(self):
+            self.continue_calls += 1
+            return []
+
+    def factory(_workspace: Path, session_id, subscribers):
+        return ApprovalAgent(session_id or "session-1", subscribers)
+
+    def fake_load(_workspace: Path, token: str) -> dict:
+        return {"token": token, "action_type": "write_file", "session_id": "session-1", "details": {"session_id": "session-1"}}
+
+    def fake_approve(workspace: Path, token: str, render: bool = True, runtime=None) -> dict:
+        captured.update({"workspace": workspace, "token": token, "render": render, "runtime": runtime})
+        return {"token": token, "action_type": "write_file", "session_id": "session-1", "resumed": True, "success": True, "result": "approved", "details": {}}
+
+    manager = WebSessionManager(tmp_path / "workspace", runtime_factory=factory)
+    monkeypatch.setattr(server_module, "load_pending_action_or_user_error", fake_load)
     monkeypatch.setattr(server_module, "approve_or_execute_pending_action", fake_approve)
     client = TestClient(_app(tmp_path, manager))
+    assert manager.get_active_handle("session-1") is None
 
     response = client.post("/api/approvals/tok-1/approve")
 
     assert response.status_code == 200
     assert response.json()["result"] == "approved"
-    assert captured == {"workspace": (tmp_path / "workspace").resolve(), "token": "tok-1", "render": False}
+    assert response.json()["resumed"] is True
+    assert captured["workspace"] == (tmp_path / "workspace").resolve()
+    assert captured["token"] == "tok-1"
+    assert captured["render"] is False
+    assert captured["runtime"].session_id == "session-1"
+    assert captured["runtime"].continue_calls == 0
 
 
-def test_web_api_approve_pending_action_applies_write_and_removes_token(tmp_path: Path) -> None:
+def test_web_api_approve_pending_action_does_not_override_backend_resume_decision(tmp_path: Path, monkeypatch) -> None:
     from fastapi.testclient import TestClient
+
+    class ApprovalAgent:
+        def __init__(self, session_id: str, subscribers) -> None:
+            self.session_id = session_id
+            self._subscribers = subscribers
+            self.continue_calls = 0
+
+        def continue_(self):
+            self.continue_calls += 1
+            return [{"type": "tool_end"}]
+
+    def factory(_workspace: Path, session_id, subscribers):
+        return ApprovalAgent(session_id or "session-1", subscribers)
+
+    def fake_load(_workspace: Path, token: str) -> dict:
+        return {"token": token, "action_type": "write_file", "session_id": "session-1", "details": {"session_id": "session-1"}}
+
+    def fake_approve(workspace: Path, token: str, render: bool = True, runtime=None) -> dict:
+        return {"token": token, "action_type": "write_file", "session_id": "session-1", "resumed": False, "success": False, "result": "blocked", "details": {}, "workspace": str(workspace)}
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    staged = ToolRegistry(workspace).execute("write_file", {"path": "MEMORY.md", "content": "# Memory\n"})
-    token = staged.details["token"]
-    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+    manager = WebSessionManager(workspace, runtime_factory=factory)
+    monkeypatch.setattr(server_module, "load_pending_action_or_user_error", fake_load)
+    monkeypatch.setattr(server_module, "approve_or_execute_pending_action", fake_approve)
+    client = TestClient(_app(tmp_path, manager))
 
-    response = client.post(f"/api/approvals/{token}/approve")
-    approvals = client.get("/api/approvals")
+    response = client.post("/api/approvals/tok-1/approve")
+    handle = manager.get_handle("session-1")
 
     assert response.status_code == 200
-    assert response.json()["success"] is True
-    assert response.json()["lifecycle"]["state"] == "grant_consumed"
-    assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == "# Memory\n"
-    assert token not in approvals.json()["tokens"]
-    assert all(item["token"] != token for item in approvals.json()["active_items"])
-    archived = next(item for item in approvals.json()["archived_items"] if item["token"] == token)
-    assert archived["lifecycle"]["state"] == "grant_consumed"
+    assert response.json()["resumed"] is False
+    assert handle.agent.continue_calls == 0
 
 
 def test_web_api_lists_patch_artifact_with_session_metadata_and_applies_it(tmp_path: Path) -> None:
