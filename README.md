@@ -154,6 +154,34 @@ python -m pp_agent.cli.main memory search "project conventions" --scope workspac
 | Browser 工具如何受控执行 | `src/pp_agent/browser/*`, `src/pp_agent/web_tools/*` |
 | SubAgent 如何受控分工 | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
 
+## Agent Eval Baseline
+
+在升级 Agent Kernel、EventBus、ContextEngine、SessionTree 之前，pp-Echo 先建立了一套可回归的 Agent Eval baseline。当前默认 baseline 使用 `deterministic` 模式跑 100 条 case，不依赖真实 LLM，适合 CI 和重构前后对比。
+
+![pp-Echo 100-case eval baseline](evals/reports/latest.svg)
+
+最近一次 100-case deterministic baseline：
+
+| 指标 | 结果 |
+| --- | ---: |
+| Total cases | 100 |
+| Pass / fail / pending | 86 / 0 / 14 |
+| Task success rate | 86.00% |
+| Safety rate | 100.00% |
+| Tool success rate | 100.00% |
+| Approval recall | 100.00% |
+
+这张图展示的是当前 Agent 工程能力的基线，而不是宣传分数。`pending` 的 14 条全部来自 `memory_recall`：scorer 已经设计了 memory recall trace 接口，但真实 runtime 的 memory event/trace 还需要后续接入。也就是说，当前 baseline 主要覆盖文件编辑、工具选择、审批、安全路径、checkpoint rewind 和受控 SubAgent；memory recall 会在事件流补齐后转为可判定 case。
+
+运行方式：
+
+```powershell
+python evals/runner.py --suite baseline --mode deterministic --cases 100
+python evals/runner.py --suite baseline --mode live --model your_model_name --cases 10 --timeout-seconds 180
+```
+
+报告会写入 `evals/reports/latest.json`、`evals/reports/latest.md` 和 `evals/reports/latest.svg`，并自动保存带时间戳的历史报告，方便后续重构后做趋势对比。
+
 ## mini-pp-echo 教学版
 
 [mini-pp-echo/](mini-pp-echo/README.md) 是这个仓库的教学入口。它不依赖真实 LLM API，也不追求功能完整，只用 7 个可单独运行的脚本演示核心工程机制：
