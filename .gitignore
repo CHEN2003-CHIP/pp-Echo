@@ -44,6 +44,7 @@ htmlcov/
 
 # Local runtime state
 .pp-agent/
+memory/
 .tmp-debug/
 .tmp-debug*/
 

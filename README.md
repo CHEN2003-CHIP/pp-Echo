@@ -5,259 +5,222 @@
 </p>
 
 <p align="center">
-  <strong>一个 Windows-first、CLI-first 的本地编程 Agent。</strong><br />
-  先规划，再执行；高风险操作先审批；代码状态和会话历史都能安全回退。
+  <strong>5 分钟跑通，7 天读懂，从 0 实现一个能规划、能调用工具、能审批、能回退、能记忆的Claude Code / Cursor 式本地 Agent。</strong>
 </p>
 
 <p align="center">
-  <a href="#快速开始"><img alt="快速开始" src="https://img.shields.io/badge/Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
-  <a href="#技术亮点"><img alt="技术亮点" src="https://img.shields.io/badge/Technical_Highlights-0F172A?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
-  <a href="#架构概览"><img alt="架构概览" src="https://img.shields.io/badge/Architecture-2563EB?style=for-the-badge&logo=mermaid&logoColor=white"></a>
-  <a href="#文档导航"><img alt="文档导航" src="https://img.shields.io/badge/Docs_Guide-DC2626?style=for-the-badge&logo=bookstack&logoColor=white"></a>
+  <a href="#5-分钟快速开始"><img alt="5 分钟快速开始" src="https://img.shields.io/badge/5_min-Quick_Start-59D0A8?style=for-the-badge&logo=windows-terminal&logoColor=white"></a>
+  <a href="#7-天学习路线"><img alt="7 天学习路线" src="https://img.shields.io/badge/7_days-Learning_Path-2563EB?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
+  <a href="#核心模块导览"><img alt="核心模块导览" src="https://img.shields.io/badge/Agent_Runtime-0F172A?style=for-the-badge&logo=mermaid&logoColor=white"></a>
   <a href="README_en.md"><img alt="English README" src="https://img.shields.io/badge/README-English-F8D66D?style=for-the-badge&logo=github&logoColor=111827"></a>
 </p>
+
+> 5 分钟跑通，7 天读懂，从 0 实现一个能规划、能调用工具、能审批、能回退、能记忆的Claude Code / Cursor 式本地 Agent。
+
+pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangChain / AutoGen 当黑箱接起来，也不是只会聊天的 Prompt Demo，而是把本地编程 Agent 背后的工程骨架拆开给你看。
+
+你可以从 `mini-pp-echo/` 的 7 个独立小脚本开始，理解 Agent Loop、工具调用、文件修改、审批、记忆、checkpoint 和 MCP mock；再回到完整工程，阅读 `SessionHost`、`AgentRuntime`、`ToolRegistry`、memory、MCP、SubAgent 等真实模块。
 
 <p align="center">
   <img src="docs/assets/hero.gif" alt="pp-Echo demo: 可见规划、审批优先执行、Git-backed rewind、分层记忆、受控子 Agent" width="920">
 </p>
 
-<p align="center">
-  <code>可见规划</code> | <code>审批优先</code> | <code>Git-backed rewind</code> | <code>分层记忆</code> | <code>受控子 Agent</code> | <code>CLI + TUI + Web UI</code>
-</p>
+## 项目定位
 
-pp-Echo 是一个面向真实仓库工作的本地编程 Agent，也是一个适合学习 Agent 工程的参考项目。它不是停留在 Prompt 层的聊天 Demo，而是把运行时循环、工具注册、策略审批、会话持久化、Checkpoint、安全回退、记忆检索、能力扩展、Web UI 和受控子 Agent 编排串成了一个可运行、可阅读、可扩展的工程系统。
+pp-Echo 想回答一个学习者真正关心的问题：
 
-当前最准确的定位是：**Windows-first**。Windows 是最清晰、最推荐的使用路径；Linux 和 macOS 更适合作为后续兼容方向，而不是当前同等支持的平台。
+> 如果我要从 0 实现一个 Claude Code / Cursor 式的本地编程 Agent，除了调用大模型，我到底还要写哪些工程机制？
+
+这里的答案包括：
+
+- 可见的 planning 与 turn loop，而不是一次性 prompt 拼接。
+- 统一的 tool registry，而不是散落在各处的函数调用。
+- 对文件、Git、Shell、Browser、Memory、MCP、SubAgent 的工具化封装。
+- Approval Gate：高风险动作先预览、再确认、再执行。
+- Git-backed checkpoint / safe rewind：代码状态和会话状态都能回退。
+- Memory 检索与上下文注入：让 Agent 不只活在当前一轮对话里。
+- 受控 SubAgent：能分工，但要有工具白名单、轮次限制和产物边界。
+
+它仍然是一个 Windows-first 的本地工程项目，但首页不再把重点放在“怎么部署一个工具”，而是放在“怎么读懂并复现一个 Agent 工程系统”。
 
 ## 为什么值得看
 
-- **它真的会做事**：文件读写、仓库检索、Git 状态、PowerShell、浏览器、记忆、MCP、扩展和子 Agent 都接入了统一工具边界。
-- **它把信任放在第一层**：计划先出现，敏感操作要审批，执行效果会被绑定，仓库与会话都支持回退。
-- **它适合拆开学习**：核心路径集中在 `AgentRuntime`、`ToolRegistry` 和 `SessionHost`，不是一团难以追踪的黑箱。
-- **它有多种入口**：你可以用 CLI 快速对话，用 TUI 长时间工作，也可以用 Web UI 查看会话树、审批、运行状态和 checkpoint。
-- **它对能力扩展认真建模**：Skills、Extensions、MCP、动态工具声明和子 Agent 都有明确的加载、发现与边界设计。
-- **它诚实描述边界**：pp-Echo 已经可用、可演示、可扩展，但不会把受控本地协作包装成无限自治的 Agent 团队平台。
+- **从 0 到完整链路**：先看最小教学版，再看真实工程版，学习路径是连续的。
+- **不依赖高层黑箱**：核心机制直接落在 Python 代码里，适合拆解、改写和复现。
+- **机制足够真实**：规划、工具调用、审批、回退、记忆、MCP、Browser、SubAgent 都不是概念图。
+- **适合对标学习**：你可以借它理解 Claude Code / Cursor 背后的本地 Agent 工程骨架，但它不是商业产品替代品。
+- **边界说清楚**：pp-Echo 有策略门和审批流，但不是完整 shell sandbox；SubAgent 是受控 worker，不是无限自治团队。
 
-## 当前状态
+## 5 分钟快速开始
 
-- Runtime、审批、会话树、checkpoint / rewind、文件记忆和 Web UI 已经可以实际使用。
-- `@subagent` 与 `orchestrate_agents` 已实现，但定位是受控的本地编排层，而不是成熟的自治多 Agent 平台。
-- 安全模型以策略门、精确效果审批、受保护路径和 shell 效果审查为核心，但它还不是完整 shell sandbox。
-- 项目适合本地试用、源码学习、二次扩展和公开演示；发布准备以 `doctor/report` 与相关文档为准。
-
-## 技术亮点
-
-| 模块 | 当前能力 | 关键路径 |
-| --- | --- | --- |
-| Runtime 核心 | Turn-based 运行循环、上下文构建、工具调用、生命周期事件、队列消息、压缩与持久化 | `src/pp_agent/runtime/runtime.py` |
-| 会话编排 | 会话创建、恢复、分支、树导航、checkpoint 集成和 safe rewind 协调 | `src/pp_agent/runtime/session_host.py` |
-| 工具边界 | 统一注册、元数据、策略评估、内置工具、动态工具和子 Agent 工具白名单 | `src/pp_agent/tools/registry.py` |
-| 安全与审批 | 规划审批、执行期策略门、受保护路径、精确效果审批和 shell 风险摘要 | `src/pp_agent/tools/policy.py`, `src/pp_agent/tools/effects.py` |
-| 文件 / Git / Shell | 文件读写编辑、搜索、Git status / diff、PowerShell 执行和高风险操作预览 | `src/pp_agent/tools/file_tools.py`, `src/pp_agent/tools/repo_tools.py`, `src/pp_agent/tools/shell_tool.py` |
-| 浏览器与网页工具 | 统一 `browser` 工具、页面快照、标签页控制、保守浏览器策略、静态 `web.search` / `web.fetch` | `src/pp_agent/browser/*`, `src/pp_agent/web_tools/*` |
-| Checkpoint 与回退 | 快照创建、恢复预览、工作区恢复、会话回退和组合式 safe rewind | `src/pp_agent/runtime/git_checkpoint.py`, `src/pp_agent/runtime/safe_rewind.py` |
-| 记忆系统 | Bootstrap memory、文件记忆检索、SQLite 历史、可选向量召回、reranking 和自动索引 | `src/pp_agent/memory/*`, `src/pp_agent/learning/*` |
-| 能力扩展 | Skills、可执行扩展、MCP server 集成、资源 manifest 和能力发现目录 | `src/pp_agent/app/bootstrap.py`, `src/pp_agent/mcp/*`, `src/pp_agent/extensions/*`, `src/pp_agent/skills/*` |
-| 子 Agent 编排 | 显式 `@subagent` handoff、受控 fan-out、子能力画像和 patch artifact 暂存 | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
-| 多界面 | CLI chat、Textual TUI、FastAPI + React Web UI、审批流、项目切换和运行状态 | `src/pp_agent/cli/*`, `src/pp_agent/tui/*`, `src/pp_agent/web/*`, `web/*` |
-| 评测与诊断 | Live eval、确定性 benchmark、runtime doctor/report、legacy-hint doctor 和能力检查 | `evals/*`, `tests/benchmarks/*`, `src/pp_agent/cli/commands/*` |
-
-## 架构概览
-
-```mermaid
-flowchart LR
-  U["User"] --> UI["CLI / TUI / Web UI"]
-  UI --> BOOT["Bootstrap and Settings"]
-  BOOT --> HOST["SessionHost"]
-  BOOT --> REG["ToolRegistry"]
-  BOOT --> CAPS["Skills / Extensions / MCP"]
-  BOOT --> MEM["Memory + Learning"]
-
-  HOST --> RT["AgentRuntime"]
-  MEM --> RT
-  CAPS --> REG
-  REG --> RT
-
-  RT --> LLM["LLM Client"]
-  RT --> PLAN["Planner + Turn Controller"]
-  PLAN --> POLICY{"Policy / Approval gate"}
-  POLICY -->|allow| EXEC["Tool execution"]
-  POLICY -->|ask| PENDING["Pending actions / exact effects"]
-  PENDING --> EXEC
-
-  EXEC --> BUILTIN["Built-in file / git / shell / memory tools"]
-  EXEC --> SUB["Subagent tools and worktree artifacts"]
-  EXEC --> STATE["Sessions / Timeline / Approvals"]
-  EXEC --> CKPT["Checkpoint + Safe Rewind"]
-
-  STATE --> UI
-  CKPT --> UI
-```
-
-这张图比传统的 “CLI -> Runtime -> Tools” 更接近当前项目真实形态：pp-Echo 已经包含能力发现、分层记忆、审批流、Web UI 状态、checkpoint 和受控子 Agent 编排。
-
-## 快速开始
-
-pp-Echo 需要 Python `3.9+`，推荐先在 Windows 上体验。
-
-### 最快启动 CLI
+推荐先跑教学最小版，不需要 LLM API：
 
 ```powershell
+python mini-pp-echo/01_loop.py
+python mini-pp-echo/02_tool_call.py
+python mini-pp-echo/04_approval.py
+```
+
+然后启动完整工程。pp-Echo 当前推荐 Windows + Python `3.9+`。
+
+### 方式一：clone 后双击启动
+
+如果你只是想最快跑起来：
+
+1. 安装 Python `3.9+`，并勾选 `Add python.exe to PATH`。
+2. 如果要启动 Web UI，安装 Node.js `20+`，并确保 `npm` 在 PATH 中。
+3. 设置模型 API key：
+
+```powershell
+setx PP_AGENT_API_KEY "your_api_key"
+```
+
+重新打开一个 PowerShell 或双击脚本窗口，让环境变量生效。
+
+然后在仓库根目录双击：
+
+```text
+start-agent.bat    启动 CLI Agent
+start-web.bat      启动 Web UI，会自动打开 http://127.0.0.1:8765
+```
+
+这两个脚本会检查依赖；缺少 Python 包时会自动执行 `pip install`。`start-web.bat` 还会在需要时进入 `web/` 安装前端依赖并构建页面。
+
+注意：如果不设置 `PP_AGENT_API_KEY`，脚本仍会打开 CLI 或 Web UI，但真正请求模型时会失败。
+
+### 方式二：推荐的隔离环境
+
+```powershell
+git clone https://github.com/CHEN2003-CHIP/pp-Echo.git
+cd pp-Echo
+python -m venv .venv
+.\.venv\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .[web]
+set PYTHONPATH=src
 set PP_AGENT_API_KEY=your_api_key
+python -m pp_agent.cli.main chat
+```
+
+也可以使用仓库里的脚本入口：
+
+```powershell
 .\start-agent.bat
-```
-
-### 启动 Web UI
-
-```powershell
-set PP_AGENT_API_KEY=your_api_key
+.\echo-cli.bat
 .\start-web.bat
 ```
 
-默认访问：
+Web UI 默认访问：
 
 ```text
 http://127.0.0.1:8765
 ```
 
-Web UI 支持项目切换、运行时状态、审批、checkpoint 和 patch artifact 工作流。
-
-### 启动 TUI
-
-```powershell
-set PP_AGENT_API_KEY=your_api_key
-.\echo-cli.bat
-```
-
-### 从源码运行
-
-```powershell
-git clone https://github.com/CHEN2003-CHIP/pp-Echo.git
-cd pp-Echo
-set PP_AGENT_API_KEY=your_api_key
-set PYTHONPATH=src
-python -m pp_agent.cli.main chat
-```
-
-常用诊断：
+常用诊断命令：
 
 ```powershell
 set PYTHONPATH=src
 python -m pp_agent.cli.main workflow doctor --json
-python -m pp_agent.cli.main memory search "project conventions" --scope workspace
 python -m pp_agent.cli.main config show --workspace .
+python -m pp_agent.cli.main memory search "project conventions" --scope workspace
 ```
 
-## Demo / 截图
+## 7 天学习路线
 
-![pp-Echo demo](docs/assets/demo.gif)
+完整路线见 [tutorials/README.md](tutorials/README.md)。建议每天只抓一个核心问题：
 
-| 交互式对话 | Checkpoint + Rewind |
+| Day | 主题 | 你会读到 |
+| --- | --- | --- |
+| Day 1 | Agent Loop 是怎么跑起来的 | `AgentRuntime`、turn loop、消息流 |
+| Day 2 | Tool Registry 与工具调用 | `ToolRegistry`、工具元数据、调用边界 |
+| Day 3 | 文件读写、Patch 与代码修改 | file tools、pending edits、效果绑定 |
+| Day 4 | Approval Gate 与安全策略 | policy、pending actions、审批执行 |
+| Day 5 | Session、Timeline 与 Checkpoint | `SessionHost`、timeline、safe rewind |
+| Day 6 | Memory 检索与上下文注入 | memory retrieval、learning、recall builder |
+| Day 7 | MCP、Browser 与 SubAgent 扩展 | MCP manager、browser runtime、subagents |
+
+## 核心模块导览
+
+| 学习问题 | 完整工程路径 |
 | --- | --- |
-| ![Interactive chat screenshot](docs/assets/screenshot-chat.png) | ![Checkpoint screenshot](docs/assets/screenshot-checkpoint.png) |
+| 一轮对话如何进入运行时 | `src/pp_agent/runtime/runtime.py`, `src/pp_agent/runtime/turn_loop.py` |
+| 会话如何创建、恢复、分支、回退 | `src/pp_agent/runtime/session_host.py`, `src/pp_agent/storage/sessions.py` |
+| 工具如何注册、筛选、执行 | `src/pp_agent/tools/registry.py`, `src/pp_agent/tools/base.py` |
+| 审批和安全策略在哪里发生 | `src/pp_agent/tools/policy.py`, `src/pp_agent/tools/effects.py`, `src/pp_agent/storage/approvals.py` |
+| 文件、Git、Shell 工具如何实现 | `src/pp_agent/tools/file_tools.py`, `src/pp_agent/tools/repo_tools.py`, `src/pp_agent/tools/shell_tool.py` |
+| checkpoint 和 safe rewind 如何串起来 | `src/pp_agent/runtime/git_checkpoint.py`, `src/pp_agent/runtime/safe_rewind.py` |
+| 记忆如何检索并进入上下文 | `src/pp_agent/memory/*`, `src/pp_agent/learning/*` |
+| MCP 工具如何发现和调用 | `src/pp_agent/mcp/*`, `example-mcp.jsonc` |
+| Browser 工具如何受控执行 | `src/pp_agent/browser/*`, `src/pp_agent/web_tools/*` |
+| SubAgent 如何受控分工 | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
 
-![Web UI screenshot](docs/assets/screenshot-web-ui.png)
+## mini-pp-echo 教学版
 
-## 评测快照
+[mini-pp-echo/](mini-pp-echo/README.md) 是这个仓库的教学入口。它不依赖真实 LLM API，也不追求功能完整，只用 7 个可单独运行的脚本演示核心工程机制：
 
-pp-Echo 按工程 Agent 来评测，而不只是看 Prompt 效果。
+```text
+01_loop.py        最小 Agent Loop
+02_tool_call.py   工具注册与调用
+03_file_edit.py   文件读写与最小 patch
+04_approval.py    高风险动作审批
+05_memory.py      记忆检索与上下文注入
+06_checkpoint.py  checkpoint 与回退
+07_mcp_mock.py    MCP 风格工具发现与调用
+```
 
-| 评测层 | 规模 | 证明什么 | 入口 |
-| --- | ---: | --- | --- |
-| Live interview demo | 12 cases | 直接回答、仓库理解、工具调用、安全审批和显式子 Agent handoff | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
-| Main agent eval | 60 cases | 工具、安全、协作、记忆和中文技术表达的更广覆盖 | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
-| Deterministic benchmark | 15 tasks | planner gating、rewind、MCP lazy activation 和 compaction 的确定性验证 | [docs/benchmarks/latest.md](docs/benchmarks/latest.md) |
-| Stress eval | 10 cases | 更长、更高风险场景中的 shell 审批和子 Agent 委派 | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
+建议先把这 7 个脚本读完，再读完整工程。这样你看到 `SessionHost`、`ToolRegistry`、`safe_rewind` 时，不会被真实项目的边界条件淹没。
 
-仓库文档中最近记录的本地 live demo 结果：
+## 完整工程版
 
-| Run | Cases | Pass rate | Tool calls | Approval gates | Expected policy blocks |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `20260512-234612-6fb26ca4` | 12 | 100% | 14 | 2 | 1 |
+完整 pp-Echo 是一个可运行的本地编程 Agent 工程版，提供 CLI、TUI、Web UI、会话树、审批流、checkpoint、memory、MCP、Browser、SubAgent 和测试覆盖。
+
+它适合三类学习者：
+
+- 想理解 Claude Code / Cursor 类产品工程结构的人。
+- 想自己实现本地 Agent runtime 的开发者。
+- 想研究“工具调用 + 审批 + 回退 + 记忆”怎样组合成可靠系统的人。
+
+## 安全边界说明
+
+pp-Echo 的安全设计重点是“可见、可审、可回退”：
+
+- 高风险工具会进入 Approval Gate。
+- 文件和 shell 操作会尽量生成可预览的效果摘要。
+- checkpoint / safe rewind 用 Git-backed 方式帮助恢复代码状态。
+- SubAgent 默认受工具、轮次和工作区策略约束。
+
+但也要诚实说明：
+
+- 它不是完整的系统级 sandbox。
+- 它不能替代人工代码审查。
+- 它不能保证模型永远按预期规划。
+- 在真实仓库中运行前，应先看 `docs/safety.md` 和 `workflow doctor` 输出。
 
 ## 文档导航
 
-### 理解运行主链路
+- [tutorials/README.md](tutorials/README.md)：7 天读懂 pp-Echo。
+- [mini-pp-echo/README.md](mini-pp-echo/README.md)：从 0 开始的教学最小版。
+- [docs/teaching-positioning.md](docs/teaching-positioning.md)：为什么 pp-Echo 适合做 Agent 工程课。
+- [docs/source-map.md](docs/source-map.md)：源码路径导览。
+- [docs/safety.md](docs/safety.md)：安全边界与审批策略。
+- [docs/configuration.md](docs/configuration.md)：配置模型、工具和项目设置。
+- [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)：MCP 集成说明。
+- [docs/multi_agent_demo.md](docs/multi_agent_demo.md)：SubAgent 演示。
+- [README_en.md](README_en.md)：英文参考文档。
+- [README_ZH.md](README_ZH.md)：旧版中文参考文档。
 
-如果你想知道一个用户请求如何变成计划、工具调用、审批、持久化状态和可回退历史，先看：
+## 贡献路线
 
-- [docs/source-map.md](docs/source-map.md)
-- [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
-- [docs/agent-learning-en.md](docs/agent-learning-en.md)
-- `src/pp_agent/runtime/runtime.py`
-- `src/pp_agent/tools/registry.py`
-- `src/pp_agent/runtime/session_host.py`
+欢迎围绕“更适合学习”来贡献：
 
-### 理解安全与审批
+- 把完整工程中的复杂机制拆成更小的 tutorial。
+- 为 `mini-pp-echo/` 增加配套图解或练习题。
+- 补充“从教学脚本跳到真实源码”的源码阅读注释。
+- 增加小而稳的测试，覆盖新增教学模块。
+- 改进 docs，让学习者更快定位 `AgentRuntime`、`ToolRegistry`、`SessionHost` 的关系。
 
-安全边界不只依赖模型“承诺不乱做”，而是落在策略门、受保护路径、精确效果审批、shell 风险摘要和 pending action 绑定上。
-
-- [docs/safety.md](docs/safety.md)
-- [docs/effect-analysis.md](docs/effect-analysis.md)
-- [docs/dynamic-tool-declarations.md](docs/dynamic-tool-declarations.md)
-
-### 理解子 Agent
-
-当前子 Agent 的关键词是受控：显式 handoff、限制工具、限制轮次、隔离子会话 / worktree，并生成可审查 artifact。
-
-- [docs/multi_agent_demo.md](docs/multi_agent_demo.md)
-- [docs/subagent-validation.md](docs/subagent-validation.md)
-- `src/pp_agent/tools/subagent_tool.py`
-- `src/pp_agent/subagents/*`
-
-### 理解记忆系统
-
-记忆不是单一数据库，而是由 `MEMORY.md`、daily notes、workspace memory、SQLite history、BM25 和可选向量召回组成的分层系统。
-
-- [MEMORY.md](MEMORY.md)
-- [docs/source-map.md](docs/source-map.md)
-- `src/pp_agent/memory/*`
-- `src/pp_agent/learning/*`
-
-### 配置模型、工具和 MCP
-
-- [docs/configuration.md](docs/configuration.md)
-- [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)
-- [example-config.jsonc](example-config.jsonc)
-- [example-mcp.jsonc](example-mcp.jsonc)
-
-## 核心命令
-
-```powershell
-python -m pp_agent.cli.main chat
-python -m pp_agent.cli.main run "Audit this repo and summarize risky commands"
-python -m pp_agent.cli.main web
-python -m pp_agent.cli.main sessions tree
-python -m pp_agent.cli.main approvals summary
-python -m pp_agent.cli.main checkpoint list
-python -m pp_agent.cli.main rewind-safe --session <session_id> --turns 2
-python -m pp_agent.cli.main capabilities legacy-hints --json --workspace .
-```
-
-## 项目边界
-
-- pp-Echo 当前是 **Windows-first**，不是跨平台完全等价支持。
-- 它有审批、策略门和精确效果绑定，但还不是完整 shell sandbox。
-- 子 Agent 是受控本地 worker，不是无限自治的多 Agent 团队。
-- 动态工具声明已经形式化；当语义不稳定或无法 stage 时，执行会 fail closed。
-
-## 贡献
-
-欢迎围绕运行时行为、文档、Demo 素材、测试、扩展和发布打磨贡献改进。建议先读 [CONTRIBUTING.md](CONTRIBUTING.md)，并尽量保持改动聚焦：一个 PR 解决一个用户可感知问题，或一个清晰的内部改进点。
-
-## Release
-
-- 当前 release notes: [releases/v0.2.0.md](releases/v0.2.0.md)
-- GitHub Releases: [github.com/CHEN2003-CHIP/pp-Echo/releases](https://github.com/CHEN2003-CHIP/pp-Echo/releases)
-
-发布前建议运行：
-
-```powershell
-python -m pp_agent.cli.main capabilities legacy-hints --strict --workspace .
-python -m pp_agent.cli.main workflow doctor --json --workspace .
-python -m pytest tests/benchmarks/test_runner.py
-```
+如果这个项目帮你把本地 Agent 的工程骨架看清楚了，点一个 Star 就很好。它会让我知道：这个仓库值得继续朝“可运行、可拆解、可复现的 Agent 工程课”打磨下去。
 
 ## License
 
-本项目基于 MIT License 发布，详见 [LICENSE](LICENSE)。
+[MIT](LICENSE)

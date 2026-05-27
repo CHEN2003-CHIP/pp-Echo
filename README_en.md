@@ -1,5 +1,7 @@
 # pp-Echo
 
+The Chinese README is now the primary teaching-oriented entry. English docs are kept as a secondary reference.
+
 <p align="center">
   <img src="docs/assets/logo-echo.svg" alt="pp-Echo logo" width="420" />
 </p>
