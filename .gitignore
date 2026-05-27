@@ -57,3 +57,7 @@ Thumbs.db
 .npm-cache/
 node_modules/
 
+memory/
+MEMORY.md
+AGENTS.md
+test.py
