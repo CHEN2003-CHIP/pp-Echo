@@ -49,6 +49,15 @@ class QuotaExhaustedExtractor:
         )
 
 
+class InvalidJsonExtractor:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def extract(self, *, session_id: str, turn_id: str, messages: list[ChatMessage]):
+        self.calls += 1
+        raise ValueError("Learning extractor expected a JSON array")
+
+
 class ExtractorWithClient:
     def __init__(self, llm_client) -> None:
         self.llm_client = llm_client
@@ -120,6 +129,24 @@ def test_runtime_learning_quota_exhaustion_is_suppressed(tmp_path: Path) -> None
     assert learning._extraction_disabled is True
     assert not any(event.type == LEARNING_EXTRACTION_FAILED for event in first_events)
     assert not any(event.type == LEARNING_EXTRACTION_FAILED for event in second_events)
+    assert runtime.state.messages[-1].role == "assistant"
+
+
+def test_runtime_learning_parse_failure_is_suppressed(tmp_path: Path) -> None:
+    extractor = InvalidJsonExtractor()
+    learning = LearningRuntime(
+        workspace=tmp_path,
+        llm_client=None,
+        settings=LearningSettings(),
+        store=LearningStore(tmp_path / ".pp-agent" / "learning"),
+        extractor=extractor,
+    )
+    runtime = _runtime(tmp_path, learning)
+
+    events = runtime.prompt("remember this workflow")
+
+    assert extractor.calls == 1
+    assert not any(event.type == LEARNING_EXTRACTION_FAILED for event in events)
     assert runtime.state.messages[-1].role == "assistant"
 
 

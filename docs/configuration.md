@@ -243,10 +243,30 @@ Project resources can be declared in:
 
 If no manifest is present, pp-Echo falls back to conventional directories such as:
 
+- `skills`
+- `<pp-Echo repo>/skills`
 - `.pp-agent/skills`
 - `.pp-agent/extensions`
 - `.pi/skills`
 - `.agents/skills`
+
+For a workspace-local skill, the friendliest path is now:
+
+```text
+skills/<skill-name>/SKILL.md
+```
+
+For an external skill folder, add it to the workspace config:
+
+```powershell
+python -m pp_agent.cli.main skills add-dir "D:\lab\experiment-report-skill" --workspace .
+python -m pp_agent.cli.main skills roots --workspace .
+python -m pp_agent.cli.main skills list --workspace .
+```
+
+`custom_directories` may point either to a directory that contains many skill folders, or directly to one skill folder that contains `SKILL.md`. Relative paths are resolved from the workspace.
+
+The pp-Echo repository root `skills` directory is loaded as a shared default for every workspace, so skills placed there appear in the frontend even after switching to another workspace. A workspace-local `skills` directory still has higher precedence when names collide.
 
 ## Helpful commands
 
@@ -254,6 +274,7 @@ If no manifest is present, pp-Echo falls back to conventional directories such a
 python -m pp_agent.cli.main config show --workspace .
 python -m pp_agent.cli.main capabilities list --workspace .
 python -m pp_agent.cli.main skills list --workspace .
+python -m pp_agent.cli.main skills roots --workspace .
 ```
 
 ## Reference files in this repo

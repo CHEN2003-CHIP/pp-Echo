@@ -10,10 +10,12 @@ def materialize_skill(descriptor: SkillDescriptor) -> str:
     if cached is not None:
         return cached
 
-    text = descriptor.path.read_text(encoding="utf-8")
+    text = descriptor.path.read_text(encoding="utf-8-sig")
     body = text
-    if text.startswith("---\n"):
-        parts = text.split("---\n", 2)
-        if len(parts) == 3:
-            _, _, body = parts
+    rows = text.splitlines()
+    if rows and rows[0].strip() == "---":
+        for index, row in enumerate(rows[1:], start=1):
+            if row.strip() == "---":
+                body = "\n".join(rows[index + 1 :])
+                break
     return descriptor.cache_body(body.strip())

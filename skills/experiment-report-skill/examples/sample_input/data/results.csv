@@ -1,0 +1,7 @@
+method,size,runtime_ms,throughput_gflops
+baseline,512,12.4,21.6
+optimized,512,8.1,33.1
+baseline,1024,48.7,44.1
+optimized,1024,25.3,84.9
+baseline,2048,211.5,81.2
+optimized,2048,93.8,183.1

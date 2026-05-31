@@ -90,6 +90,23 @@ def test_pp_agent_skills_commands_smoke(tmp_path: Path) -> None:
     assert json.loads(show_result.stdout)["name"] == "demo"
 
 
+def test_pp_agent_skills_add_dir_smoke(tmp_path: Path) -> None:
+    external = tmp_path / "experiment-report-skill"
+    external.mkdir(parents=True)
+    external.joinpath("SKILL.md").write_text(
+        "---\nname: experiment-report\ndescription: Experiment reports\n---\nbody",
+        encoding="utf-8",
+    )
+    env = {"PP_AGENT_HOME": str(tmp_path / ".pp-agent-home")}
+
+    add_result = _run_module("pp_agent.cli.main", "skills", "add-dir", str(external), "--workspace", str(tmp_path), env_overrides=env)
+    list_result = _run_module("pp_agent.cli.main", "skills", "list", "--workspace", str(tmp_path), env_overrides=env)
+
+    assert add_result.returncode == 0
+    assert list_result.returncode == 0
+    assert any(item["name"] == "experiment-report" for item in json.loads(list_result.stdout))
+
+
 def test_agent_cli_shim_help_smoke() -> None:
     result = _run_module("agent_cli.main", "--help")
 

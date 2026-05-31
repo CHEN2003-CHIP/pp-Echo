@@ -76,7 +76,7 @@ class LearningRuntime:
                 )
                 return []
             logger.warning("Learning extraction failed for session=%s turn=%s: %s", session_id, turn_id, exc)
-            raise
+            return []
         self.store.append_candidates(candidates)
         try:
             self.file_memory_writer.auto_apply(candidates)

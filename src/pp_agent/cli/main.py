@@ -401,6 +401,18 @@ if app:
 
         skills_show_main(workspace, name)
 
+    @skills_app.command("roots")
+    def skills_roots(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        from pp_agent.cli.commands.skills import skills_roots_main
+
+        skills_roots_main(workspace)
+
+    @skills_app.command("add-dir")
+    def skills_add_dir(directory: Path, workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
+        from pp_agent.cli.commands.skills import skills_add_dir_main
+
+        skills_add_dir_main(workspace, directory)
+
 
     @eval_app.command("run")
     def eval_run(
@@ -640,6 +652,11 @@ def main() -> None:
     skills_show_parser = skills_subparsers.add_parser("show")
     skills_show_parser.add_argument("name")
     skills_show_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    skills_roots_parser = skills_subparsers.add_parser("roots")
+    skills_roots_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    skills_add_dir_parser = skills_subparsers.add_parser("add-dir")
+    skills_add_dir_parser.add_argument("directory")
+    skills_add_dir_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     eval_parser = subparsers.add_parser("eval")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
     eval_run_parser = eval_subparsers.add_parser("run")
@@ -822,6 +839,14 @@ def main() -> None:
         from pp_agent.cli.commands.skills import skills_show_main
 
         skills_show_main(Path(args.workspace), args.name)
+    elif command == "skills" and args.skills_command == "roots":
+        from pp_agent.cli.commands.skills import skills_roots_main
+
+        skills_roots_main(Path(args.workspace))
+    elif command == "skills" and args.skills_command == "add-dir":
+        from pp_agent.cli.commands.skills import skills_add_dir_main
+
+        skills_add_dir_main(Path(args.workspace), Path(args.directory))
     elif command == "eval" and args.eval_command == "run":
         from pp_agent.cli.commands.eval import eval_run_main
 

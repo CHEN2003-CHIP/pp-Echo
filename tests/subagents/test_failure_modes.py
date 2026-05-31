@@ -156,6 +156,7 @@ def test_subagent_manager_rejects_overlong_or_missing_sections_as_invalid_summar
     host = _host(tmp_path)
     parent_runtime = host.create_session(tmp_path)
     session_store = SessionStore(tmp_path / "sessions")
+    parent_events: list[dict] = []
 
     class InvalidSummaryRuntime(MinimalRuntime):
         def prompt(self, prompt_text: str):
@@ -178,6 +179,7 @@ def test_subagent_manager_rejects_overlong_or_missing_sections_as_invalid_summar
         parent_registry=ToolRegistry(tmp_path, current_session_id=parent_runtime.session_id),
         session_store=session_store,
         runtime_factory=runtime_factory,
+        event_sink=lambda event_type, **payload: parent_events.append({"type": event_type, **payload}),
     )
 
     result = manager.run_sync(
@@ -189,6 +191,9 @@ def test_subagent_manager_rejects_overlong_or_missing_sections_as_invalid_summar
 
     assert result.success is False
     assert result.failure_kind == "invalid_summary"
+    assert parent_events
+    assert parent_events[-1]["type"] == "subagent_fail"
+    assert parent_events[-1]["is_error"] is False
 
 
 def test_subagent_manager_accepts_markdown_heading_summary(tmp_path: Path) -> None:

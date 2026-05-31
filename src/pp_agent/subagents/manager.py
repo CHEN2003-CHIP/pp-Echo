@@ -225,13 +225,13 @@ class SubAgentManager:
                     SUBAGENT_FAIL,
                     message=message,
                     details={"spec_name": spec.name, "failure_kind": "invalid_summary"},
-                    is_error=True,
+                    is_error=self._failure_event_is_error("invalid_summary"),
                 )
                 self._emit_parent_event(
                     SUBAGENT_FAIL,
                     message=message,
                     details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "invalid_summary", "parse_error": True},
-                    is_error=True,
+                    is_error=self._failure_event_is_error("invalid_summary"),
                 )
                 return failure_result(
                     spec_name=spec.name,
@@ -276,13 +276,13 @@ class SubAgentManager:
                     SUBAGENT_FAIL,
                     message=validation_error,
                     details={"spec_name": spec.name, "failure_kind": "invalid_summary"},
-                    is_error=True,
+                    is_error=self._failure_event_is_error("invalid_summary"),
                 )
                 self._emit_parent_event(
                     SUBAGENT_FAIL,
                     message=validation_error,
                     details={"spec_name": spec.name, "child_session_id": child_session_id, "session_id": child_session_id, "failure_kind": "invalid_summary", "parse_error": True},
-                    is_error=True,
+                    is_error=self._failure_event_is_error("invalid_summary"),
                 )
                 return failure_result(
                     spec_name=spec.name,
@@ -439,6 +439,10 @@ class SubAgentManager:
     def _safe_error_message(exc: Exception) -> str:
         message = str(exc).strip() or exc.__class__.__name__
         return message.splitlines()[0][:240]
+
+    @staticmethod
+    def _failure_event_is_error(failure_kind: str) -> bool:
+        return failure_kind not in {"invalid_summary"}
 
     def _validate_spec(self, spec: SubAgentSpec) -> Optional[str]:
         metadata = self.parent_registry.metadata()

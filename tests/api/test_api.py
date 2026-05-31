@@ -7,6 +7,7 @@ import pytest
 from pp_agent import api
 from pp_agent.api import sdk
 from pp_agent.prompts.loader import load_prompt_templates
+from pp_agent.skills import index as skill_index
 from pp_agent.skills.loader import load_skills
 from pp_agent.skills.materializer import materialize_skill
 from pp_agent.storage.settings import SkillCapabilityConfig
@@ -114,6 +115,81 @@ def test_skill_loader_supports_custom_directory_priority_and_filters(tmp_path: P
     assert skills["demo"].root_name == "custom-a"
     assert skills["demo"].discovery_mode == "custom_directory"
     assert skills["demo"].discovery_root == str(custom_a)
+
+
+def test_skill_loader_resolves_relative_custom_directory_from_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    user_root = tmp_path / "user"
+    skill_path = workspace / "external-skills" / "demo" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("---\nname: demo\ndescription: relative custom\n---\nbody", encoding="utf-8")
+
+    skills = load_skills(
+        workspace,
+        user_root,
+        config=SkillCapabilityConfig(custom_directories=["external-skills"]),
+    )
+
+    assert skills["demo"].path == skill_path.resolve()
+    assert skills["demo"].discovery_root == str((workspace / "external-skills").resolve())
+
+
+def test_skill_loader_prefers_workspace_skills_directory(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    user_root = tmp_path / "user"
+    workspace_skill = workspace / "skills" / "demo" / "SKILL.md"
+    legacy_skill = workspace / ".pp-agent" / "skills" / "demo" / "SKILL.md"
+    for path, description in [(workspace_skill, "workspace skills"), (legacy_skill, "legacy project")]:
+        path.parent.mkdir(parents=True)
+        path.write_text(f"---\nname: demo\ndescription: {description}\n---\nbody", encoding="utf-8")
+
+    skills = load_skills(workspace, user_root)
+
+    assert skills["demo"].description == "workspace skills"
+    assert skills["demo"].root_name == "workspace_skills"
+    assert skills["demo"].discovery_mode == "workspace_directory"
+
+
+def test_skill_loader_accepts_bom_and_crlf_frontmatter(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    user_root = tmp_path / "user"
+    skill_path = workspace / "skills" / "demo" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("\ufeff---\r\nname: demo\r\ndescription: Windows authored skill\r\n---\r\nbody", encoding="utf-8")
+
+    skills = load_skills(workspace, user_root)
+
+    assert skills["demo"].description == "Windows authored skill"
+
+
+def test_skill_loader_accepts_markdown_without_frontmatter(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    user_root = tmp_path / "user"
+    skill_path = workspace / "skills" / "experiment-report-skill" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# Experiment Report Skill\n\nUse this skill for experiment reports.", encoding="utf-8")
+
+    skills = load_skills(workspace, user_root)
+
+    assert skills["experiment-report-skill"].description == "Experiment Report Skill"
+    assert materialize_skill(skills["experiment-report-skill"]).startswith("# Experiment Report Skill")
+
+
+def test_skill_loader_includes_pp_echo_root_skills_for_other_workspaces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pp_echo_root = tmp_path / "pp-echo"
+    workspace = tmp_path / "other-workspace"
+    user_root = tmp_path / "user"
+    shared_skill = pp_echo_root / "skills" / "shared-demo" / "SKILL.md"
+    shared_skill.parent.mkdir(parents=True)
+    shared_skill.write_text("---\nname: shared-demo\ndescription: Shared pp-Echo skill\n---\nbody", encoding="utf-8")
+    monkeypatch.setattr(skill_index, "PP_ECHO_ROOT_SKILLS_DIR", pp_echo_root / "skills")
+
+    skills = load_skills(workspace, user_root)
+
+    assert skills["shared-demo"].path == shared_skill.resolve()
+    assert skills["shared-demo"].origin_type == "shared"
+    assert skills["shared-demo"].root_name == "pp_echo_root_skills"
+    assert skills["shared-demo"].discovery_mode == "pp_echo_root_directory"
 
 
 def test_skill_loader_prefers_pi_style_ancestor_roots_over_legacy_project_root(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ from pydantic import BaseModel, PrivateAttr
 
 
 BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent
+PP_ECHO_ROOT_SKILLS_DIR = Path(__file__).resolve().parents[3] / "skills"
 
 
 class SkillDescriptor(BaseModel):
@@ -77,10 +78,11 @@ def skill_search_roots(
     # 按优先级顺序生成搜索根目录：
     # 自定义目录 → 项目目录 → 用户目录 → 内置目录
     config = config or DEFAULT_SKILL_CONFIG
+    resolved_workspace = _safe_resolve(workspace)
     roots: list[SkillSearchRoot] = []
     precedence = 0
     for value in getattr(config, "custom_directories", []):
-        path = Path(value).expanduser()
+        path = _resolve_custom_path(value, resolved_workspace)
         roots.append(
             SkillSearchRoot(
                 path=path,
@@ -93,9 +95,13 @@ def skill_search_roots(
         )
         precedence += 1
     if getattr(config, "enable_project", True):
-        project_roots = _project_skill_roots(_safe_resolve(workspace), precedence_start=precedence)
+        project_roots = _project_skill_roots(resolved_workspace, precedence_start=precedence)
         roots.extend(project_roots)
         precedence += len(project_roots)
+        shared_root = _pp_echo_root_skill_root(resolved_workspace, precedence=precedence)
+        if shared_root is not None:
+            roots.append(shared_root)
+            precedence += 1
     if getattr(config, "enable_user", True):
         resolved_user_root = _safe_resolve(user_root)
         roots.append(
@@ -134,19 +140,30 @@ def _parse_frontmatter(raw: str) -> dict[str, str]:
 
 
 def _read_frontmatter(path: Path) -> dict[str, str]:
-    with path.open("r", encoding="utf-8") as handle:
-        if handle.readline() != "---\n":
-            raise ValueError(f"Skill frontmatter must include name and description: {path}")
+    raw = path.read_text(encoding="utf-8-sig")
+    rows = raw.splitlines()
+    if not rows or rows[0].strip() != "---":
+        return _fallback_metadata(path, rows)
+    lines: list[str] = []
+    for line in rows[1:]:
+        if line.strip() == "---":
+            return _parse_frontmatter("\n".join(lines))
+        lines.append(line)
+    raise ValueError(f"Skill frontmatter must include name and description: {path}")
 
-        lines: list[str] = []
-        for line in handle:
-            if line == "---\n":
-                break
-            lines.append(line)
-        else:
-            raise ValueError(f"Skill frontmatter must include name and description: {path}")
 
-    return _parse_frontmatter("".join(lines))
+def _fallback_metadata(path: Path, rows: list[str]) -> dict[str, str]:
+    description = ""
+    for row in rows:
+        value = row.strip()
+        if not value:
+            continue
+        if value.startswith("#"):
+            description = value.lstrip("#").strip()
+            break
+        description = value
+        break
+    return {"name": path.parent.name, "description": description or path.parent.name}
 
 
 def _parse_skill_metadata(path: Path, root: SkillSearchRoot) -> SkillDescriptor:
@@ -206,10 +223,30 @@ def _safe_resolve(path: Path) -> Path:
         return candidate.absolute()
 
 
+def _resolve_custom_path(value: str, workspace: Path) -> Path:
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    return _safe_resolve(candidate)
+
+
 def _project_skill_roots(workspace: Path, *, precedence_start: int = 0) -> list[SkillSearchRoot]:
     roots: list[SkillSearchRoot] = []
     seen_paths: set[Path] = set()
     precedence = precedence_start
+    workspace_skills = _safe_resolve(workspace / "skills")
+    roots.append(
+        SkillSearchRoot(
+            path=workspace_skills,
+            origin_type="project",
+            root_name="workspace_skills",
+            precedence=precedence,
+            discovery_root=str(workspace),
+            discovery_mode="workspace_directory",
+        )
+    )
+    seen_paths.add(workspace_skills)
+    precedence += 1
     for directory in _ancestor_directories(workspace):
         for relative_path, root_name in ((".pi/skills", "pi_skills"), (".agents/skills", "agents_skills")):
             candidate = _safe_resolve(directory / relative_path)
@@ -240,6 +277,21 @@ def _project_skill_roots(workspace: Path, *, precedence_start: int = 0) -> list[
             )
         )
     return roots
+
+
+def _pp_echo_root_skill_root(workspace: Path, *, precedence: int) -> Optional[SkillSearchRoot]:
+    root = _safe_resolve(PP_ECHO_ROOT_SKILLS_DIR)
+    workspace_root = _safe_resolve(workspace / "skills")
+    if root == workspace_root:
+        return None
+    return SkillSearchRoot(
+        path=root,
+        origin_type="shared",
+        root_name="pp_echo_root_skills",
+        precedence=precedence,
+        discovery_root=str(PP_ECHO_ROOT_SKILLS_DIR.parent),
+        discovery_mode="pp_echo_root_directory",
+    )
 
 
 def _ancestor_directories(path: Path) -> list[Path]:
