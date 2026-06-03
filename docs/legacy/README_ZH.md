@@ -1,3 +1,5 @@
+> 说明：本文档保留为历史参考，不再作为新手主入口。新读者请优先阅读 [../../README.md](../../README.md)、[../../tutorials/README.md](../../tutorials/README.md)、[../source-reading-roadmap.md](../source-reading-roadmap.md) 和 [../source-map.md](../source-map.md)。
+
 # pp-Echo
 
 <p align="center">
@@ -150,13 +152,13 @@ python -m pp_agent.cli.main config show --workspace .
 
 ## Demo / 截图
 
-![pp-Echo demo](docs/assets/demo.gif)
+![pp-Echo demo](../assets/demo.gif)
 
 | 交互式对话 | Checkpoint + Rewind |
 | --- | --- |
-| ![Interactive chat screenshot](docs/assets/screenshot-chat.png) | ![Checkpoint screenshot](docs/assets/screenshot-checkpoint.png) |
+| ![Interactive chat screenshot](../assets/screenshot-chat.png) | ![Checkpoint screenshot](../assets/screenshot-checkpoint.png) |
 
-![Web UI screenshot](docs/assets/screenshot-web-ui.png)
+![Web UI screenshot](../assets/screenshot-web-ui.png)
 
 ## 评测快照
 
@@ -164,10 +166,10 @@ pp-Echo 按工程 Agent 来评测，而不只是看 Prompt 效果。
 
 | 评测层 | 规模 | 证明什么 | 入口 |
 | --- | ---: | --- | --- |
-| Live interview demo | 12 cases | 直接回答、仓库理解、工具调用、安全审批和显式子 Agent handoff | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
-| Main agent eval | 60 cases | 工具、安全、协作、记忆和中文技术表达的更广覆盖 | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
-| Deterministic benchmark | 15 tasks | planner gating、rewind、MCP lazy activation 和 compaction 的确定性验证 | [docs/benchmarks/latest.md](docs/benchmarks/latest.md) |
-| Stress eval | 10 cases | 更长、更高风险场景中的 shell 审批和子 Agent 委派 | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
+| Live interview demo | 12 cases | 直接回答、仓库理解、工具调用、安全审批和显式子 Agent handoff | [docs/evaluation-demo.md](../evaluation-demo.md) |
+| Main agent eval | 60 cases | 工具、安全、协作、记忆和中文技术表达的更广覆盖 | [docs/evaluation-demo.md](../evaluation-demo.md) |
+| Deterministic benchmark | 15 tasks | planner gating、rewind、MCP lazy activation 和 compaction 的确定性验证 | [docs/benchmarks/latest.md](../benchmarks/latest.md) |
+| Stress eval | 10 cases | 更长、更高风险场景中的 shell 审批和子 Agent 委派 | [docs/evaluation-demo.md](../evaluation-demo.md) |
 
 仓库文档中最近记录的本地 live demo 结果：
 
@@ -181,9 +183,9 @@ pp-Echo 按工程 Agent 来评测，而不只是看 Prompt 效果。
 
 如果你想知道一个用户请求如何变成计划、工具调用、审批、持久化状态和可回退历史，先看：
 
-- [docs/source-map.md](docs/source-map.md)
-- [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
-- [docs/agent-learning-en.md](docs/agent-learning-en.md)
+- [docs/source-map.md](../source-map.md)
+- [docs/agent-learning-zh.md](../agent-learning-zh.md)
+- [docs/agent-learning-en.md](../agent-learning-en.md)
 - `src/pp_agent/runtime/runtime.py`
 - `src/pp_agent/tools/registry.py`
 - `src/pp_agent/runtime/session_host.py`
@@ -192,16 +194,16 @@ pp-Echo 按工程 Agent 来评测，而不只是看 Prompt 效果。
 
 安全边界不只依赖模型“承诺不乱做”，而是落在策略门、受保护路径、精确效果审批、shell 风险摘要和 pending action 绑定上。
 
-- [docs/safety.md](docs/safety.md)
-- [docs/effect-analysis.md](docs/effect-analysis.md)
-- [docs/dynamic-tool-declarations.md](docs/dynamic-tool-declarations.md)
+- [docs/safety.md](../safety.md)
+- [docs/effect-analysis.md](../effect-analysis.md)
+- [docs/dynamic-tool-declarations.md](../dynamic-tool-declarations.md)
 
 ### 理解子 Agent
 
 当前子 Agent 的关键词是受控：显式 handoff、限制工具、限制轮次、隔离子会话 / worktree，并生成可审查 artifact。
 
-- [docs/multi_agent_demo.md](docs/multi_agent_demo.md)
-- [docs/subagent-validation.md](docs/subagent-validation.md)
+- [docs/multi_agent_demo.md](../multi_agent_demo.md)
+- [docs/subagent-validation.md](../subagent-validation.md)
 - `src/pp_agent/tools/subagent_tool.py`
 - `src/pp_agent/subagents/*`
 
@@ -209,17 +211,17 @@ pp-Echo 按工程 Agent 来评测，而不只是看 Prompt 效果。
 
 记忆不是单一数据库，而是由 `MEMORY.md`、daily notes、workspace memory、SQLite history、BM25 和可选向量召回组成的分层系统。
 
-- [MEMORY.md](MEMORY.md)
-- [docs/source-map.md](docs/source-map.md)
+- [MEMORY.md](../../MEMORY.md)
+- [docs/source-map.md](../source-map.md)
 - `src/pp_agent/memory/*`
 - `src/pp_agent/learning/*`
 
 ### 配置模型、工具和 MCP
 
-- [docs/configuration.md](docs/configuration.md)
-- [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)
-- [example-config.jsonc](example-config.jsonc)
-- [example-mcp.jsonc](example-mcp.jsonc)
+- [docs/configuration.md](../configuration.md)
+- [docs/mcp-fetch-integration.md](../mcp-fetch-integration.md)
+- [example-config.jsonc](../../example-config.jsonc)
+- [example-mcp.jsonc](../../example-mcp.jsonc)
 
 ## 核心命令
 
@@ -243,11 +245,11 @@ python -m pp_agent.cli.main capabilities legacy-hints --json --workspace .
 
 ## 贡献
 
-欢迎围绕运行时行为、文档、Demo 素材、测试、扩展和发布打磨贡献改进。建议先读 [CONTRIBUTING.md](CONTRIBUTING.md)，并尽量保持改动聚焦：一个 PR 解决一个用户可感知问题，或一个清晰的内部改进点。
+欢迎围绕运行时行为、文档、Demo 素材、测试、扩展和发布打磨贡献改进。建议先读 [CONTRIBUTING.md](../../CONTRIBUTING.md)，并尽量保持改动聚焦：一个 PR 解决一个用户可感知问题，或一个清晰的内部改进点。
 
 ## Release
 
-- 当前 release notes: [releases/v0.2.0.md](releases/v0.2.0.md)
+- 当前 release notes: [releases/v0.2.0.md](../../releases/v0.2.0.md)
 - GitHub Releases: [github.com/CHEN2003-CHIP/pp-Echo/releases](https://github.com/CHEN2003-CHIP/pp-Echo/releases)
 
 发布前建议运行：
@@ -260,4 +262,4 @@ python -m pytest tests/benchmarks/test_runner.py
 
 ## License
 
-本项目基于 MIT License 发布，详见 [LICENSE](LICENSE)。
+本项目基于 MIT License 发布，详见 [LICENSE](../../LICENSE)。

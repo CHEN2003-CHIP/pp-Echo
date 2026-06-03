@@ -1,5 +1,7 @@
 # pp-Echo Source Map
 
+如果你是第一次读完整工程源码，建议先阅读 [source-reading-roadmap.md](source-reading-roadmap.md)，再回到本文查具体模块路径。
+
 Before using this map, keep these repository facts in mind:
 
 - `pp-Echo` is currently Windows-first.
@@ -15,6 +17,7 @@ It is designed for developers who want to answer two questions quickly:
 
 It complements the learning guides:
 
+- Source reading roadmap: [source-reading-roadmap.md](source-reading-roadmap.md)
 - Chinese guide: [agent-learning-zh.md](/E:/Pycharm%20Project/pp-Echo/docs/agent-learning-zh.md)
 - English guide: [agent-learning-en.md](/E:/Pycharm%20Project/pp-Echo/docs/agent-learning-en.md)
 

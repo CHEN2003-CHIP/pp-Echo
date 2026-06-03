@@ -361,7 +361,7 @@ memory 相关模块适合帮助你理解“检索增强”是怎样嵌进 runtim
 配合阅读：
 
 - [docs/source-map.md](/E:/Pycharm%20Project/pp-Echo/docs/source-map.md)
-- [PROJECT_LEARNING.md](/E:/Pycharm%20Project/pp-Echo/PROJECT_LEARNING.md)
+- [docs/legacy/PROJECT_LEARNING.md](legacy/PROJECT_LEARNING.md)
 
 如果你是中文读者，这份文档应该帮助你快速回答三个问题：
 

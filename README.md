@@ -25,6 +25,24 @@ pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangCha
   <img src="docs/assets/hero.gif" alt="pp-Echo demo: 可见规划、审批优先执行、Git-backed rewind、分层记忆、受控子 Agent" width="920">
 </p>
 
+## 你应该从哪里开始？
+
+### 我是新手，只想先跑起来
+
+先看 [`mini-pp-echo/`](mini-pp-echo/README.md)，从最小 Agent Loop 开始。
+
+### 我想系统学习 Agent 工程
+
+看 [`tutorials/README.md`](tutorials/README.md)，按 7 天路线学习。
+
+### 我已经跑通 mini，想读完整源码
+
+看 [`docs/source-reading-roadmap.md`](docs/source-reading-roadmap.md)，按 Stage 0 到 Stage 6 闯关阅读。
+
+### 我想用于实习和面试
+
+优先看 [`docs/source-reading-roadmap.md`](docs/source-reading-roadmap.md) 里的“可以写进简历”，再看 [`docs/interview-guide.md`](docs/interview-guide.md) 做面试表达自查。
+
 ## 项目定位
 
 pp-Echo 想回答一个学习者真正关心的问题：
@@ -229,13 +247,16 @@ pp-Echo 的安全设计重点是“可见、可审、可回退”：
 - [tutorials/README.md](tutorials/README.md)：7 天读懂 pp-Echo。
 - [mini-pp-echo/README.md](mini-pp-echo/README.md)：从 0 开始的教学最小版。
 - [docs/teaching-positioning.md](docs/teaching-positioning.md)：为什么 pp-Echo 适合做 Agent 工程课。
+- [docs/source-reading-roadmap.md](docs/source-reading-roadmap.md)：完整工程源码阅读路线。
 - [docs/source-map.md](docs/source-map.md)：源码路径导览。
+- [docs/interview-guide.md](docs/interview-guide.md)：实习与面试准备索引。
 - [docs/safety.md](docs/safety.md)：安全边界与审批策略。
 - [docs/configuration.md](docs/configuration.md)：配置模型、工具和项目设置。
 - [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)：MCP 集成说明。
 - [docs/multi_agent_demo.md](docs/multi_agent_demo.md)：SubAgent 演示。
 - [README_en.md](README_en.md)：英文参考文档。
-- [README_ZH.md](README_ZH.md)：旧版中文参考文档。
+- [docs/legacy/README_ZH.md](docs/legacy/README_ZH.md)：旧版中文参考文档。
+- [docs/legacy/](docs/legacy/README.md)：历史文档入口。
 
 ## 贡献路线
 

@@ -1,3 +1,5 @@
+> 说明：本文档保留为历史参考，不再作为新手主入口。新读者请优先阅读 [../../README.md](../../README.md)、[../../tutorials/README.md](../../tutorials/README.md)、[../source-reading-roadmap.md](../source-reading-roadmap.md) 和 [../source-map.md](../source-map.md)。
+
 # pp-Echo 项目学习指南
 
 ## 1. 项目是做什么的
