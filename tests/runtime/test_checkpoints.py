@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from agent_core.types import ModelConfig
+from pp_agent.llm import ModelConfig
 
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.storage.checkpoints import CheckpointStore

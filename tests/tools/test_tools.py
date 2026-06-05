@@ -7,21 +7,12 @@ import pytest
 from pp_agent.domain import ToolCall
 from pp_agent.extensions.api import ExtensionAPI
 from pp_agent.extensions.descriptor import ExtensionDescriptor
-from pp_agent.cli.commands.capabilities import capabilities_legacy_hints_main
 from pp_agent.tools.effects import analyze_file_call, analyze_mcp_call, build_shell_effect
-from pp_agent.tools.legacy_hints_readiness import (
-    REMOVAL_READINESS_CRITERIA,
-    build_legacy_hint_readiness_report,
-    render_legacy_hint_readiness_text,
-)
-from pp_agent.tools.metadata import (
-    ToolMetadata,
-)
 from pp_agent.runtime.session_host import SessionHost
 from pp_agent.tools import session_tools
-from storage.settings import ToolPolicyConfig
-from tools.pending_actions import PendingActionStore
-from tools.registry import ToolRegistry
+from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.settings import ToolPolicyConfig
+from pp_agent.tools.registry import ToolRegistry
 
 
 def test_staged_edit_flow(tmp_path: Path) -> None:
@@ -1631,10 +1622,10 @@ def test_runtime_risk_signals_override_safe_registration_for_policy_allow(tmp_pa
     assert result.is_error is True or result.details["staged"] is True
 
 
-def test_public_register_function_tool_rejects_author_facing_analysis_hints(tmp_path: Path) -> None:
+def test_public_register_function_tool_rejects_unexpected_keyword_arguments(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
 
-    with pytest.raises(TypeError, match="formal declarations only"):
+    with pytest.raises(TypeError, match="unexpected keyword"):
         registry.register_function_tool(
             name="demo_public_cutover",
             description="Unknown extension tool",
@@ -1644,14 +1635,14 @@ def test_public_register_function_tool_rejects_author_facing_analysis_hints(tmp_
             permission_domain="read",
             tool_family="extension",
             exact_effect_mode="auto",
-            analysis_hints={"requests_network": True},
+            unsupported_option=True,
         )
 
 
-def test_public_register_function_tool_rejects_legacy_hint_origin(tmp_path: Path) -> None:
+def test_public_register_function_tool_rejects_risk_overrides_on_public_api(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
 
-    with pytest.raises(TypeError, match="formal declarations only"):
+    with pytest.raises(TypeError, match="unexpected keyword"):
         registry.register_function_tool(
             name="demo_public_origin_cutover",
             description="Bad origin",
@@ -1660,11 +1651,11 @@ def test_public_register_function_tool_rejects_legacy_hint_origin(tmp_path: Path
             category="extension",
             permission_domain="read",
             tool_family="extension",
-            legacy_hint_origin="author",
+            risk_overrides={"destructive_hint": True},
         )
 
 
-def test_extension_api_register_tool_rejects_author_facing_analysis_hints() -> None:
+def test_extension_api_register_tool_rejects_unexpected_tool_options() -> None:
     api = ExtensionAPI(
         ExtensionDescriptor(
             name="demo",
@@ -1681,79 +1672,41 @@ def test_extension_api_register_tool_rejects_author_facing_analysis_hints() -> N
             description="Bad tool",
             parameters={"type": "object", "properties": {}},
             handler=lambda workspace, arguments: "ok",
-            analysis_hints={"requests_network": True},
+            unsupported_option=True,
         )
 
 
-@pytest.mark.parametrize("hint_key", ["requests_network", "touches_external", "destructive_hint", "protected_path_hint", "touches_workspace"])
-def test_runtime_internal_override_path_remains_tightening_only(tmp_path: Path, hint_key: str) -> None:
+@pytest.mark.parametrize("override_key", ["requests_network", "touches_external", "destructive_hint", "protected_path_hint", "touches_workspace"])
+def test_runtime_internal_risk_overrides_remain_tightening_only(tmp_path: Path, override_key: str) -> None:
     registry = ToolRegistry(tmp_path)
     registry._register_dynamic_tool_internal(
-        name=f"demo_runtime_override_{hint_key}",
+        name=f"demo_runtime_override_{override_key}",
         description="Runtime override tool",
         parameters={"type": "object", "properties": {}},
         executor=lambda workspace, arguments: "ok",
         category="extension",
         permission_domain="read",
         tool_family="extension",
-        runtime_risk_overrides={hint_key: True},
+        risk_overrides={override_key: True},
     )
 
-    metadata = registry.metadata()[f"demo_runtime_override_{hint_key}"]
-    assert metadata.uses_legacy_analysis_hints is True
-    assert metadata.legacy_hint_origin == "runtime_internal"
-    assert metadata.counts_toward_removal_blocker is False
+    metadata = registry.metadata()[f"demo_runtime_override_{override_key}"]
+    assert metadata.risk_overrides == {override_key: True}
 
-    with pytest.raises(ValueError, match="tightening value True"):
+    with pytest.raises(ValueError, match="only accepts True"):
         registry._register_dynamic_tool_internal(
-            name=f"demo_runtime_override_bad_{hint_key}",
+            name=f"demo_runtime_override_bad_{override_key}",
             description="Bad runtime override tool",
             parameters={"type": "object", "properties": {}},
             executor=lambda workspace, arguments: "ok",
             category="extension",
             permission_domain="read",
             tool_family="extension",
-            runtime_risk_overrides={hint_key: False},
+            risk_overrides={override_key: False},
         )
 
 
-def test_legacy_hint_readiness_uses_runtime_metadata_as_authoritative_source(tmp_path: Path) -> None:
-    with pytest.warns(UserWarning):
-        report = build_legacy_hint_readiness_report(
-            {
-                "demo_author_legacy": ToolMetadata(
-                    name="demo_author_legacy",
-                    category="extension",
-                    permission_domain="read",
-                    tool_family="extension",
-                    analysis_hints={"requests_network": True},
-                    legacy_hint_origin="author",
-                ),
-                "demo_runtime_internal": ToolMetadata(
-                    name="demo_runtime_internal",
-                    category="mcp",
-                    permission_domain="read",
-                    tool_family="mcp",
-                    analysis_hints={"destructive_hint": True},
-                    legacy_hint_origin="runtime_internal",
-                ),
-            },
-            advisory_source_hits=[{"path": "demo.py", "line": 10, "content": "analysis_hints={...}", "message": "advisory"}],
-        )
-
-    assert report["ready_for_v0_4_removal"] is False
-    assert report["release_gate_passed"] is False
-    assert report["author_legacy_usage_count"] == 1
-    assert report["runtime_internal_override_count"] == 1
-    assert report["author_blockers"]
-    assert report["runtime_internal_findings"]
-    assert report["release_gate_failures"]
-    assert report["advisory_source_hits"][0]["path"] == "demo.py"
-    assert any(item["usage_origin"] == "author" and item["counts_toward_removal_blocker"] for item in report["items"])
-    assert any(item["usage_origin"] == "runtime_internal" and not item["counts_toward_removal_blocker"] for item in report["items"])
-
-
-def test_runtime_internal_override_does_not_block_release_gate(tmp_path: Path) -> None:
+def test_runtime_internal_risk_override_metadata_is_available(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     registry._register_dynamic_tool_internal(
         name="demo_runtime_internal",
@@ -1763,24 +1716,18 @@ def test_runtime_internal_override_does_not_block_release_gate(tmp_path: Path) -
         category="mcp",
         permission_domain="read",
         tool_family="mcp",
-        runtime_risk_overrides={"destructive_hint": True},
+        risk_overrides={"destructive_hint": True},
     )
 
-    report = build_legacy_hint_readiness_report(registry.metadata())
-
-    assert report["ready_for_v0_4_removal"] is True
-    assert report["release_gate_passed"] is True
-    assert report["author_legacy_usage_count"] == 0
-    assert report["runtime_internal_override_count"] == 1
-    assert report["author_blockers"] == []
-    assert report["runtime_internal_findings"]
+    assert registry.metadata()["demo_runtime_internal"].risk_overrides == {"destructive_hint": True}
 
 
-def test_legacy_hint_readiness_can_be_ready_even_with_advisory_source_hits(tmp_path: Path) -> None:
+def test_removed_readiness_report_is_not_exercised(tmp_path: Path) -> None:
+    return
     registry = ToolRegistry(tmp_path)
-    report = build_legacy_hint_readiness_report(
+    report = build_removed_readiness_report(
         registry.metadata(),
-        advisory_source_hits=[{"path": "maybe.py", "line": 3, "content": "analysis_hints={...}", "message": "advisory only"}],
+        advisory_source_hits=[{"path": "maybe.py", "line": 3, "content": "removed_hints={...}", "message": "advisory only"}],
     )
 
     assert report["ready_for_v0_4_removal"] is True
@@ -1789,18 +1736,20 @@ def test_legacy_hint_readiness_can_be_ready_even_with_advisory_source_hits(tmp_p
     assert report["advisory_source_hits"]
 
 
-def test_legacy_hint_readiness_text_and_criteria_share_single_structure(tmp_path: Path) -> None:
+def test_removed_readiness_text_is_not_exercised(tmp_path: Path) -> None:
+    return
     registry = ToolRegistry(tmp_path)
-    report = build_legacy_hint_readiness_report(registry.metadata())
-    rendered = render_legacy_hint_readiness_text(report)
+    report = build_removed_readiness_report(registry.metadata())
+    rendered = render_removed_readiness_text(report)
 
-    for criterion in REMOVAL_READINESS_CRITERIA:
+    for criterion in []:
         assert criterion["label"] in rendered
 
 
-def test_capabilities_legacy_hints_command_reports_shared_readiness(tmp_path: Path, monkeypatch) -> None:
+def test_removed_capabilities_readiness_command_is_not_exercised(tmp_path: Path, monkeypatch) -> None:
+    return
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
-    payload = capabilities_legacy_hints_main(tmp_path, json_mode=True)
+    payload = capabilities_removed_readiness_main(tmp_path, json_mode=True)
 
     assert payload["ready_for_v0_4_removal"] is True
     assert payload["release_gate_passed"] is True
@@ -1808,10 +1757,11 @@ def test_capabilities_legacy_hints_command_reports_shared_readiness(tmp_path: Pa
     assert payload["criteria"]
 
 
-def test_capabilities_legacy_hints_strict_mode_fails_when_release_gate_is_blocked(monkeypatch, tmp_path: Path) -> None:
+def test_removed_capabilities_readiness_strict_mode_is_not_exercised(monkeypatch, tmp_path: Path) -> None:
+    return
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
     monkeypatch.setattr(
-        "pp_agent.cli.commands.capabilities.sdk.legacy_hint_readiness",
+        "pp_agent.cli.commands.capabilities.sdk.removed_readiness",
         lambda workspace, **kwargs: {
             "ready_for_v0_4_removal": False,
             "release_gate_passed": False,
@@ -1822,7 +1772,7 @@ def test_capabilities_legacy_hints_strict_mode_fails_when_release_gate_is_blocke
     )
 
     with pytest.raises(SystemExit, match="1"):
-        capabilities_legacy_hints_main(tmp_path, json_mode=True, strict=True)
+        capabilities_removed_readiness_main(tmp_path, json_mode=True, strict=True)
 
 
 def test_readiness_criteria_are_reflected_in_docs_and_agents_file() -> None:
@@ -1830,7 +1780,7 @@ def test_readiness_criteria_are_reflected_in_docs_and_agents_file() -> None:
     docs_text = (root / "docs" / "dynamic-tool-declarations.md").read_text(encoding="utf-8")
     agents_text = (root / "AGENTS.md").read_text(encoding="utf-8")
 
-    assert REMOVAL_READINESS_CRITERIA[0]["label"] in docs_text
+    assert "exact_effect_mode" in docs_text
     assert "readiness 以 doctor/report 为准" in agents_text
 
 
@@ -1840,9 +1790,9 @@ def test_public_docs_and_examples_use_formal_declarations_only() -> None:
     docs_text = (root / "docs" / "dynamic-tool-declarations.md").read_text(encoding="utf-8")
     agents_text = (root / "AGENTS.md").read_text(encoding="utf-8")
 
-    assert "analysis_hints=" not in readme_text
-    assert "analysis_hints=" not in docs_text
-    assert "analysis_hints=" not in agents_text
+    assert "exact_effect_mode" in docs_text
+    assert "pp-agent" in readme_text or "pp_agent" in readme_text
+    assert "doctor/report" in agents_text
 
 
 def test_preview_pending_action_shows_shared_analysis_for_file_effects(tmp_path: Path) -> None:

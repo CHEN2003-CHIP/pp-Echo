@@ -85,7 +85,9 @@ def test_learning_runtime_auto_applies_extracted_journal(tmp_path: Path) -> None
     runtime.on_turn_persisted(session_id="s", turn_id="t", new_messages=[])
 
     assert store.get("learn-1").status == "applied"
-    assert "web smoke verification passed" in (tmp_path / "memory" / "daily" / "2026-05-16.md").read_text(encoding="utf-8")
+    daily_files = list((tmp_path / "memory" / "daily").glob("*.md"))
+    assert len(daily_files) == 1
+    assert "web smoke verification passed" in daily_files[0].read_text(encoding="utf-8")
 
 
 def test_learning_runtime_auto_write_failure_does_not_abort(tmp_path: Path) -> None:

@@ -360,7 +360,6 @@ class ToolPolicyEvaluator:
             "risk_class": analysis.get("risk_class"),
             "confidence_band": analysis.get("confidence_band", CONFIDENCE_UNKNOWN),
             "declaration_strength": analysis.get("declaration_strength"),
-            "uses_legacy_analysis_hints": analysis.get("uses_legacy_analysis_hints", False),
             "touches_external": analysis.get("touches_external", False),
             "touches_workspace": analysis.get("touches_workspace", False),
             "requests_network": analysis.get("requests_network", False),

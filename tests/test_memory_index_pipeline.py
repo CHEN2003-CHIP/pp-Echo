@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent_core.types import ModelConfig
+from pp_agent.llm import ModelConfig
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.memory import HistoryIndexer
 from pp_agent.memory.embedding import NoopEmbeddingProvider

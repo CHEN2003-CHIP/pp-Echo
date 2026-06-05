@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_core.types import ChatMessage, ModelConfig, TextPart
+from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.llm import ModelConfig
 
 from pp_agent.runtime.lifecycle import (
     SESSION_BEFORE_FORK,

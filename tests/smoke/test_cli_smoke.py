@@ -107,8 +107,8 @@ def test_pp_agent_skills_add_dir_smoke(tmp_path: Path) -> None:
     assert any(item["name"] == "experiment-report" for item in json.loads(list_result.stdout))
 
 
-def test_agent_cli_shim_help_smoke() -> None:
-    result = _run_module("agent_cli.main", "--help")
+def test_pp_agent_module_help_smoke() -> None:
+    result = _run_module("pp_agent.cli.main", "--help")
 
     assert result.returncode == 0
     assert "Personal Python coding agent" in result.stdout

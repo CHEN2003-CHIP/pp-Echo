@@ -131,7 +131,7 @@ python -m pytest tests/runtime/test_runtime.py tests/runtime/test_lifecycle.py
 ```powershell
 set PYTHONPATH=src
 python -m pp_agent.cli.main capabilities list
-python -m pp_agent.cli.main capabilities legacy-hints --json --workspace .
+python -m pp_agent.cli.main doctor --workspace .
 python -m pytest tests/tools/test_tools.py tests/tools/test_subagent_tool.py
 ```
 
@@ -184,7 +184,7 @@ python -m pytest tests/tools/test_tools.py tests/tools/test_subagent_tool.py
 
 ```powershell
 set PYTHONPATH=src
-python -m pp_agent.cli.main capabilities legacy-hints --strict --workspace .
+pytest -q tests/architecture
 python -m pytest tests/test_approval_feedback_loop.py tests/cli/test_approvals_dynamic.py tests/cli/test_render_approvals.py
 ```
 

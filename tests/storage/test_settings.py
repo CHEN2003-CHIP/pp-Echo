@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from storage.settings import Settings
+from pp_agent.storage.settings import Settings
 
 
 def test_runtime_storage_defaults_stay_inside_project(tmp_path: Path) -> None:

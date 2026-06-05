@@ -9,12 +9,10 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, PrivateAttr
 
 from pp_agent.domain import ChatMessage, CompactionState, QueuedMessage, TextPart, ToolCall
-from pp_agent.storage.migrations import load_legacy_session_payloads
 from pp_agent.storage.models import StoredModelConfig
 
 
 SNAPSHOT_EVENT = "session_snapshot"
-LEGACY_TREE_NAME = "session-tree.jsonl"
 
 #数据面
 class SessionTurnNode(BaseModel):
@@ -143,7 +141,7 @@ class SessionStore:
     """
     【核心类】会话存储器
     作用：本地文件系统会话管理，负责创建/保存/加载/分支/回滚会话
-    存储格式：JSONL文件（一行一个会话），路径：~/.pp-agent/session-tree.jsonl
+    存储格式：每个会话一个 JSONL 事件文件，路径：<session-id>.jsonl
     核心特性：版本控制（类Git）、数据持久化、旧版本迁移
     """
     def __init__(self, root: Path) -> None:
@@ -154,8 +152,6 @@ class SessionStore:
         """
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.legacy_tree_path = self.root / LEGACY_TREE_NAME
-        self._migrate_legacy_files()
 
     def create(self, system_prompt: str, model: StoredModelConfig) -> SessionRecord:
         """
@@ -197,12 +193,7 @@ class SessionStore:
         path = self._session_path(session_id)
         if path.exists():
             return self._load_from_session_file(path)
-        legacy = self._legacy_records().get(session_id)
-        if legacy is None:
-            raise FileNotFoundError(f"Session not found: {session_id}")
-        normalized = self._normalized_record(legacy)
-        self._append_events(path, self._build_append_events(None, normalized))
-        return normalized.model_copy(deep=True)
+        raise FileNotFoundError(f"Session not found: {session_id}")
 
     def list(self) -> list[SessionMetadata]:
         sessions = self._all_latest_records()
@@ -831,14 +822,14 @@ class SessionStore:
 
     def _session_files(self) -> list[Path]:
         """获取所有会话文件（排除旧版文件）"""
-        return sorted(path for path in self.root.glob("*.jsonl") if path.name != self.legacy_tree_path.name)
+        return sorted(path for path in self.root.glob("*.jsonl"))
 
     def _load_current_record(self, session_id: str) -> Optional[SessionRecord]:
         """加载当前最新会话（兼容新旧存储）"""
         path = self._session_path(session_id)
         if path.exists():
             return self._load_from_session_file(path)
-        return self._legacy_records().get(session_id)
+        return None
 
     def _load_from_session_file(self, path: Path) -> SessionRecord:
         """
@@ -981,34 +972,7 @@ class SessionStore:
             except ValueError:
                 continue
             sessions[record.id] = record
-        for session_id, record in self._legacy_records().items():
-            sessions.setdefault(session_id, self._normalized_record(record))
         return sessions
-
-    def _legacy_records(self) -> dict[str, SessionRecord]:
-        sessions: dict[str, SessionRecord] = {}
-        if self.legacy_tree_path.exists():
-            for line_no, raw in enumerate(self.legacy_tree_path.read_text(encoding="utf-8").splitlines(), start=1):
-                if not raw.strip():
-                    continue
-                try:
-                    item = json.loads(raw)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"Invalid legacy session-tree entry at line {line_no}: {exc}") from exc
-                if item.get("type") != "session":
-                    continue
-                record = SessionRecord.model_validate(item["data"])
-                sessions[record.id] = self._normalized_record(record)
-        for session_id, payload in load_legacy_session_payloads(self.root, LEGACY_TREE_NAME).items():
-            sessions.setdefault(session_id, self._normalized_record(SessionRecord.model_validate(payload)))
-        return sessions
-
-    def _migrate_legacy_files(self) -> None:
-        for session_id, record in self._legacy_records().items():
-            path = self._session_path(session_id)
-            if path.exists():
-                continue
-            self._append_events(path, self._build_append_events(None, self._normalized_record(record)))
 
     @staticmethod
     def _refresh_turn_index(record: SessionRecord) -> None:

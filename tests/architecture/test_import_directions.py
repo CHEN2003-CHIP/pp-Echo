@@ -6,25 +6,55 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / "src" / "pp_agent"
-CHECKED_LAYERS = {"cli", "app", "runtime", "llm", "storage", "domain", "extensions", "api", "tools", "capabilities", "mcp", "web_tools"}
+CHECKED_LAYERS = {
+    "api",
+    "app",
+    "browser",
+    "capabilities",
+    "cli",
+    "config",
+    "domain",
+    "evaluation",
+    "extensions",
+    "learning",
+    "llm",
+    "mcp",
+    "memory",
+    "prompts",
+    "runtime",
+    "skills",
+    "storage",
+    "subagents",
+    "tools",
+    "tui",
+    "web",
+    "web_tools",
+}
 ALLOWED = {
-    "cli": {"cli", "app", "runtime", "storage", "domain", "api"},
-    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp", "web_tools"},
-    "runtime": {"runtime", "storage", "llm", "tools", "domain"},
+    "cli": {"cli", "app", "runtime", "storage", "domain", "api", "config", "evaluation", "learning", "memory", "skills", "tools", "tui", "web", "web_tools"},
+    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp", "web_tools", "config", "learning", "memory", "prompts", "skills", "subagents", "browser"},
+    "runtime": {"runtime", "storage", "llm", "tools", "domain", "config", "memory", "subagents"},
     "llm": {"llm", "domain"},
-    "storage": {"storage", "domain"},
+    "storage": {"storage", "domain", "llm", "learning", "memory"},
     "domain": {"domain"},
     "extensions": {"extensions", "runtime", "domain"},
-    "tools": {"tools", "storage", "domain"},
+    "tools": {"tools", "storage", "domain", "api", "runtime", "subagents"},
     "capabilities": {"capabilities", "skills", "tools", "domain"},
     "mcp": {"mcp"},
-    "web_tools": {"web_tools", "tools"},
+    "web_tools": {"web_tools", "domain", "runtime", "storage", "tools"},
     "api": {"api", "runtime", "storage", "domain"},
+    "config": {"config", "storage", "session"},
+    "evaluation": {"evaluation", "api", "domain", "llm", "memory", "runtime"},
+    "learning": {"learning", "domain", "memory", "runtime", "storage"},
+    "memory": {"memory", "domain", "runtime", "storage", "tools"},
+    "prompts": {"prompts"},
+    "skills": {"skills"},
+    "subagents": {"subagents", "domain", "runtime", "storage", "tools"},
+    "browser": {"browser", "storage", "tools", "web_tools"},
+    "tui": {"tui", "app", "domain", "runtime"},
+    "web": {"web", "api", "app", "cli", "domain", "runtime", "server", "storage"},
 }
-EXCLUDED = {
-    PACKAGE_ROOT / "cli" / "_legacy_main_impl.py",
-    PACKAGE_ROOT / "domain" / "_legacy_types_impl.py",
-}
+REMOVED_TOP_LEVEL_PACKAGES = {"agent_cli", "agent_core", "storage", "tools"}
 
 
 def _layer_for(path: Path) -> str | None:
@@ -40,8 +70,6 @@ def _layer_for(path: Path) -> str | None:
 def test_import_directions_for_core_layers() -> None:
     violations: list[str] = []
     for path in PACKAGE_ROOT.rglob("*.py"):
-        if path in EXCLUDED:
-            continue
         layer = _layer_for(path)
         if layer is None:
             continue
@@ -67,6 +95,11 @@ def test_cli_entry_files_do_not_reference_legacy_impl() -> None:
 
     assert "_legacy_main_impl" not in main_text
     assert "_legacy_main_impl" not in chat_text
+
+
+def test_removed_top_level_compat_packages_do_not_exist() -> None:
+    for name in REMOVED_TOP_LEVEL_PACKAGES:
+        assert not (ROOT / "src" / name).exists(), name
 
 
 def test_runtime_and_extensions_do_not_depend_on_cli_rendering() -> None:

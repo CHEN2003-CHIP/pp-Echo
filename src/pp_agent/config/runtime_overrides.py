@@ -53,7 +53,7 @@ class RuntimeOverrideStore:
             # 把工作区路径转成字符串 key
             key = _key(workspace)
             # 获取该工作区当前的所有配置，没有则为空字典
-            current = self._by_workstore.get(key, {})
+            current = self._by_workspace.get(key, {})
             # 调用工具函数：根据路径修改嵌套配置
             updated = set_path_value(current, path, value)
             # 把更新后的配置存回去

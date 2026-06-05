@@ -33,11 +33,11 @@
 2. 检查 `python` 是否可用
 3. 设置 `PYTHONPATH=src`
 4. 检查 `PP_AGENT_API_KEY` 是否存在
-5. 启动 `python -m agent_cli.main chat`
+5. 启动 `python -m pp_agent.cli.main chat`
 
-虽然 bat 里还是旧入口名 `agent_cli.main`，但现在它只是兼容 shim，实际已经会进入新架构：
+当前入口已经统一到 `pp_agent.cli.main`：
 
-- `agent_cli.main`
+- `pp_agent.cli.main`
 - `pp_agent.cli.main`
 - `pp_agent.cli.chat`
 - `pp_agent.app.bootstrap`
@@ -438,7 +438,7 @@ flowchart TD
 按这个顺序看：
 
 1. [start-agent.bat](/E:/Pycharm%20Project/pp-Echo/start-agent.bat)
-2. [src/agent_cli/main.py](/E:/Pycharm%20Project/pp-Echo/src/agent_cli/main.py)
+2. [src/pp_agent/cli/main.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/cli/main.py)
 3. [src/pp_agent/cli/main.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/cli/main.py)
 
 目标：

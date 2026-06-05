@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from agent_core.types import ModelConfig
+from pp_agent.llm import ModelConfig
 
 from pp_agent.web import server as server_module
 from pp_agent.runtime.control_plane import build_runtime_doctor_report
@@ -239,7 +239,7 @@ def test_web_api_capability_config_inventory_and_project_templates(tmp_path: Pat
     assert any(item["name"] == "repo-helper" for item in inventory.json()["skills"]["items"])
     assert any(item["name"] == "audit" for item in inventory.json()["plugins"]["items"])
     assert (workspace / ".pp-agent" / "mcp.json").exists()
-    assert (workspace / ".pp-agent" / "skills" / "repo-helper" / "SKILL.md").exists()
+    assert (workspace / "skills" / "repo-helper" / "SKILL.md").exists()
     assert (workspace / ".pp-agent" / "extensions" / "audit" / "EXTENSION.json").exists()
 
 
@@ -453,11 +453,15 @@ def test_web_api_rejects_pending_action_token(tmp_path: Path, monkeypatch) -> No
 
     captured = {}
 
-    def fake_reject(workspace: Path, token: str, render: bool = True) -> dict:
-        captured.update({"workspace": workspace, "token": token, "render": render})
+    def fake_reject(workspace: Path, token: str, render: bool = True, runtime=None) -> dict:
+        captured.update({"workspace": workspace, "token": token, "render": render, "runtime": runtime})
         return {"token": token, "result": "rejected"}
 
+    def fake_load(_workspace: Path, token: str) -> dict:
+        return {"token": token, "details": {}}
+
     manager = WebSessionManager(tmp_path / "workspace", runtime_factory=_factory)
+    monkeypatch.setattr(server_module, "load_pending_action_or_user_error", fake_load)
     monkeypatch.setattr(server_module, "reject_pending_action_by_token", fake_reject)
     client = TestClient(_app(tmp_path, manager))
 
@@ -465,7 +469,7 @@ def test_web_api_rejects_pending_action_token(tmp_path: Path, monkeypatch) -> No
 
     assert response.status_code == 200
     assert response.json()["result"] == "rejected"
-    assert captured == {"workspace": (tmp_path / "workspace").resolve(), "token": "tok-1", "render": False}
+    assert captured == {"workspace": (tmp_path / "workspace").resolve(), "token": "tok-1", "render": False, "runtime": None}
 
 
 def test_web_api_runtime_report_surfaces_patch_artifact_findings(tmp_path: Path) -> None:

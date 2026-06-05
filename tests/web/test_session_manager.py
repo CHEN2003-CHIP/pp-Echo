@@ -47,6 +47,18 @@ class FakeAgent:
     def continue_(self):
         return []
 
+    def record_external_approval_result(self, result: dict) -> None:
+        self.state.messages.append(
+            ChatMessage(
+                role="tool",
+                content=[TextPart(text=str(result.get("result", "")))],
+                tool_call_id=str(result.get("tool_call_id") or ""),
+                tool_name=str(result.get("source_tool_name") or result.get("action_type") or ""),
+                metadata={"tool_details": {**dict(result.get("details") or {}), "external_approval_result": True, "lifecycle": result.get("lifecycle")}},
+                timestamp=1.0,
+            )
+        )
+
     def approve_pending_plan(self, token: str):
         self.state.pending_plan_token = None
         event = AgentEvent(type="planner_gate_approved", session_id=self.session_id, details={"token": token})

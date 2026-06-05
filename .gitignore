@@ -37,10 +37,13 @@ env/
 
 # Testing
 .pytest_cache/
+.pytest-tmp/
 .coverage
 htmlcov/
 .tox/
 .nox/
+_tmp_test_ws/
+web/.rich-text-tests-*/
 
 # Local runtime state
 .pp-agent/
@@ -52,6 +55,11 @@ memory/
 .DS_Store
 Thumbs.db
 *.log
+importtime_*.txt
+
+# Rust build outputs
+rust/target/
+
 # Local MCP tooling
 .mcp-tools/
 .npm-cache/

@@ -47,6 +47,6 @@ def test_recall_builder_compresses_results() -> None:
     )
 
     assert snippet.startswith("[History Recall]")
-    assert "以下是与当前问题相关的历史片段，仅在相关时参考：" in snippet
-    assert any(title in snippet for title in ("决策 / 结论:", "路径 / 文件 / 命令:", "错误 / 修复:"))
+    assert "Relevant long-term memory snippets. Use them only when they help the current task:" in snippet
+    assert any(title in snippet for title in ("Decisions / Conclusions:", "Paths / Files / Commands:", "Errors / Fixes:"))
     assert len(snippet) <= 320

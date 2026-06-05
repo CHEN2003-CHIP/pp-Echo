@@ -47,10 +47,6 @@ def get_capability(*args, **kwargs):
     return sdk.get_capability(*args, **kwargs)
 
 
-def legacy_hint_readiness(*args, **kwargs):
-    return sdk.legacy_hint_readiness(*args, **kwargs)
-
-
 def get_session_tree(*args, **kwargs):
     return sdk.get_session_tree(*args, **kwargs)
 
@@ -101,7 +97,6 @@ __all__ = [
     "enqueue_message",
     "fork_session",
     "get_capability",
-    "legacy_hint_readiness",
     "get_session_tree",
     "list_capabilities",
     "list_checkpoints",

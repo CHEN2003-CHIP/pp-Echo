@@ -249,8 +249,7 @@ class MCPRuntime:
                 known_safe_inspect=False,
                 requests_network_hint=requests_network_hint,
                 touches_external_hint=False,
-                legacy_hint_origin="runtime_internal",
-                runtime_risk_overrides={"destructive_hint": True} if tool.is_destructive else {},
+                risk_overrides={"destructive_hint": True} if tool.is_destructive else {},
                 replace=True,
             )
         if self.settings.capabilities.mcp.expose_resources:
@@ -616,8 +615,7 @@ def _apply_loaded_extension(
             known_safe_inspect=tool.known_safe_inspect,
             requests_network_hint=tool.requests_network_hint,
             touches_external_hint=tool.touches_external_hint,
-            legacy_hint_origin="runtime_internal",
-            runtime_risk_overrides={"destructive_hint": True} if (tool.spec.sensitive and tool.spec.permission_domain != "read") else {},
+            risk_overrides={"destructive_hint": True} if (tool.spec.sensitive and tool.spec.permission_domain != "read") else {},
         )
     for command in loaded.commands:
         runtime.commands.register(command)

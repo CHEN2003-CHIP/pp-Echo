@@ -104,7 +104,7 @@ class SkillRuntime:
                     body_loaded=getattr(descriptor, "_body_cache", None) is not None,
                     origin_type=descriptor.origin_type,
                     discovery_root=getattr(descriptor, "discovery_root", None),
-                    discovery_mode=getattr(descriptor, "discovery_mode", "legacy_project"),
+                    discovery_mode=getattr(descriptor, "discovery_mode", "workspace_directory"),
                 )
             )
         return items

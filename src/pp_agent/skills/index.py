@@ -22,7 +22,7 @@ class SkillDescriptor(BaseModel):
     precedence: int = 0
     declared_by_manifest: bool = False
     discovery_root: Optional[str] = None
-    discovery_mode: str = "legacy_project"
+    discovery_mode: str = "workspace_directory"
 
     _body_cache: Optional[str] = PrivateAttr(default=None)
 
@@ -47,7 +47,7 @@ class SkillSearchRoot(BaseModel):
     precedence: int = 0
     declared_by_manifest: bool = False
     discovery_root: Optional[str] = None
-    discovery_mode: str = "legacy_project"
+    discovery_mode: str = "workspace_directory"
 
 
 class _DefaultSkillConfig:
@@ -181,7 +181,7 @@ def _parse_skill_metadata(path: Path, root: SkillSearchRoot) -> SkillDescriptor:
         precedence=root.precedence,
         declared_by_manifest=root.declared_by_manifest,
         discovery_root=getattr(root, "discovery_root", str(root.path)),
-        discovery_mode=getattr(root, "discovery_mode", "legacy_project"),
+        discovery_mode=getattr(root, "discovery_mode", "workspace_directory"),
     )
 
 
@@ -264,18 +264,6 @@ def _project_skill_roots(workspace: Path, *, precedence_start: int = 0) -> list[
                 )
             )
             precedence += 1
-    legacy_path = _safe_resolve(workspace / ".pp-agent" / "skills")
-    if legacy_path not in seen_paths:
-        roots.append(
-            SkillSearchRoot(
-                path=legacy_path,
-                origin_type="project",
-                root_name="project_skills",
-                precedence=precedence,
-                discovery_root=str(workspace),
-                discovery_mode="legacy_project",
-            )
-        )
     return roots
 
 

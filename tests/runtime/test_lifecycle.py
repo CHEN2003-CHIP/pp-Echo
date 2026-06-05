@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent_core.types import ModelConfig
+from pp_agent.llm import ModelConfig
 from pp_agent.app.bootstrap import build_agent
 from pp_agent.runtime.lifecycle import (
     AGENT_END,
@@ -30,15 +30,19 @@ class HelloLLMClient:
 class ToolLLMClient:
     def __init__(self) -> None:
         self.model = ModelConfig()
+        self.calls = 0
 
     def stream_chat(self, _messages, tools=None) -> Iterator[dict]:
+        self.calls += 1
+        if self.calls > 1:
+            yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+            return
         yield {
             "text": "",
             "tool_calls": [{"id": "call-1", "name": "list_files", "arguments_chunk": '{"path":"."}'}],
             "finish_reason": "tool_calls",
             "raw": {},
         }
-        yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
 class FailingToolLLMClient:

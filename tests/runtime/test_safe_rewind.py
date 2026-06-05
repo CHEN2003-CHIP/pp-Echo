@@ -3,7 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from agent_core.types import ChatMessage, ModelConfig, TextPart
+from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.llm import ModelConfig
 
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.session_host import SessionHost

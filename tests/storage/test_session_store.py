@@ -1,7 +1,8 @@
 ﻿from pathlib import Path
 
-from agent_core.types import ChatMessage, ModelConfig, TextPart
-from storage.sessions import SessionStore
+from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.llm import ModelConfig
+from pp_agent.storage.sessions import SessionStore
 
 
 def test_session_store_save_and_load_uses_per_session_jsonl_file(tmp_path: Path) -> None:
@@ -281,24 +282,6 @@ def test_session_store_turn_node_uses_indexed_lookup(tmp_path: Path) -> None:
 
     assert node is not None
     assert loaded._turn_index[loaded.active_head_id].id == node.id
-
-
-def test_session_store_migrates_legacy_session_tree_to_per_session_files(tmp_path: Path) -> None:
-    legacy_path = tmp_path / "session-tree.jsonl"
-    record = SessionStore(tmp_path).create("hello", ModelConfig())
-    record.messages = [ChatMessage(role="user", content=[TextPart(text="legacy")], timestamp=1.0)]
-    legacy_path.write_text(
-        '{"type":"session","data":' + record.model_dump_json() + '}\n',
-        encoding="utf-8",
-    )
-
-    store = SessionStore(tmp_path)
-    migrated = store.load(record.id)
-    session_file = tmp_path / f"{record.id}.jsonl"
-
-    assert migrated.id == record.id
-    assert session_file.exists()
-    assert "session_snapshot" in session_file.read_text(encoding="utf-8")
 
 
 def test_session_store_tree_skips_partial_session_files_without_snapshot(tmp_path: Path) -> None:

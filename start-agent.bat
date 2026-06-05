@@ -69,7 +69,7 @@ echo.
 echo Starting pp-agent chat...
 echo Workspace: %CD%
 echo PP_AGENT_HTTP_TRUST_ENV=%PP_AGENT_HTTP_TRUST_ENV%
-python -m agent_cli.main chat
+python -m pp_agent.cli.main chat
 set EXIT_CODE=%ERRORLEVEL%
 if not "%EXIT_CODE%"=="0" (
   echo.

@@ -3,8 +3,8 @@ import json
 import httpx
 import pytest
 
-from agent_core.llm.client import LLMClient, LLMClientError
-from agent_core.types import ChatMessage, TextPart
+from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
 
 
 def test_stream_chat_parses_sse(monkeypatch) -> None:

@@ -110,7 +110,7 @@ def test_file_memory_writer_keeps_low_confidence_and_skill_pending(tmp_path: Pat
     assert not (tmp_path / "MEMORY.md").exists()
 
 
-def test_file_memory_writer_classifies_legacy_memory_target_to_detail(tmp_path: Path) -> None:
+def test_file_memory_writer_classifies_generic_memory_target_to_detail(tmp_path: Path) -> None:
     writer, store = _writer(tmp_path)
     candidate = LearningCandidate(
         id="learn-1",
@@ -140,7 +140,7 @@ def test_file_memory_writer_auto_writes_journal_without_promotion(tmp_path: Path
     result = writer.auto_apply([candidate])[0]
 
     assert result.action == "journal"
-    assert result.path == tmp_path / "memory" / "daily" / "2026-05-16.md"
+    assert result.path.parent == tmp_path / "memory" / "daily"
     assert "web smoke verification passed" in result.path.read_text(encoding="utf-8")
     assert store.get("learn-1").status == "applied"
 

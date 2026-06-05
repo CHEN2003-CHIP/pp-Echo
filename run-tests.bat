@@ -22,7 +22,7 @@ if not "%EXIT_CODE%"=="0" (
 
 echo.
 echo Running CLI smoke checks...
-python -m agent_cli.main --help
-python -m agent_cli.main config show
+python -m pp_agent.cli.main --help
+python -m pp_agent.cli.main config show
 pause
 exit /b 0

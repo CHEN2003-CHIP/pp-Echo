@@ -245,7 +245,7 @@ If no manifest is present, pp-Echo falls back to conventional directories such a
 
 - `skills`
 - `<pp-Echo repo>/skills`
-- `.pp-agent/skills`
+- `skills/`
 - `.pp-agent/extensions`
 - `.pi/skills`
 - `.agents/skills`

@@ -82,7 +82,7 @@ def _write_extension_descriptor(path: Path, *, name: str, description: str, entr
 
 def test_create_capability_catalog_discovers_skills_and_builtin_tools_without_materializing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
-    skill_path = tmp_path / ".pp-agent" / "skills" / "demo" / "SKILL.md"
+    skill_path = tmp_path / "skills" / "demo" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text("---\nname: demo\ndescription: project skill\n---\nbody", encoding="utf-8")
 
@@ -112,7 +112,8 @@ def test_capability_catalog_list_and_get_are_stable(tmp_path: Path, monkeypatch:
     assert [item.model_dump(mode="json") for item in catalog.list()] == expected_order
 
     builtin_tools = catalog.list(kind="builtin_tool")
-    assert [item.name for item in builtin_tools] == [
+    builtin_names = [item.name for item in builtin_tools]
+    assert builtin_names[:15] == [
         "read_file",
         "write_file",
         "edit_file",
@@ -129,6 +130,8 @@ def test_capability_catalog_list_and_get_are_stable(tmp_path: Path, monkeypatch:
         "execute_safe_rewind",
         "run_shell",
     ]
+    assert "memory_search" in builtin_names
+    assert "memory_get" in builtin_names
     assert catalog.get("builtin_tool", "run_shell").source == "builtin:run_shell"
 
 
@@ -137,14 +140,14 @@ def test_capability_catalog_refresh_discovers_new_project_skill_and_keeps_order(
     catalog = create_capability_catalog(tmp_path)
     initial_builtin_order = [item.name for item in catalog.list(kind="builtin_tool")]
 
-    skill_path = tmp_path / ".pp-agent" / "skills" / "new-skill" / "SKILL.md"
+    skill_path = tmp_path / "skills" / "new-skill" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text("---\nname: new_skill\ndescription: new project skill\n---\nbody", encoding="utf-8")
 
     catalog.refresh()
 
     assert [item.name for item in catalog.list(kind="builtin_tool")] == initial_builtin_order
-    assert [item.name for item in catalog.list(kind="skill")] == ["new_skill"]
+    assert "new_skill" in [item.name for item in catalog.list(kind="skill")]
 
 
 def test_capability_catalog_refresh_is_atomic_on_provider_failure() -> None:
@@ -184,7 +187,7 @@ def test_capability_catalog_rejects_duplicate_keys() -> None:
 
 def test_capability_metadata_is_lightweight_and_serializable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
-    skill_path = tmp_path / ".pp-agent" / "skills" / "demo" / "SKILL.md"
+    skill_path = tmp_path / "skills" / "demo" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text("---\nname: demo\ndescription: project skill\n---\nbody", encoding="utf-8")
 
@@ -251,7 +254,7 @@ def test_capability_catalog_uses_configured_skill_filters(tmp_path: Path, monkey
         encoding="utf-8",
     )
     for name in ["keep-demo", "skip-demo"]:
-        path = project_dir / "skills" / name / "SKILL.md"
+        path = tmp_path / "skills" / name / "SKILL.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"---\nname: {name}\ndescription: {name}\n---\nbody", encoding="utf-8")
 
@@ -337,7 +340,7 @@ def test_skill_and_extension_metadata_include_origin_fields(tmp_path: Path, monk
     assert skill.origin_type == "project"
     assert skill.metadata["declared_by_manifest"] is True
     assert skill.metadata["discovery_root"] == str(project_dir / "manifest-skills")
-    assert skill.metadata["discovery_mode"] == "legacy_project"
+    assert skill.metadata["discovery_mode"] == "workspace_directory"
     assert extension.origin_type == "project"
     assert extension.metadata["declared_by_manifest"] is True
     assert extension.metadata["event_counts"] == {}

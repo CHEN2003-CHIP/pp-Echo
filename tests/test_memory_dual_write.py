@@ -3,7 +3,8 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent_core.types import ChatMessage, ModelConfig, TextPart
+from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.llm import ModelConfig
 from pp_agent.memory import HistoryIndexer, NoopMemoryProvider, SQLiteHistoryStore, SQLiteMemoryProvider
 from pp_agent.memory.auto_index import NoopAutoIndexScheduler
 from pp_agent.runtime.runtime import AgentRuntime

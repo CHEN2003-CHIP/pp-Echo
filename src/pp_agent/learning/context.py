@@ -6,17 +6,15 @@ from pathlib import Path
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.learning.bootstrap_memory import BootstrapMemoryManager
 from pp_agent.learning.models import LearningSettings
-from pp_agent.learning.store import LearningStore
 from pp_agent.runtime.state import AgentState
 
 
 class ProjectMemoryContextHook:
     """负责向对话上下文中注入项目级记忆。
     所谓“项目级”，通常指当前工作区（workspace）范围内的知识，例如从项目文档、代码注释或之前的交互中提取的长期事实。"""
-    def __init__(self, *, workspace: Path, settings: LearningSettings, store: LearningStore | None = None) -> None:
+    def __init__(self, *, workspace: Path, settings: LearningSettings) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings
-        self.store = store or LearningStore(self.workspace / ".pp-agent" / "learning")
 
     def transform_context(self, _state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
         if not self.settings.enable or not self.settings.project_memory_enable:
@@ -36,10 +34,7 @@ class ProjectMemoryContextHook:
         return [messages[0], memory_message, *messages[1:]]
 
     def _read_bootstrap_memory(self) -> str:
-        bootstrap = BootstrapMemoryManager(workspace=self.workspace, settings=self.settings).read().strip()
-        if bootstrap:
-            return bootstrap
-        return self.store.read_project_memory()
+        return BootstrapMemoryManager(workspace=self.workspace, settings=self.settings).read().strip()
 
 
 class GlobalMemoryContextHook:

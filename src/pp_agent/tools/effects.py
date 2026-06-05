@@ -126,23 +126,23 @@ def _dynamic_base_analysis(
     permission_domain: str,
     description: str,
     declarations: dict[str, Any],
-    hints: dict[str, Any],
+    risk_overrides: dict[str, Any],
 ) -> dict[str, Any]:
     lowered = f"{tool_name} {description}".lower()
     declared_requests_network = bool(declarations.get("requests_network_hint"))
     declared_touches_external = bool(declarations.get("touches_external_hint"))
-    compat_requests_network = bool(hints.get("requests_network"))
-    compat_touches_external = bool(hints.get("touches_external"))
-    compat_destructive = bool(hints.get("destructive_hint"))
-    compat_protected_path = bool(hints.get("protected_path_hint"))
-    compat_touches_workspace = bool(hints.get("touches_workspace"))
+    override_requests_network = bool(risk_overrides.get("requests_network"))
+    override_touches_external = bool(risk_overrides.get("touches_external"))
+    override_destructive = bool(risk_overrides.get("destructive_hint"))
+    override_protected_path = bool(risk_overrides.get("protected_path_hint"))
+    override_touches_workspace = bool(risk_overrides.get("touches_workspace"))
     runtime_requests_network = any(keyword in lowered for keyword in _NETWORK_KEYWORDS)
 
-    requests_network = declared_requests_network or compat_requests_network or runtime_requests_network
-    touches_external = declared_touches_external or compat_touches_external
-    destructive_hint = compat_destructive
-    protected_path_hint = compat_protected_path
-    touches_workspace = compat_touches_workspace
+    requests_network = declared_requests_network or override_requests_network or runtime_requests_network
+    touches_external = declared_touches_external or override_touches_external
+    destructive_hint = override_destructive
+    protected_path_hint = override_protected_path
+    touches_workspace = override_touches_workspace
 
     declared_non_side_effectful = bool(declarations.get("non_side_effectful"))
     declared_safe_inspect = bool(declarations.get("known_safe_inspect"))
@@ -596,17 +596,17 @@ def analyze_extension_call(
     permission_domain: str,
     description: str = "",
     declarations: dict[str, Any] | None = None,
-    hints: dict[str, Any] | None = None,
+    risk_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     declarations = declarations or dynamic_tool_declarations()
-    hints = hints or {}
+    risk_overrides = risk_overrides or {}
     base = _dynamic_base_analysis(
         family="extension",
         tool_name=tool_name,
         permission_domain=permission_domain,
         description=description,
         declarations=declarations,
-        hints=hints,
+        risk_overrides=risk_overrides,
     )
     return _analysis(
         family="extension",
@@ -635,17 +635,17 @@ def analyze_mcp_call(
     permission_domain: str,
     description: str = "",
     declarations: dict[str, Any] | None = None,
-    hints: dict[str, Any] | None = None,
+    risk_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     declarations = declarations or dynamic_tool_declarations()
-    hints = hints or {}
+    risk_overrides = risk_overrides or {}
     base = _dynamic_base_analysis(
         family="mcp",
         tool_name=tool_name,
         permission_domain=permission_domain,
         description=description,
         declarations=declarations,
-        hints=hints,
+        risk_overrides=risk_overrides,
     )
     return _analysis(
         family="mcp",

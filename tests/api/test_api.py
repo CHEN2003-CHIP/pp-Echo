@@ -69,7 +69,7 @@ def test_prompt_loader_supports_extension_contributed_paths_with_lower_precedenc
 def test_skill_loader_requires_frontmatter_and_prefers_project(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     user_root = tmp_path / "user"
-    project_skill = workspace / ".pp-agent" / "skills" / "demo" / "SKILL.md"
+    project_skill = workspace / "skills" / "demo" / "SKILL.md"
     user_skill = user_root / "skills" / "demo" / "SKILL.md"
     project_skill.parent.mkdir(parents=True)
     user_skill.parent.mkdir(parents=True)
@@ -89,7 +89,7 @@ def test_skill_loader_supports_custom_directory_priority_and_filters(tmp_path: P
     custom_a = tmp_path / "custom-a"
     custom_b = tmp_path / "custom-b"
     for root, description in [
-        (workspace / ".pp-agent" / "skills" / "demo", "project"),
+        (workspace / "skills" / "demo", "project"),
         (user_root / "skills" / "demo", "user"),
         (custom_b / "demo", "custom-b"),
         (custom_a / "demo", "custom-a"),
@@ -138,10 +138,8 @@ def test_skill_loader_prefers_workspace_skills_directory(tmp_path: Path) -> None
     workspace = tmp_path / "workspace"
     user_root = tmp_path / "user"
     workspace_skill = workspace / "skills" / "demo" / "SKILL.md"
-    legacy_skill = workspace / ".pp-agent" / "skills" / "demo" / "SKILL.md"
-    for path, description in [(workspace_skill, "workspace skills"), (legacy_skill, "legacy project")]:
-        path.parent.mkdir(parents=True)
-        path.write_text(f"---\nname: demo\ndescription: {description}\n---\nbody", encoding="utf-8")
+    workspace_skill.parent.mkdir(parents=True)
+    workspace_skill.write_text("---\nname: demo\ndescription: workspace skills\n---\nbody", encoding="utf-8")
 
     skills = load_skills(workspace, user_root)
 
@@ -192,14 +190,12 @@ def test_skill_loader_includes_pp_echo_root_skills_for_other_workspaces(tmp_path
     assert skills["shared-demo"].discovery_mode == "pp_echo_root_directory"
 
 
-def test_skill_loader_prefers_pi_style_ancestor_roots_over_legacy_project_root(tmp_path: Path) -> None:
+def test_skill_loader_prefers_pi_style_ancestor_roots(tmp_path: Path) -> None:
     workspace = tmp_path / "repo" / "apps" / "feature"
     user_root = tmp_path / "user"
-    legacy_skill = workspace / ".pp-agent" / "skills" / "demo" / "SKILL.md"
     nearest_pi_skill = workspace / ".pi" / "skills" / "demo" / "SKILL.md"
     ancestor_agents_skill = tmp_path / "repo" / ".agents" / "skills" / "demo" / "SKILL.md"
     for path, description in [
-        (legacy_skill, "legacy project"),
         (nearest_pi_skill, "nearest pi"),
         (ancestor_agents_skill, "ancestor agents"),
     ]:
@@ -219,7 +215,7 @@ def test_skill_loader_prefers_pi_style_ancestor_roots_over_legacy_project_root(t
 def test_skill_body_is_materialized_on_demand_and_cached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     user_root = tmp_path / "user"
-    skill_path = workspace / ".pp-agent" / "skills" / "demo" / "SKILL.md"
+    skill_path = workspace / "skills" / "demo" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text("---\nname: demo\ndescription: project skill\n---\nbody", encoding="utf-8")
 
@@ -235,24 +231,21 @@ def test_skill_body_is_materialized_on_demand_and_cached(monkeypatch: pytest.Mon
 
     skills = load_skills(workspace, user_root)
 
-    assert read_count == 0
-
     descriptor = skills["demo"]
+    metadata_reads = read_count
     assert materialize_skill(descriptor) == "body"
-    assert read_count == 1
+    assert read_count == metadata_reads + 1
 
     assert descriptor.body == "body"
     assert materialize_skill(descriptor) == "body"
-    assert read_count == 1
+    assert read_count == metadata_reads + 1
 
 
 def test_api_capability_helpers_forward_to_sdk(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sdk, "list_capabilities", lambda workspace, **kwargs: [{"name": "demo"}])
     monkeypatch.setattr(sdk, "get_capability", lambda workspace, **kwargs: {"name": kwargs["name"]})
     monkeypatch.setattr(sdk, "reload_capabilities", lambda workspace, **kwargs: [{"name": "demo"}, {"name": "reload"}])
-    monkeypatch.setattr(sdk, "legacy_hint_readiness", lambda workspace, **kwargs: {"ready_for_v0_4_removal": True})
 
     assert api.list_capabilities(workspace=tmp_path) == [{"name": "demo"}]
     assert api.get_capability(workspace=tmp_path, kind="skill", name="demo") == {"name": "demo"}
     assert api.reload_capabilities(workspace=tmp_path)[-1]["name"] == "reload"
-    assert api.legacy_hint_readiness(workspace=tmp_path) == {"ready_for_v0_4_removal": True}

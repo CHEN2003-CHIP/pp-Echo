@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from agent_core.types import ChatMessage, ModelConfig, TextPart, ToolCallPart
+from pp_agent.domain import ChatMessage, TextPart, ToolCallPart
+from pp_agent.llm import ModelConfig
 from pp_agent.runtime.lifecycle import SESSION_BEFORE_COMPACT, SESSION_COMPACTED
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.tools.registry import ToolRegistry

@@ -1,15 +1,7 @@
-"""
-PP-ECHO - 命令行入口模块
-===========================
-功能描述：
-    为Windows 10系统设计的Python编码代理CLI工具，**双命令行解析模式**：
-    1. 优先使用Typer库实现现代化、带自动补全的命令行交互
-    2. 降级兼容标准argparse库，无依赖时也可正常运行
-    提供聊天交互、指令执行、会话管理、审批管理、工作流、配置查看等核心功能
-适用场景：
-    开发者通过命令行与Python编码代理交互，管理会话、代码 checkpoint、能力插件等
-作者：CHEN
-日期：2026-04-03
+"""Command-line entrypoint for pp-agent.
+
+The Typer application is the primary CLI surface. An argparse fallback remains
+for environments where Typer is unavailable.
 """
 
 from __future__ import annotations
@@ -23,7 +15,6 @@ try:
 except ImportError:  # pragma: no cover
     typer = None
 
-# 初始化Typer主应用
 app = typer.Typer(help="Personal Python coding agent for Windows 10.") if typer else None
 
 
@@ -88,7 +79,6 @@ if app:
 
         raise typer.Exit(claw_tui_main(workspace))
 
-    # 注册二级子命令应用，分类管理不同功能模块
     sessions_app = typer.Typer(help="Manage stored sessions.")
     approvals_app = typer.Typer(help="Manage staged approvals.")
     workflow_app = typer.Typer(help="Guided repo-aware workflows.")
@@ -100,7 +90,6 @@ if app:
     eval_app = typer.Typer(help="Run and report agent evaluations.")
     memory_app = typer.Typer(help="Inspect and query Markdown file memory.")
 
-    # 将子命令组挂载到主应用
     app.add_typer(sessions_app, name="sessions")
     app.add_typer(approvals_app, name="approvals")
     app.add_typer(workflow_app, name="workflow")
@@ -369,25 +358,6 @@ if app:
 
         capabilities_reload_main(workspace, include_mcp=include_mcp)
 
-
-    def _capabilities_legacy_hints_command(
-        include_mcp: Optional[bool] = typer.Option(None, "--include-mcp"),
-        json_mode: bool = typer.Option(False, "--json"),
-        strict: bool = typer.Option(False, "--strict"),
-        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
-    ) -> None:
-        from pp_agent.cli.commands.capabilities import capabilities_legacy_hints_main
-
-        capabilities_legacy_hints_main(workspace, include_mcp=include_mcp, json_mode=json_mode, strict=strict)
-
-    capabilities_app.registered_commands.append(
-        typer.models.CommandInfo(
-            name="legacy-hints",
-            callback=_capabilities_legacy_hints_command,
-        )
-    )
-
-
     @skills_app.command("list")
     def skills_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
         from pp_agent.cli.commands.skills import skills_list_main
@@ -640,11 +610,6 @@ def main() -> None:
     capabilities_reload_parser.add_argument("--kind", default=None)
     capabilities_reload_parser.add_argument("--include-mcp", dest="include_mcp", action="store_true")
     capabilities_reload_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
-    capabilities_legacy_hints_parser = capabilities_subparsers.add_parser("legacy-hints")
-    capabilities_legacy_hints_parser.add_argument("--include-mcp", dest="include_mcp", action="store_true")
-    capabilities_legacy_hints_parser.add_argument("--json", action="store_true")
-    capabilities_legacy_hints_parser.add_argument("--strict", action="store_true")
-    capabilities_legacy_hints_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     skills_parser = subparsers.add_parser("skills")
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
     skills_list_parser = skills_subparsers.add_parser("list")
@@ -822,15 +787,6 @@ def main() -> None:
         from pp_agent.cli.commands.capabilities import capabilities_reload_main
 
         capabilities_reload_main(Path(args.workspace), include_mcp=args.include_mcp or None)
-    elif command == "capabilities" and args.capabilities_command == "legacy-hints":
-        from pp_agent.cli.commands.capabilities import capabilities_legacy_hints_main
-
-        capabilities_legacy_hints_main(
-            Path(args.workspace),
-            include_mcp=args.include_mcp or None,
-            json_mode=args.json,
-            strict=args.strict,
-        )
     elif command == "skills" and args.skills_command == "list":
         from pp_agent.cli.commands.skills import skills_list_main
 

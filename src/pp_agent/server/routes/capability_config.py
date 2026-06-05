@@ -405,7 +405,7 @@ def _read_session_jsonl_log_entries(workspace: Path, *, limit: int) -> list[dict
         session_root = bootstrap.session_store_for(workspace).root
     except (OSError, ValueError):
         return entries
-    for path in sorted([item for item in session_root.glob("*.jsonl") if item.name != "session-tree.jsonl"], key=lambda item: item.stat().st_mtime):
+    for path in sorted(session_root.glob("*.jsonl"), key=lambda item: item.stat().st_mtime):
         for line in _tail_lines(path, limit):
             entry = _parse_session_event_line(line, source=path.name)
             if entry:
@@ -654,7 +654,7 @@ def _write_skill(workspace: Path, request: SkillRequest, *, original_name: str |
     name = _validate_name(request.name, "skills.name")
     if not request.description.strip():
         raise ConfigValidationError([config_error("description", "required", "Description is required")])
-    base = _safe_project_dir(workspace, ".pp-agent/skills")
+    base = _safe_project_dir(workspace, "skills")
     target_dir = _safe_child_dir(base, name)
     if original_name:
         original_dir = _safe_child_dir(base, _validate_name(original_name, "skills.name"))

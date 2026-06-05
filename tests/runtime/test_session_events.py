@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent_core.types import ModelConfig
+from pp_agent.llm import ModelConfig
 from pp_agent.app.bootstrap import fork_session, rewind_session_with_events, switch_session_head, view_session_tree
 from pp_agent.runtime.lifecycle import (
     PLANNER_GATE_APPROVED,

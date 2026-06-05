@@ -2051,6 +2051,14 @@ class AgentRuntime:
     def _default_tool_error_hook(self, _state: AgentState, _call: ToolCall, _error: Exception) -> ToolErrorDecision:
         """Keep recoverable coding-tool failures in the loop so the model can inspect, fix, and rerun."""
         if _call.name in {"write_file", "edit_file", "run_shell", "git_diff_worktree"}:
+            if "host-side approval" in str(_error).lower():
+                return ToolErrorDecision(
+                    continue_loop=False,
+                    details={
+                        "recoverable_tool_error": False,
+                        "next_action_hint": "Stop and wait for explicit host approval before retrying this tool call.",
+                    },
+                )
             return ToolErrorDecision(
                 continue_loop=True,
                 details={

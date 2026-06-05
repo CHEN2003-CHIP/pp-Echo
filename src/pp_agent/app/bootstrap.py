@@ -53,7 +53,6 @@ from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.settings import Settings
 from pp_agent.storage.timeline import TimelineStore
-from pp_agent.tools.legacy_hints_readiness import build_legacy_hint_readiness_report, scan_workspace_for_legacy_analysis_hints
 from pp_agent.tools.metadata import ToolMetadata
 from pp_agent.tools.registry import ToolRegistration, ToolRegistry
 from pp_agent.tools.subagent_tool import OrchestrateAgentsTool, SpawnSubagentTool
@@ -609,7 +608,6 @@ def project_memory_context_hook_for(workspace: Path) -> ProjectMemoryContextHook
         return ProjectMemoryContextHook(
             workspace=workspace,
             settings=settings.learning,
-            store=LearningStore(settings.project_dir / "learning"),
         )
     except OSError as exc:
         logger.warning("Project memory context disabled because its storage is unavailable: %s", exc)
@@ -716,33 +714,6 @@ def create_capability_catalog_with_mcp(
     :return: 能力目录实例
     """
     return create_capability_catalog(workspace, include_mcp=True, transport_factory=transport_factory, time_fn=time_fn)
-
-
-def inspect_legacy_hint_readiness(
-    workspace: Path,
-    *,
-    include_mcp: Optional[bool] = None,
-    transport_factory=None,
-    time_fn=None,
-) -> dict[str, object]:
-    settings = load_settings(workspace)
-    registry = ToolRegistry(workspace, policy=settings.tool_policy)
-    register_file_memory_tools(registry, settings=settings)
-    runtime_hooks = RuntimeHooks()
-    load_executable_extensions(
-        workspace,
-        settings=settings,
-        tool_registry=registry,
-        runtime_hooks=runtime_hooks,
-        search_roots=_extension_roots_for(workspace.resolve(), settings),
-        include_mcp=include_mcp,
-        transport_factory=transport_factory,
-        time_fn=time_fn,
-    )
-    return build_legacy_hint_readiness_report(
-        registry.metadata(),
-        advisory_source_hits=scan_workspace_for_legacy_analysis_hints(workspace.resolve()),
-    )
 
 
 def create_capability_providers(

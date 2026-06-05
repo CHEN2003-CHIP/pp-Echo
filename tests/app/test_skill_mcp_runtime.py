@@ -57,7 +57,7 @@ class TrackingMCPClient:
 def test_skill_runtime_is_lazy_until_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
     _write_skill(
-        tmp_path / ".pp-agent" / "skills" / "review-helper" / "SKILL.md",
+        tmp_path / "skills" / "review-helper" / "SKILL.md",
         name="review-helper",
         description="Review pull requests carefully",
         body="Detailed review instructions",
@@ -104,7 +104,7 @@ def test_skill_runtime_is_lazy_until_match(monkeypatch: pytest.MonkeyPatch, tmp_
 def test_skill_runtime_description_match_and_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "user-home"))
     _write_skill(
-        tmp_path / ".pp-agent" / "skills" / "review-helper" / "SKILL.md",
+        tmp_path / "skills" / "review-helper" / "SKILL.md",
         name="review-helper",
         description="Review pull requests carefully",
         body="Review body",

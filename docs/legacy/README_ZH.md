@@ -233,7 +233,7 @@ python -m pp_agent.cli.main sessions tree
 python -m pp_agent.cli.main approvals summary
 python -m pp_agent.cli.main checkpoint list
 python -m pp_agent.cli.main rewind-safe --session <session_id> --turns 2
-python -m pp_agent.cli.main capabilities legacy-hints --json --workspace .
+python -m pp_agent.cli.main doctor --workspace .
 ```
 
 ## 项目边界
@@ -255,7 +255,7 @@ python -m pp_agent.cli.main capabilities legacy-hints --json --workspace .
 发布前建议运行：
 
 ```powershell
-python -m pp_agent.cli.main capabilities legacy-hints --strict --workspace .
+pytest -q tests/architecture
 python -m pp_agent.cli.main workflow doctor --json --workspace .
 python -m pytest tests/benchmarks/test_runner.py
 ```

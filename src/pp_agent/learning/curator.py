@@ -30,7 +30,7 @@ class LearningCurator:
         """确定该学习条目应该保存为 技能文件（SKILL.md） 的路径。"""
         slug = _slugify(candidate.title)
         digest = hashlib.sha1(candidate.id.encode("utf-8")).hexdigest()[:6]
-        root = self.workspace / ".pp-agent" / "skills"
+        root = self.workspace / "skills"
         candidate_path = root / slug / "SKILL.md"
         if candidate_path.exists():
             candidate_path = root / f"{slug}-{digest}" / "SKILL.md"

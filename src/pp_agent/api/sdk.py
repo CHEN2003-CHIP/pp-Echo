@@ -122,15 +122,6 @@ def reload_capabilities(
     return [entry.model_dump(mode="json") for entry in catalog.list(kind=kind)]
 
 
-def legacy_hint_readiness(
-    workspace: Path,
-    *,
-    include_mcp: Optional[bool] = None,
-) -> dict:
-    bootstrap = import_module("pp_agent.app.bootstrap")
-    return bootstrap.inspect_legacy_hint_readiness(workspace, include_mcp=include_mcp)
-
-
 def get_session_tree(
     workspace: Path,
     session_id: Optional[str] = None,

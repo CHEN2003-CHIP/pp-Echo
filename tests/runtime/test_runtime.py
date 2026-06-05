@@ -2,14 +2,15 @@ from collections.abc import Iterator
 from pathlib import Path
 import time
 
-from agent_core.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks
-from agent_core.runtime.monitor import RuntimeMonitor
-from agent_core.runtime.session import AgentSession
-from agent_core.types import ChatMessage, ModelConfig, TextPart, ToolCall
-from storage.sessions import SessionStore
-from storage.timeline import TimelineStore
-from tools.pending_actions import PendingActionStore
-from tools.registry import ToolRegistry
+from pp_agent.domain import ChatMessage, TextPart, ToolCall
+from pp_agent.llm import ModelConfig
+from pp_agent.runtime.events import RuntimeMonitor
+from pp_agent.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks
+from pp_agent.runtime.runtime import AgentSession
+from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.sessions import SessionStore
+from pp_agent.storage.timeline import TimelineStore
+from pp_agent.tools.registry import ToolRegistry
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.tools.base import ToolExecutionResult
 

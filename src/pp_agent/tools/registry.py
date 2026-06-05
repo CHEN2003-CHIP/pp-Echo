@@ -232,14 +232,6 @@ class ToolRegistry:
         :param replace: 是否覆盖
         """
         if deprecated_kwargs:
-            legacy_fields = [field for field in ("analysis_hints", "legacy_hint_origin") if field in deprecated_kwargs]
-            if legacy_fields:
-                joined = ", ".join(legacy_fields)
-                raise TypeError(
-                    f"register_function_tool() no longer accepts author-facing legacy fields: {joined}. "
-                    "Use formal declarations only: exact_effect_mode, non_side_effectful, known_safe_inspect, "
-                    "requests_network_hint, and touches_external_hint. Runtime-only risk overrides must use the private internal registration helper."
-                )
             unexpected = ", ".join(sorted(deprecated_kwargs))
             raise TypeError(f"register_function_tool() got unexpected keyword argument(s): {unexpected}")
         self._register_dynamic_tool_internal(
@@ -253,8 +245,7 @@ class ToolRegistry:
             sensitive=sensitive,
             model_callable=model_callable,
             tool_family=tool_family,
-            runtime_risk_overrides=None,
-            legacy_hint_origin="author",
+            risk_overrides=None,
             exact_effect_mode=exact_effect_mode,
             non_side_effectful=non_side_effectful,
             known_safe_inspect=known_safe_inspect,
@@ -276,8 +267,7 @@ class ToolRegistry:
         sensitive: bool = False,
         model_callable: bool = True,
         tool_family: str | None = None,
-        runtime_risk_overrides: Optional[dict[str, Any]] = None,
-        legacy_hint_origin: str = "runtime_internal",
+        risk_overrides: Optional[dict[str, bool]] = None,
         exact_effect_mode: str = "auto",
         non_side_effectful: bool = False,
         known_safe_inspect: bool = False,
@@ -366,8 +356,7 @@ class ToolRegistry:
                     sensitive=sensitive,
                     model_callable=model_callable,
                     tool_family=tool_family or ("mcp" if category == "mcp" else "extension"),
-                    analysis_hints=dict(runtime_risk_overrides or {}),
-                    legacy_hint_origin=legacy_hint_origin,
+                    risk_overrides=dict(risk_overrides or {}),
                     exact_effect_mode=exact_effect_mode,
                     non_side_effectful=non_side_effectful,
                     known_safe_inspect=known_safe_inspect,
@@ -818,10 +807,9 @@ class ToolRegistry:
             description=spec.description,
             tool_family=metadata.tool_family or "extension",
             declarations=self._dynamic_declarations(metadata),
-            analysis_hints=dict(metadata.analysis_hints),
+            risk_overrides=dict(metadata.risk_overrides),
         )
         analysis["declaration_strength"] = metadata.declaration_strength
-        analysis["uses_legacy_analysis_hints"] = metadata.uses_legacy_analysis_hints
         decision = self.policy_evaluator.evaluate(
             permission_domain=spec.permission_domain,
             tool_name=name,
@@ -858,7 +846,7 @@ class ToolRegistry:
         description: str,
         tool_family: str,
         declarations: dict[str, Any],
-        analysis_hints: dict[str, Any],
+        risk_overrides: dict[str, Any],
     ) -> dict[str, Any]:
         if tool_family == "mcp":
             return analyze_mcp_call(
@@ -866,14 +854,14 @@ class ToolRegistry:
                 permission_domain=permission_domain,
                 description=description,
                 declarations=declarations,
-                hints=analysis_hints,
+                risk_overrides=risk_overrides,
             )
         return analyze_extension_call(
             tool_name=name,
             permission_domain=permission_domain,
             description=description,
             declarations=declarations,
-            hints=analysis_hints,
+            risk_overrides=risk_overrides,
         )
 
     def _stage_or_fail_dynamic_call(self, *, name: str, arguments: dict[str, Any], decision, analysis: dict[str, Any]) -> ToolExecutionResult:
@@ -971,10 +959,9 @@ class ToolRegistry:
             description=spec.description,
             tool_family=metadata.tool_family or "extension",
             declarations=self._dynamic_declarations(metadata),
-            analysis_hints=dict(metadata.analysis_hints),
+            risk_overrides=dict(metadata.risk_overrides),
         )
         dynamic_analysis["declaration_strength"] = metadata.declaration_strength
-        dynamic_analysis["uses_legacy_analysis_hints"] = metadata.uses_legacy_analysis_hints
         return build_dynamic_tool_effect(
             tool_name=name,
             permission_domain=spec.permission_domain,

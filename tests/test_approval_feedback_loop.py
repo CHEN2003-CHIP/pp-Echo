@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent_core.types import ModelConfig
+from pp_agent.llm import ModelConfig
 from pp_agent.cli.commands.approvals import approve_or_execute_pending_action, reject_pending_action
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.runtime.runtime import AgentRuntime

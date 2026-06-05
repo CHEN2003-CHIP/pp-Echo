@@ -129,7 +129,7 @@ def test_read_only_profile_denies_write_execute_even_if_tool_is_present(tmp_path
 
 def test_skill_policy_disabled_prevents_prompt_injection(tmp_path, monkeypatch):
     monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "home"))
-    skill_path = tmp_path / ".pp-agent" / "skills" / "review-helper" / "SKILL.md"
+    skill_path = tmp_path / "skills" / "review-helper" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text("---\nname: review-helper\ndescription: Review code\n---\nbody", encoding="utf-8")
     settings = Settings.load(tmp_path)

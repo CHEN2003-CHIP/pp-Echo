@@ -192,7 +192,7 @@ Docs: [MEMORY.md](MEMORY.md), [docs/source-map.md](docs/source-map.md)
 
 ### Configuration and capability loading
 
-Project behavior is controlled by environment variables, `.pp-agent/config.json`, resource manifests, and capability discovery rules for skills, extensions, and MCP. The full sample config and manifest notes have moved out of the README so the homepage stays focused, but they are still documented in one place. This is the right entry if you want to customize runtime behavior or ship extensions.
+Project behavior is controlled by environment variables, project config, resource manifests, and capability discovery rules. The full sample config and manifest notes have moved out of the README so the homepage stays focused, but they are still documented in one place. This is the right entry if you want to customize runtime behavior or ship extensions.
 Docs: [docs/configuration.md](docs/configuration.md), [docs/dynamic-tool-declarations.md](docs/dynamic-tool-declarations.md), [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)
 
 ### Evaluation and release readiness
@@ -210,7 +210,7 @@ python -m pp_agent.cli.main sessions tree
 python -m pp_agent.cli.main approvals summary
 python -m pp_agent.cli.main checkpoint list
 python -m pp_agent.cli.main rewind-safe --session <session_id> --turns 2
-python -m pp_agent.cli.main capabilities legacy-hints --json --workspace .
+python -m pp_agent.cli.main doctor --workspace .
 ```
 
 ## Honest Scope Notes

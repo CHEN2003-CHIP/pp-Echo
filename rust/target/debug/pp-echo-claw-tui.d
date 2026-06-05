@@ -1,1 +1,0 @@
-E:\Pycharm\ Project\pp-Echo\rust\target\debug\pp-echo-claw-tui.exe: E:\Pycharm\ Project\pp-Echo\rust\pp-echo-claw-tui\src\events.rs E:\Pycharm\ Project\pp-Echo\rust\pp-echo-claw-tui\src\input.rs E:\Pycharm\ Project\pp-Echo\rust\pp-echo-claw-tui\src\main.rs E:\Pycharm\ Project\pp-Echo\rust\pp-echo-claw-tui\src\render.rs E:\Pycharm\ Project\pp-Echo\rust\pp-echo-claw-tui\src\rpc.rs

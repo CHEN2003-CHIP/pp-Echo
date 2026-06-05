@@ -1,8 +1,8 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent_core.runtime.hooks import RuntimeHooks
-from agent_core.types import ModelConfig
+from pp_agent.llm import ModelConfig
+from pp_agent.runtime.hooks import RuntimeHooks
 from pp_agent.memory.recall_builder import RecallSnippetBuilder
 from pp_agent.memory.retrieval import RetrievedChunk, RetrievedMessage
 from pp_agent.memory.retrieval_hook import MemoryRetrievalHook

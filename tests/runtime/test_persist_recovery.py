@@ -1,7 +1,8 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent_core.types import ChatMessage, ModelConfig, TextPart
+from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.llm import ModelConfig
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.tools.registry import ToolRegistry
@@ -55,4 +56,3 @@ def test_runtime_persist_recovers_when_base_head_is_stale(tmp_path: Path) -> Non
     saved_branch = store.branch_messages(saved, saved.active_head_id)
     assert [message.role for message in saved_branch] == ["user", "assistant", "user"]
     assert saved_branch[-1].content[0].text == "follow-up"
-

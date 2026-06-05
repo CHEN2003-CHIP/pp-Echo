@@ -4,7 +4,6 @@ from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.learning.bootstrap_memory import BootstrapMemoryManager, GlobalBootstrapMemoryManager, MANAGED_BEGIN, MANAGED_END
 from pp_agent.learning.context import GlobalMemoryContextHook, ProjectMemoryContextHook
 from pp_agent.learning.models import LearningSettings
-from pp_agent.learning.store import LearningStore
 
 
 def test_bootstrap_memory_sync_preserves_user_content_and_adds_navigation(tmp_path: Path) -> None:
@@ -51,29 +50,24 @@ def test_bootstrap_memory_sync_compacts_managed_section(tmp_path: Path) -> None:
 
 def test_project_memory_context_hook_prefers_root_memory(tmp_path: Path) -> None:
     settings = LearningSettings()
-    store = LearningStore(tmp_path / ".pp-agent" / "learning")
-    store.append_project_memory("- legacy memory")
     (tmp_path / "MEMORY.md").write_text("# Project Memory\n\nroot bootstrap memory", encoding="utf-8")
-    hook = ProjectMemoryContextHook(workspace=tmp_path, settings=settings, store=store)
+    hook = ProjectMemoryContextHook(workspace=tmp_path, settings=settings)
     messages = [ChatMessage(role="system", content=[TextPart(text="system")], timestamp=0)]
 
     transformed = hook.transform_context(None, messages)  # type: ignore[arg-type]
     injected = transformed[1].content[0].text
 
     assert "root bootstrap memory" in injected
-    assert "legacy memory" not in injected
 
 
-def test_project_memory_context_hook_falls_back_to_legacy_memory(tmp_path: Path) -> None:
+def test_project_memory_context_hook_skips_when_root_memory_is_missing(tmp_path: Path) -> None:
     settings = LearningSettings()
-    store = LearningStore(tmp_path / ".pp-agent" / "learning")
-    store.append_project_memory("- legacy memory")
-    hook = ProjectMemoryContextHook(workspace=tmp_path, settings=settings, store=store)
+    hook = ProjectMemoryContextHook(workspace=tmp_path, settings=settings)
     messages = [ChatMessage(role="system", content=[TextPart(text="system")], timestamp=0)]
 
     transformed = hook.transform_context(None, messages)  # type: ignore[arg-type]
 
-    assert "legacy memory" in transformed[1].content[0].text
+    assert transformed == messages
 
 
 def test_global_bootstrap_memory_manager_uses_global_title(tmp_path: Path) -> None:
