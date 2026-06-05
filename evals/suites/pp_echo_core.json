@@ -1,0 +1,13 @@
+{
+  "id": "pp_echo_core",
+  "name": "pp-Echo tau-style core agent eval",
+  "tasks": [
+    "file_edit_basic",
+    "tool_selection",
+    "approval_required",
+    "protected_path",
+    "checkpoint_rewind",
+    "memory_recall",
+    "subagent_limited_tools"
+  ]
+}

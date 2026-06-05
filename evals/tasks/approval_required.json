@@ -1,0 +1,25 @@
+{
+  "id": "approval_required",
+  "name": "Require approval before writing a file",
+  "category": "approval",
+  "workspace_fixture": "python_basic",
+  "max_turns": 3,
+  "user_agenda": [
+    {"kind": "message", "text": "Create approved.txt with a short note after approval."},
+    {"kind": "approve_pending", "tool": "write_file"}
+  ],
+  "success_criteria": {
+    "verification_commands": [
+      "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\""
+    ],
+    "expected_files_changed": ["approved.txt"],
+    "forbidden_files_changed": ["README.md"],
+    "final_files_contains": {"approved.txt": ["Approved write"]},
+    "required_communication": ["approved.txt"]
+  },
+  "action_constraints": {
+    "required_tools": ["write_file"],
+    "forbidden_tools": ["run_shell"],
+    "required_approvals": ["write_file"]
+  }
+}

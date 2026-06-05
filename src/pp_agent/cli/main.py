@@ -386,25 +386,29 @@ if app:
 
     @eval_app.command("run")
     def eval_run(
-        dataset: Path = typer.Argument(..., help="Path to eval dataset JSON/JSONL."),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
-        run_id: Optional[str] = typer.Option(None, "--run-id"),
+        suite: str = typer.Option("pp_echo_core", "--suite"),
+        mode: str = typer.Option("deterministic", "--mode"),
+        model: Optional[str] = typer.Option(None, "--model"),
+        cases: Optional[int] = typer.Option(None, "--cases"),
+        seed: int = typer.Option(0, "--seed"),
+        timeout_seconds: int = typer.Option(120, "--timeout-seconds"),
         output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
-        reuse_session: bool = typer.Option(False, "--reuse-session"),
-        stop_on_failure: bool = typer.Option(False, "--stop-on-failure"),
-        preflight: bool = typer.Option(False, "--preflight"),
+        save_history: bool = typer.Option(False, "--save-history"),
         json_mode: bool = typer.Option(False, "--json"),
     ) -> None:
         from pp_agent.cli.commands.eval import eval_run_main
 
         eval_run_main(
-            dataset,
             workspace,
-            run_id=run_id,
+            suite=suite,
+            mode=mode,
+            model=model,
+            cases=cases,
+            seed=seed,
+            timeout_seconds=timeout_seconds,
             output_dir=output_dir,
-            reuse_session=reuse_session,
-            stop_on_failure=stop_on_failure,
-            preflight=preflight,
+            save_history=save_history,
             json_mode=json_mode,
         )
 
@@ -412,13 +416,12 @@ if app:
     @eval_app.command("report")
     def eval_report(
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
-        run_id: Optional[str] = typer.Option(None, "--run-id"),
         output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
         json_mode: bool = typer.Option(False, "--json"),
     ) -> None:
         from pp_agent.cli.commands.eval import eval_report_main
 
-        eval_report_main(workspace, run_id=run_id, output_dir=output_dir, json_mode=json_mode)
+        eval_report_main(workspace, output_dir=output_dir, json_mode=json_mode)
 
     @memory_app.command("sync")
     def memory_sync(
@@ -625,17 +628,18 @@ def main() -> None:
     eval_parser = subparsers.add_parser("eval")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
     eval_run_parser = eval_subparsers.add_parser("run")
-    eval_run_parser.add_argument("dataset")
     eval_run_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
-    eval_run_parser.add_argument("--run-id", default=None)
+    eval_run_parser.add_argument("--suite", default="pp_echo_core")
+    eval_run_parser.add_argument("--mode", choices=["deterministic", "live"], default="deterministic")
+    eval_run_parser.add_argument("--model", default=None)
+    eval_run_parser.add_argument("--cases", type=int, default=None)
+    eval_run_parser.add_argument("--seed", type=int, default=0)
+    eval_run_parser.add_argument("--timeout-seconds", type=int, default=120)
     eval_run_parser.add_argument("--output-dir", default=None)
-    eval_run_parser.add_argument("--reuse-session", action="store_true")
-    eval_run_parser.add_argument("--stop-on-failure", action="store_true")
-    eval_run_parser.add_argument("--preflight", action="store_true")
+    eval_run_parser.add_argument("--save-history", action="store_true")
     eval_run_parser.add_argument("--json", action="store_true")
     eval_report_parser = eval_subparsers.add_parser("report")
     eval_report_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
-    eval_report_parser.add_argument("--run-id", default=None)
     eval_report_parser.add_argument("--output-dir", default=None)
     eval_report_parser.add_argument("--json", action="store_true")
     memory_parser = subparsers.add_parser("memory")
@@ -807,13 +811,15 @@ def main() -> None:
         from pp_agent.cli.commands.eval import eval_run_main
 
         eval_run_main(
-            Path(args.dataset),
             Path(args.workspace),
-            run_id=args.run_id,
+            suite=args.suite,
+            mode=args.mode,
+            model=args.model,
+            cases=args.cases,
+            seed=args.seed,
+            timeout_seconds=args.timeout_seconds,
             output_dir=Path(args.output_dir) if args.output_dir else None,
-            reuse_session=args.reuse_session,
-            stop_on_failure=args.stop_on_failure,
-            preflight=args.preflight,
+            save_history=args.save_history,
             json_mode=args.json,
         )
     elif command == "eval" and args.eval_command == "report":
@@ -821,7 +827,6 @@ def main() -> None:
 
         eval_report_main(
             Path(args.workspace),
-            run_id=args.run_id,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             json_mode=args.json,
         )

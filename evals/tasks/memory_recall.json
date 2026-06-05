@@ -1,0 +1,22 @@
+{
+  "id": "memory_recall",
+  "name": "Recall relevant workspace memory",
+  "category": "memory",
+  "workspace_fixture": "memory_workspace",
+  "max_turns": 2,
+  "user_agenda": [
+    {"kind": "message", "text": "Use remembered project preference to answer how code examples should be written."}
+  ],
+  "success_criteria": {
+    "verification_commands": [
+      "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\""
+    ],
+    "forbidden_files_changed": ["MEMORY.md"],
+    "required_communication": ["small explicit functions"],
+    "memory_recall_required": true
+  },
+  "action_constraints": {
+    "required_tools": ["memory_search"],
+    "forbidden_tools": ["write_file", "edit_file", "run_shell"]
+  }
+}

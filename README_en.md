@@ -58,7 +58,7 @@ pp-Echo is a practical local coding agent and a readable reference project for a
 | Capability expansion | Skills, executable extensions, MCP server integration, resource manifests, and capability discovery catalog | Skills loader, extension runtime, MCP manager, manifest discovery | `src/pp_agent/app/bootstrap.py`, `src/pp_agent/mcp/*`, `src/pp_agent/extensions/*`, `src/pp_agent/skills/*` |
 | Subagent orchestration | Explicit `@subagent` handoff, bounded orchestration fan-out, child capability profiles, and patch artifact staging | `spawn_subagent`, `orchestrate_agents`, isolated child sessions/worktrees | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
 | Interfaces | Plain CLI chat, Textual TUI, and Web UI with approvals, session tree, project switching, and runtime status | Typer, Rich, Textual, FastAPI, React, TypeScript, Vite | `src/pp_agent/cli/*`, `src/pp_agent/tui/*`, `src/pp_agent/web/*`, `web/*` |
-| Evaluation and diagnostics | Live eval cases, deterministic benchmarks, runtime doctor/report, legacy-hint doctor, and capability inspection | Pytest, CLI eval runner, doctor/report commands | `evals/*`, `tests/benchmarks/*`, `src/pp_agent/cli/commands/*` |
+| Evaluation and diagnostics | Tau-style agent evals, deterministic benchmarks, runtime doctor/report, and capability inspection | Pytest, CLI eval runner, doctor/report commands | `evals/*`, `tests/benchmarks/*`, `src/pp_agent/cli/commands/*` |
 | Configuration and storage | Environment overrides, project config, resource manifests, global state dir, and per-project storage roots | `.pp-agent/config.json`, settings loader, manifest fallback rules | `src/pp_agent/storage/settings.py`, `src/pp_agent/app/resources.py` |
 
 ## Architecture Overview
@@ -97,20 +97,19 @@ This is the current high-level system shape. The old "CLI -> Runtime -> Tools ->
 
 ## Evaluation Snapshot
 
-pp-Echo is evaluated as an engineering agent, not only as a prompt demo.
+pp-Echo is evaluated with a τ-bench style harness, not a prompt-only checklist. Each task runs in an isolated workspace environment, a scripted user drives turns, the adapter records the agent trace, and scoring is based on final state plus communication and action rewards.
 
-| Evaluation layer | Size | What it proves | Entry |
-| --- | ---: | --- | --- |
-| Live interview demo | 12 cases | Direct answers, repo awareness, tool use, safety, approvals, and explicit subagent handoff | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
-| Main agent eval | 60 cases | Broader evidence across tooling, safety, collaboration, memory, and Chinese technical expression | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
-| Deterministic benchmark | 15 tasks | Planner gating, rewind, lazy MCP activation, and compaction without model randomness | [docs/benchmarks/latest.md](docs/benchmarks/latest.md) |
-| Stress eval | 10 cases | Longer and higher-risk scenarios including shell approval and subagent delegation | [docs/evaluation-demo.md](docs/evaluation-demo.md) |
+| Evaluation layer | Entry | What it proves |
+| --- | --- | --- |
+| Tau-style agent eval | [docs/evaluation-demo.md](docs/evaluation-demo.md) | File edits, tool selection, approvals, protected paths, checkpoint rewind, memory recall, and constrained subagents. |
+| Deterministic benchmark | [docs/benchmarks/latest.md](docs/benchmarks/latest.md) | Planner gating, rewind, lazy MCP activation, and compaction without model randomness. |
 
-Most recent recorded local live demo result in the repo docs:
+Run the canonical eval:
 
-| Run | Cases | Pass rate | Tool calls | Approval gates | Expected policy blocks |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `20260512-234612-6fb26ca4` | 12 | 100% | 14 | 2 | 1 |
+```powershell
+python -m pp_agent.cli.main eval run --suite pp_echo_core --mode deterministic --cases 100
+python -m pp_agent.cli.main eval report --json
+```
 
 ## Quick Start
 
@@ -197,7 +196,7 @@ Docs: [docs/configuration.md](docs/configuration.md), [docs/dynamic-tool-declara
 
 ### Evaluation and release readiness
 
-The repo includes both behavior evals and deterministic runtime checks. It also includes doctor-style commands for runtime status and for migration readiness around legacy tool declaration hints. If you want to verify current health before a release or a public demo, start here rather than scanning the whole README.
+The repo includes τ-bench style behavior evals and deterministic runtime checks. It also includes doctor-style commands for runtime status. If you want to verify current health before a release or a public demo, start here rather than scanning the whole README.
 Docs: [docs/evaluation-demo.md](docs/evaluation-demo.md), [docs/benchmarks/latest.md](docs/benchmarks/latest.md), [docs/release-readiness.md](docs/release-readiness.md)
 
 ## Core Commands

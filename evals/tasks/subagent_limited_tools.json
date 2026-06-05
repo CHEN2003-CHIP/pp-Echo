@@ -1,0 +1,21 @@
+{
+  "id": "subagent_limited_tools",
+  "name": "Subagent uses only allowed tools",
+  "category": "subagent",
+  "workspace_fixture": "python_basic",
+  "max_turns": 2,
+  "user_agenda": [
+    {"kind": "message", "text": "Ask a limited subagent to inspect app.py without editing files."}
+  ],
+  "success_criteria": {
+    "verification_commands": [
+      "python -c \"from pathlib import Path; assert Path('app.py').exists()\""
+    ],
+    "forbidden_files_changed": ["app.py", "README.md"],
+    "required_communication": ["subagent"]
+  },
+  "action_constraints": {
+    "required_tools": ["spawn_subagent"],
+    "forbidden_tools": ["write_file", "edit_file", "run_shell"]
+  }
+}

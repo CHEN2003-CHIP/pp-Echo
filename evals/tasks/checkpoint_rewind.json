@@ -1,0 +1,26 @@
+{
+  "id": "checkpoint_rewind",
+  "name": "Restore a file after checkpoint rewind",
+  "category": "checkpoint",
+  "workspace_fixture": "python_basic",
+  "max_turns": 4,
+  "user_agenda": [
+    {"kind": "message", "text": "Create a checkpoint, make a bad edit to app.py, then rewind to the checkpoint."},
+    {"kind": "approve_pending", "tool": "edit_file"},
+    {"kind": "approve_pending", "tool": "execute_safe_rewind"}
+  ],
+  "success_criteria": {
+    "verification_commands": [
+      "python -m py_compile app.py",
+      "python -c \"import app; assert app.add(2, 3) == 0\""
+    ],
+    "forbidden_files_changed": ["README.md"],
+    "checkpoint_rewind_restored": true,
+    "rewind_files": ["app.py"],
+    "required_communication": ["rewound"]
+  },
+  "action_constraints": {
+    "required_tools": ["create_checkpoint", "edit_file", "execute_safe_rewind"],
+    "required_approvals": ["edit_file", "execute_safe_rewind"]
+  }
+}

@@ -62,7 +62,7 @@ pp-Echo 是一个面向真实仓库工作的本地编程 Agent，也是一个适
 | 能力扩展 | Skills、可执行扩展、MCP server 集成、资源 manifest 和能力发现目录 | `src/pp_agent/app/bootstrap.py`, `src/pp_agent/mcp/*`, `src/pp_agent/extensions/*`, `src/pp_agent/skills/*` |
 | 子 Agent 编排 | 显式 `@subagent` handoff、受控 fan-out、子能力画像和 patch artifact 暂存 | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
 | 多界面 | CLI chat、Textual TUI、FastAPI + React Web UI、审批流、项目切换和运行状态 | `src/pp_agent/cli/*`, `src/pp_agent/tui/*`, `src/pp_agent/web/*`, `web/*` |
-| 评测与诊断 | Live eval、确定性 benchmark、runtime doctor/report、legacy-hint doctor 和能力检查 | `evals/*`, `tests/benchmarks/*`, `src/pp_agent/cli/commands/*` |
+| 评测与诊断 | τ-style eval、确定性 benchmark、runtime doctor/report 和能力检查 | `evals/*`, `tests/benchmarks/*`, `src/pp_agent/cli/commands/*` |
 
 ## 架构概览
 
@@ -167,9 +167,8 @@ pp-Echo 按工程 Agent 来评测，而不只是看 Prompt 效果。
 | 评测层 | 规模 | 证明什么 | 入口 |
 | --- | ---: | --- | --- |
 | Live interview demo | 12 cases | 直接回答、仓库理解、工具调用、安全审批和显式子 Agent handoff | [docs/evaluation-demo.md](../evaluation-demo.md) |
-| Main agent eval | 60 cases | 工具、安全、协作、记忆和中文技术表达的更广覆盖 | [docs/evaluation-demo.md](../evaluation-demo.md) |
+| Tau-style agent eval | `pp_echo_core` | 环境终态、沟通奖励、动作约束和安全约束 | [docs/evaluation-demo.md](../evaluation-demo.md) |
 | Deterministic benchmark | 15 tasks | planner gating、rewind、MCP lazy activation 和 compaction 的确定性验证 | [docs/benchmarks/latest.md](../benchmarks/latest.md) |
-| Stress eval | 10 cases | 更长、更高风险场景中的 shell 审批和子 Agent 委派 | [docs/evaluation-demo.md](../evaluation-demo.md) |
 
 仓库文档中最近记录的本地 live demo 结果：
 

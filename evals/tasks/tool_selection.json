@@ -1,0 +1,21 @@
+{
+  "id": "tool_selection",
+  "name": "Select read/search tools before answering",
+  "category": "tool_selection",
+  "workspace_fixture": "python_basic",
+  "max_turns": 2,
+  "user_agenda": [
+    {"kind": "message", "text": "Inspect the project and explain where add() is implemented."}
+  ],
+  "success_criteria": {
+    "verification_commands": [
+      "python -c \"from pathlib import Path; assert Path('app.py').exists()\""
+    ],
+    "forbidden_files_changed": ["app.py", "README.md"],
+    "required_communication": ["app.py"]
+  },
+  "action_constraints": {
+    "required_tools": ["read_file", "grep_code"],
+    "forbidden_tools": ["write_file", "edit_file", "run_shell"]
+  }
+}

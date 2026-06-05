@@ -172,33 +172,49 @@ python -m pp_agent.cli.main memory search "project conventions" --scope workspac
 | Browser 工具如何受控执行 | `src/pp_agent/browser/*`, `src/pp_agent/web_tools/*` |
 | SubAgent 如何受控分工 | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
 
-## Agent Eval Baseline
+## Tau-style Agent Eval
 
-在升级 Agent Kernel、EventBus、ContextEngine、SessionTree 之前，pp-Echo 先建立了一套可回归的 Agent Eval baseline。当前默认 baseline 使用 `deterministic` 模式跑 100 条 case，不依赖真实 LLM，适合 CI 和重构前后对比。
+pp-Echo 现在使用 τ-bench 风格的 Agent Eval：每个 case 都在隔离 workspace 中运行，由脚本用户驱动 agent，多轮交互后根据最终状态、沟通内容、工具轨迹、审批和安全约束评分。默认 `deterministic` 模式不依赖真实 LLM，适合 CI 和重构前后对比。
 
-![pp-Echo 100-case eval baseline](evals/reports/latest.svg)
+![pp-Echo tau-style eval report](evals/reports/latest.svg)
 
-最近一次 100-case deterministic baseline：
+最近一次 100-case deterministic `pp_echo_core` 评估：
 
-| 指标 | 结果 |
-| --- | ---: |
-| Total cases | 100 |
-| Pass / fail / pending | 86 / 0 / 14 |
-| Task success rate | 86.00% |
-| Safety rate | 100.00% |
-| Tool success rate | 100.00% |
-| Approval recall | 100.00% |
+### Category Summary
 
-这张图展示的是当前 Agent 工程能力的基线，而不是宣传分数。`pending` 的 14 条全部来自 `memory_recall`：scorer 已经设计了 memory recall trace 接口，但真实 runtime 的 memory event/trace 还需要后续接入。也就是说，当前 baseline 主要覆盖文件编辑、工具选择、审批、安全路径、checkpoint rewind 和受控 SubAgent；memory recall 会在事件流补齐后转为可判定 case。
+| Category | Total | Pass | Pending | Success | State | Communication | Action | Safety |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `approval` | 14 | 14 | 0 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% |
+| `checkpoint` | 14 | 14 | 0 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% |
+| `file_edit` | 15 | 15 | 0 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% |
+| `memory` | 14 | 14 | 0 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% |
+| `safety` | 14 | 14 | 0 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% |
+| `subagent` | 14 | 14 | 0 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% |
+| `tool_selection` | 15 | 15 | 0 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% |
+
+
+这张图展示的是当前 Agent 工程能力的基线，而不是宣传分数。
 
 运行方式：
 
 ```powershell
-python evals/runner.py --suite baseline --mode deterministic --cases 100
-python evals/runner.py --suite baseline --mode live --model your_model_name --cases 10 --timeout-seconds 180
+cd "E:\Pycharm Project\pp-Echo"
+$env:PYTHONPATH="src"
+
+# 稳定离线评估：不调用真实 LLM，适合 CI 和重构回归
+python -m pp_agent.cli.main eval run --suite pp_echo_core --mode deterministic --cases 100
+python -m pp_agent.cli.main eval report
+
+# 等价脚本入口
+python evals/runner.py --suite pp_echo_core --mode deterministic --cases 100
+
+# 真实 agent 评估：会调用当前配置的模型，建议先小样本运行
+$env:PP_AGENT_API_KEY="your_api_key"
+python -m pp_agent.cli.main eval run --suite pp_echo_core --mode live --model your_model_name --cases 3 --timeout-seconds 180
+python -m pp_agent.cli.main eval report
 ```
 
-报告会写入 `evals/reports/latest.json`、`evals/reports/latest.md` 和 `evals/reports/latest.svg`，并自动保存带时间戳的历史报告，方便后续重构后做趋势对比。
+报告会写入 `evals/reports/latest.json`、`evals/reports/latest.md` 和 `evals/reports/latest.svg`。如需保存带时间戳的历史报告，运行时追加 `--save-history`。
 
 ## mini-pp-echo 教学版
 

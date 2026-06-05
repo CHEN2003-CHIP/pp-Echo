@@ -1,95 +1,30 @@
-# pp-Echo Agent Eval Baseline
+# pp-Echo Tau-Style Agent Eval
 
-This directory contains the first baseline eval framework for pp-Echo. It is intentionally separate from the core runtime so future Agent Kernel, EventBus, ContextEngine, and SessionTree changes can be compared against the same task set.
-
-## Eval Modes
-
-- `deterministic`: uses `AgentEvalAdapter` with scripted behavior. It is suitable for CI and scorer development.
-- `live`: runs the real CLI runtime through `python -m pp_agent.cli.main run ... --json`. It is for before/after refactor comparisons and should not run in CI by default.
+This directory contains the canonical pp-Echo agent eval suite. It follows the τ-bench style: each case runs inside an isolated workspace environment, a scripted user drives turns, the adapter records the agent trace, and scoring is based on final state plus action and communication rewards.
 
 ## Run
 
 ```powershell
-python evals/runner.py --suite baseline --mode deterministic --cases 100
-python evals/runner.py --suite baseline --mode live --model <model-name> --cases 10 --timeout-seconds 180
+python evals/runner.py --suite pp_echo_core --mode deterministic --cases 100
+python -m pp_agent.cli.main eval run --suite pp_echo_core --mode deterministic --cases 100
+python -m pp_agent.cli.main eval report --json
 ```
 
-Reports are written to:
+Live mode uses the real runtime and may spend tokens:
 
-```text
-evals/reports/latest.json
-evals/reports/latest.md
-evals/reports/latest.svg
+```powershell
+python -m pp_agent.cli.main eval run --suite pp_echo_core --mode live --model your_model_name --cases 3 --timeout-seconds 180
 ```
 
-The runner also saves timestamped history files such as:
+## Layout
 
-```text
-evals/reports/baseline-deterministic-YYYYMMDD-HHMMSS.json
-evals/reports/baseline-deterministic-YYYYMMDD-HHMMSS.md
-evals/reports/baseline-deterministic-YYYYMMDD-HHMMSS.svg
-```
+- `suites/pp_echo_core.json`: ordered task list.
+- `tasks/*.json`: task specs with user agenda, success criteria, and action constraints.
+- `fixtures/*`: copied into a temporary workspace for each case.
+- `reports/latest.json`, `latest.md`, `latest.svg`: generated report outputs.
 
 ## Metrics
 
-Reports include:
+Reports include task success rate, state reward, communication reward, action reward, safety rate, safety violations, approval recall, tool success rate, average tool calls, average turns, and per-category summaries.
 
-- task success rate
-- tool success rate
-- safety rate and safety violation count
-- approval recall
-- average tool calls
-- average duration
-- category-level summaries
-- per-case failure reasons
-- an SVG chart for quick visual comparison
-
-## Live Runtime Notes
-
-Before running live mode, configure the same environment you use for pp-Echo:
-
-```powershell
-set PYTHONPATH=src
-set PP_AGENT_API_KEY=your_api_key
-set PP_AGENT_MODEL=your_model_name
-```
-
-Then run:
-
-```powershell
-python evals/runner.py --suite baseline --mode live --model %PP_AGENT_MODEL% --cases 10
-```
-
-`--model` is recorded in the report for comparison. Configure the actual runtime model through pp-Echo's normal config or `PP_AGENT_MODEL` before running. Live mode can spend real tokens and may create pending approvals. Start with `--cases 1` or `--cases 10`, then scale up.
-
-## Task Format
-
-Each task file in `evals/tasks/*.yaml` is a YAML-compatible JSON document with:
-
-- `id`
-- `name`
-- `category`
-- `workspace_fixture`
-- `user_goal`
-- `expected_files_changed`
-- `forbidden_files_changed`
-- `required_approvals`
-- `forbidden_tools`
-- `verification_commands`
-- `success_criteria`
-
-## Current Coverage
-
-Fully implemented in deterministic mode:
-
-- 100-case expanded baseline from the seven task templates
-- file edit baseline
-- tool selection trace checks
-- approval-required checks
-- protected path safety checks
-- checkpoint rewind restoration checks
-- subagent limited-tools checks
-
-Pending until runtime event/trace wiring exists:
-
-- memory recall event verification
+The old prompt eval datasets and `contains`/`tool_called` expectation runner were removed. New cases should be expressed as environment tasks with final-state assertions.

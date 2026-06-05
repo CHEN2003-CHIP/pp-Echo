@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from evals.report import build_report, write_report
+from pp_agent.evaluation.models import CaseScore
+from pp_agent.evaluation.reports import build_report, write_report
 
 
 def test_build_report_aggregates_required_metrics() -> None:
@@ -13,43 +14,20 @@ def test_build_report_aggregates_required_metrics() -> None:
         provider="scripted",
         model="ScriptedLLM",
         commit_hash="abc123",
-        case_results=[
-            {
-                "task_id": "pass",
-                "passed": True,
-                "pending": False,
-                "failure_reasons": [],
-                "safety_violations": [],
-                "approval_recall": 1.0,
-                "tool_success_rate": 1.0,
-                "tool_call_count": 2,
-                "duration_seconds": 0.2,
-                "category": "file_edit",
-            },
-            {
-                "task_id": "fail",
-                "passed": False,
-                "pending": False,
-                "failure_reasons": ["forbidden file changed: .env"],
-                "safety_violations": ["forbidden file changed: .env"],
-                "approval_recall": 0.0,
-                "tool_success_rate": 0.0,
-                "tool_call_count": 1,
-                "duration_seconds": 0.4,
-                "category": "safety",
-            },
-            {
-                "task_id": "pending",
-                "passed": False,
-                "pending": True,
-                "failure_reasons": ["memory recall trace pending"],
-                "safety_violations": [],
-                "approval_recall": 1.0,
-                "tool_success_rate": 1.0,
-                "tool_call_count": 0,
-                "duration_seconds": 0.0,
-                "category": "memory",
-            },
+        scores=[
+            CaseScore(task_id="pass", category="file_edit", passed=True, state_reward=1.0, communication_reward=1.0, action_reward=1.0, tool_call_count=2, duration_seconds=0.2),
+            CaseScore(
+                task_id="fail",
+                category="safety",
+                passed=False,
+                failure_reasons=["forbidden file changed: .env"],
+                safety_violations=["forbidden file changed: .env"],
+                approval_recall=0.0,
+                tool_success_rate=0.0,
+                tool_call_count=1,
+                duration_seconds=0.4,
+            ),
+            CaseScore(task_id="pending", category="memory", passed=False, pending=True, failure_reasons=["pending action"], state_reward=1.0, communication_reward=1.0, action_reward=0.0),
         ],
     )
 
@@ -63,6 +41,7 @@ def test_build_report_aggregates_required_metrics() -> None:
     assert report.approval_recall == 2 / 3
     assert report.tool_success_rate == 2 / 3
     assert report.average_tool_calls == 1.0
+    assert report.state_reward == 2 / 3
     assert report.category_summary["file_edit"]["success_rate"] == 1.0
 
 
@@ -73,20 +52,7 @@ def test_write_report_creates_latest_json_and_markdown(tmp_path: Path) -> None:
         provider="scripted",
         model="ScriptedLLM",
         commit_hash="abc123",
-        case_results=[
-            {
-                "task_id": "case-1",
-                "passed": True,
-                "pending": False,
-                "failure_reasons": [],
-                "safety_violations": [],
-                "approval_recall": 1.0,
-                "tool_success_rate": 1.0,
-                "tool_call_count": 1,
-                "duration_seconds": 0.1,
-                "category": "unit",
-            }
-        ],
+        scores=[CaseScore(task_id="case-1", category="unit", passed=True, state_reward=1.0, communication_reward=1.0, action_reward=1.0, tool_call_count=1, duration_seconds=0.1)],
     )
 
     json_path, md_path = write_report(report, tmp_path)

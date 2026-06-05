@@ -5,45 +5,52 @@ from pathlib import Path
 from typing import Optional
 
 from pp_agent.cli.render.runtime import console
-from pp_agent.evaluation import EvalSummary, load_eval_summary, run_eval_file
+from pp_agent.evaluation.models import EvalReport
+from pp_agent.evaluation.reports import load_latest_report
+from pp_agent.evaluation.runner import run_suite
 
 
 def eval_run_main(
-    dataset: Path,
     workspace: Path,
     *,
-    run_id: Optional[str] = None,
+    suite: str = "pp_echo_core",
+    mode: str = "deterministic",
+    model: Optional[str] = None,
+    cases: Optional[int] = None,
+    seed: int = 0,
+    timeout_seconds: int = 120,
     output_dir: Optional[Path] = None,
-    reuse_session: bool = False,
-    stop_on_failure: bool = False,
-    preflight: bool = False,
+    save_history: bool = False,
     json_mode: bool = False,
-) -> EvalSummary:
-    summary = run_eval_file(
-        dataset,
-        workspace,
-        run_id=run_id,
+) -> EvalReport:
+    repo_root = _repo_root(workspace)
+    report = run_suite(
+        repo_root,
+        suite=suite,
+        mode=mode,
+        model=model,
+        case_count=cases,
+        timeout_seconds=timeout_seconds,
         output_dir=output_dir,
-        reuse_session=reuse_session,
-        stop_on_failure=stop_on_failure,
-        preflight=preflight,
+        save_history=save_history,
     )
     if json_mode:
-        console.print(json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        console.print(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
     else:
-        _print_summary(summary)
-    return summary
+        _print_report(report, output_dir or (repo_root / "evals" / "reports"))
+    return report
 
 
 def eval_report_main(
     workspace: Path,
     *,
-    run_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
     json_mode: bool = False,
-) -> EvalSummary:
+) -> EvalReport:
+    repo_root = _repo_root(workspace)
+    reports_dir = output_dir or (repo_root / "evals" / "reports")
     try:
-        summary = load_eval_summary(workspace, run_id=run_id, output_dir=output_dir)
+        report = load_latest_report(reports_dir)
     except FileNotFoundError as exc:
         if json_mode:
             console.print(json.dumps({"error": str(exc)}, ensure_ascii=False))
@@ -51,52 +58,45 @@ def eval_report_main(
             console.print(f"Eval report not found: {exc}")
         raise SystemExit(1) from exc
     if json_mode:
-        console.print(json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        console.print(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
     else:
-        _print_summary(summary)
-    return summary
+        _print_report(report, reports_dir)
+    return report
 
 
-def _print_summary(summary: EvalSummary) -> None:
-    console.print("Eval Summary")
-    console.print(f"run_id: {summary.run_id}")
+def _print_report(report: EvalReport, reports_dir: Path) -> None:
+    console.print("Tau-Style Eval Report")
+    console.print(f"suite: {report.suite}")
+    console.print(f"mode: {report.mode}")
     console.print(
-        f"cases: {summary.case_count} passed: {summary.passed_count} failed: {summary.failed_count} "
-        f"infra_failed: {summary.infra_failed_count} assertion_failed: {summary.assertion_failed_count} "
-        f"pass_rate: {summary.pass_rate:.2%}"
+        f"cases: {report.total_cases} passed: {report.passed} failed: {report.failed} "
+        f"pending: {report.pending} infra_failed: {report.infra_failed} "
+        f"success_rate: {report.task_success_rate:.2%}"
     )
-    console.print(f"duration_seconds: {summary.duration_seconds:.3f}")
-    console.print(f"result_path: {summary.result_path}")
-    console.print(f"summary_path: {summary.summary_path}")
-    metrics = summary.metrics
-    if metrics:
-        console.print(
-            "metrics: "
-            f"provider_requests={metrics.get('provider_request_count', 0)} "
-            f"tool_calls={metrics.get('tool_call_count', 0)} "
-            f"tool_errors={metrics.get('tool_error_count', 0)} "
-            f"approvals={metrics.get('approval_count', 0)} "
-            f"recall_events={metrics.get('memory_recall_event_count', 0)} "
-            f"recalled_chunks={metrics.get('memory_recalled_chunk_count', 0)} "
-            f"avg_duration={metrics.get('avg_duration_seconds', 0)}"
-        )
-        category_counts = metrics.get("memory_recall_category_counts")
-        if isinstance(category_counts, dict) and category_counts:
+    console.print(
+        "rewards: "
+        f"state={report.state_reward:.2%} "
+        f"communication={report.communication_reward:.2%} "
+        f"action={report.action_reward:.2%} "
+        f"safety={report.safety_rate:.2%}"
+    )
+    console.print(f"result_path: {reports_dir / 'latest.json'}")
+    console.print(f"summary_path: {reports_dir / 'latest.md'}")
+    if report.category_summary:
+        console.print("Category Summary")
+        for category, item in sorted(report.category_summary.items()):
             console.print(
-                "memory recall categories: "
-                + " ".join(f"{category}={count}" for category, count in category_counts.items())
+                f"- {category}: {item.get('passed', 0)}/{item.get('total', 0)} "
+                f"passed ({float(item.get('success_rate', 0.0)):.2%})"
             )
-    if summary.tag_summary:
-        console.print("Tag Summary")
-        for tag, item in summary.tag_summary.items():
-            console.print(
-                f"- {tag}: {item.get('passed_count', 0)}/{item.get('case_count', 0)} "
-                f"passed ({float(item.get('pass_rate', 0.0)):.2%})"
-            )
-    if summary.error_messages:
-        console.print("errors:")
-        for message in summary.error_messages[:5]:
-            console.print(f"- {message}")
+
+
+def _repo_root(workspace: Path) -> Path:
+    current = workspace.resolve(strict=False)
+    for path in [current, *current.parents]:
+        if (path / "pyproject.toml").exists() and (path / "src" / "pp_agent").exists():
+            return path
+    return Path.cwd()
 
 
 __all__ = ["eval_report_main", "eval_run_main"]
