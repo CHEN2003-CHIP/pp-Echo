@@ -130,6 +130,14 @@ test("sanitizeMediaUrl only permits safe media URLs", () => {
   assert.equal(rich.sanitizeMediaUrl("file:///tmp/image.png", { allowRelative: true }), null);
 });
 
+test("partitionVisibleAttachments keeps a small default attachment budget", () => {
+  const attachments = Array.from({ length: 5 }, (_, index) => ({ url: `https://example.com/${index}.png` }));
+  const result = rich.partitionVisibleAttachments(attachments);
+  assert.equal(result.visible.length, 3);
+  assert.equal(result.hiddenCount, 2);
+  assert.equal(rich.MAX_VISIBLE_ATTACHMENTS, 3);
+});
+
 let failures = 0;
 for (const entry of tests) {
   try {

@@ -2,6 +2,7 @@
 
 import difflib
 import json
+import locale
 import re
 import subprocess
 import time
@@ -20,17 +21,76 @@ SEARCH_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 UNIFIED_HUNK_RE = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@")
+DEFAULT_READ_FILE_MAX_CHARS = 20_000
 
 
 class ReadFileTool(BaseTool):
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec(name="read_file", description="Read the contents of a UTF-8 text file.", parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}, permission_domain=PermissionDomain.READ)
+        return ToolSpec(
+            name="read_file",
+            description="Read a text file safely with bounded preview support for long files.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "max_chars": {"type": "integer"},
+                    "offset": {"type": "integer"},
+                },
+                "required": ["path"],
+            },
+            permission_domain=PermissionDomain.READ,
+        )
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         path = self.enforce_policy_for_path(PermissionDomain.READ, arguments["path"])
-        content = path.read_text(encoding="utf-8")
-        return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=content, details={"path": str(path), "size": len(content)})
+        max_chars = max(1, int(arguments.get("max_chars") or DEFAULT_READ_FILE_MAX_CHARS))
+        offset = max(0, int(arguments.get("offset") or 0))
+        raw = path.read_bytes()
+        text, encoding = _decode_text_bytes(raw)
+        content, truncated = _slice_file_preview(text, offset=offset, max_chars=max_chars)
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name=self.spec.name,
+            content=content,
+            details={
+                "path": str(path),
+                "size": len(raw),
+                "encoding": encoding,
+                "text_length": len(text),
+                "truncated": truncated,
+                "offset": offset,
+                "max_chars": max_chars,
+            },
+        )
+
+
+def _decode_text_bytes(raw: bytes) -> tuple[str, str]:
+    for encoding in ("utf-8-sig", "utf-8"):
+        try:
+            return raw.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    fallback = locale.getpreferredencoding(False) or "utf-8"
+    try:
+        return raw.decode(fallback), fallback
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", errors="replace"), "utf-8-replace"
+
+
+def _slice_file_preview(text: str, *, offset: int, max_chars: int) -> tuple[str, bool]:
+    start = min(max(0, offset), len(text))
+    end = min(len(text), start + max_chars)
+    preview = text[start:end]
+    truncated = start > 0 or end < len(text)
+    if truncated:
+        remaining = max(0, len(text) - end)
+        preview = (
+            f"{preview}\n\n"
+            f"[File preview truncated. offset={start}, max_chars={max_chars}, remaining_chars={remaining}. "
+            "Read again with offset/max_chars to continue.]"
+        )
+    return preview, truncated
 
 
 class WriteFileTool(BaseTool):

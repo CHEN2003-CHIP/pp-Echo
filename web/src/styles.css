@@ -699,6 +699,12 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   border: 1px dashed var(--border);
   border-radius: 8px;
 }
+.attachment-overflow {
+  min-height: 96px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
 .stream-cursor,
 .markdown-cursor {
   display: inline-block;

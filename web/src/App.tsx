@@ -27,7 +27,7 @@ import {
   X
 } from "lucide-react";
 import { api, ApprovalActionResponse, ApprovalsSummary, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
-import { extractMessageBody, RichMessageContent } from "./rich-text";
+import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 
 type ViewKey =
   | "chat"
@@ -1702,6 +1702,7 @@ function ToolActivityBlock({ item }: { item: TranscriptItem }) {
         <ChevronRight size={14} />
       </summary>
       <pre>{activity.detail}</pre>
+      <RichMessageAttachments attachments={item.body.attachments} />
     </details>
   );
 }
@@ -2875,7 +2876,7 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
         runtime.push({
           id: `activity-tool:${runtime.length}`,
           role: "activity",
-          body: { text: activity.detail, attachments: [] },
+          body: { text: activity.detail, attachments: toolResultAttachments(event.details || {}) },
           timestamp: event.timestamp,
           activity
         });
@@ -3037,6 +3038,44 @@ function formatToolActivity(event: RuntimeEvent): NonNullable<TranscriptItem["ac
     detail: formatToolEvent(event),
     tone: status.tone,
   };
+}
+
+function toolResultAttachments(details: Record<string, unknown>): RichAttachment[] {
+  const attachments: RichAttachment[] = [];
+  const seen = new Set<string>();
+  const pushAttachment = (item: Record<string, unknown>, rawUrl: string | undefined) => {
+    if (!rawUrl) return;
+    const url = sanitizeMediaUrl(rawUrl, { allowRelative: false });
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    attachments.push({
+      url,
+      alt: firstStringValue(item.title, item.alt),
+      title: firstStringValue(item.title),
+      name: firstStringValue(item.url),
+    });
+  };
+  for (const result of Array.isArray(details.results) ? details.results : []) {
+    if (!result || typeof result !== "object") continue;
+    const item = result as Record<string, unknown>;
+    const rawUrl = firstStringValue(item.image_url, item.image, item.thumbnail, item.thumbnail_url);
+    pushAttachment(item, rawUrl);
+    if (attachments.length >= 3) break;
+  }
+  for (const image of Array.isArray(details.images) ? details.images : []) {
+    if (!image || typeof image !== "object") continue;
+    const item = image as Record<string, unknown>;
+    pushAttachment(item, firstStringValue(item.url, item.src, item.image_url));
+    if (attachments.length >= 3) break;
+  }
+  return attachments;
+}
+
+function firstStringValue(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
 }
 
 function toolActivityStatus(details: Record<string, unknown>, isError?: boolean): { label: string; tone: NonNullable<TranscriptItem["activity"]>["tone"] } {

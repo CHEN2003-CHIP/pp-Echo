@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urljoin, urlparse
 
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.runtime.state import AgentState
@@ -312,16 +313,31 @@ class WebRuntime:
         return result
 
     def _execute_fetch(self, workspace: Path, arguments: dict[str, Any]) -> ToolExecutionResult:
-        url = str(arguments["url"])
+        source_url = str(arguments["url"])
+        url = _github_raw_readme_url(source_url) or source_url
         max_chars = max(1, int(arguments.get("max_chars", 4000)))
+        offset = max(0, int(arguments.get("offset", 0)))
         client = GuardedHttpClient(self._guard_config())
         try:
             response = client.get(url, headers={"User-Agent": "pp-Echo web.fetch"})
-            text = _readable_text(response.text)[:max_chars]
+            decoded, encoding = _decode_response_text(response)
+            response_url = str(response.url)
+            plain_text = _looks_like_plain_text_url(response_url)
+            images = [] if plain_text else _extract_page_images(decoded, base_url=response_url)
+            raw_text = decoded if plain_text else _readable_text(decoded)
+            text, truncated = _slice_text_preview(raw_text, offset=offset, max_chars=max_chars)
             details = {
-                "url": str(response.url),
+                "url": response_url,
+                "source_url": source_url,
+                "raw_url": url if url != source_url else None,
                 "status_code": response.status_code,
                 "text": text,
+                "images": images,
+                "text_length": len(raw_text),
+                "truncated": truncated,
+                "offset": offset,
+                "max_chars": max_chars,
+                "encoding": encoding,
                 "executed_javascript": False,
                 "routing": "guarded_static_fetch",
                 "redirects": list(response.extensions.get("pp_echo_redirects", [])),
@@ -332,6 +348,8 @@ class WebRuntime:
                 f"web.fetch error: {exc}",
                 {
                     "url": url,
+                    "source_url": source_url,
+                    "raw_url": url if url != source_url else None,
                     "error": str(exc),
                     "error_type": type(exc).__name__,
                     "executed_javascript": False,
@@ -470,3 +488,95 @@ def _readable_text(raw: str) -> str:
     value = html.unescape(value)
     value = re.sub(r"\s+", " ", value).strip()
     return value
+
+
+def _extract_page_images(raw: str, *, base_url: str, limit: int = 6) -> list[dict[str, str]]:
+    images: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(raw_url: str, *, title: str = "") -> None:
+        if len(images) >= limit:
+            return
+        value = html.unescape(raw_url or "").strip()
+        if not value:
+            return
+        absolute = urljoin(base_url, value)
+        parsed = urlparse(absolute)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or absolute in seen:
+            return
+        seen.add(absolute)
+        payload = {"url": absolute}
+        if title:
+            payload["title"] = html.unescape(title).strip()
+        images.append(payload)
+
+    meta_patterns = [
+        r'<meta[^>]+(?:property|name)=["\'](?:og:image|og:image:url|twitter:image|twitter:image:src)["\'][^>]+content=["\']([^"\']+)["\'][^>]*>',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|og:image:url|twitter:image|twitter:image:src)["\'][^>]*>',
+        r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\'][^>]*>',
+        r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']image_src["\'][^>]*>',
+    ]
+    for pattern in meta_patterns:
+        for match in re.finditer(pattern, raw, flags=re.I | re.S):
+            add(match.group(1), title="page image")
+
+    for match in re.finditer(r'<img\b[^>]+(?:src|data-src)=["\']([^"\']+)["\'][^>]*>', raw, flags=re.I | re.S):
+        tag = match.group(0)
+        alt_match = re.search(r'\balt=["\']([^"\']*)["\']', tag, flags=re.I | re.S)
+        add(match.group(1), title=alt_match.group(1) if alt_match else "")
+        if len(images) >= limit:
+            break
+    return images
+
+
+def _decode_response_text(response) -> tuple[str, str]:
+    encoding = getattr(response, "encoding", None) or "utf-8"
+    if not hasattr(response, "content"):
+        return str(getattr(response, "text", "")), encoding
+    try:
+        return response.content.decode(encoding), encoding
+    except Exception:
+        try:
+            return response.content.decode("utf-8-sig"), "utf-8-sig"
+        except Exception:
+            return response.content.decode("utf-8", errors="replace"), "utf-8-replace"
+
+
+def _slice_text_preview(text: str, *, offset: int, max_chars: int) -> tuple[str, bool]:
+    start = min(max(0, offset), len(text))
+    end = min(len(text), start + max_chars)
+    preview = text[start:end]
+    truncated = start > 0 or end < len(text)
+    if truncated:
+        remaining = max(0, len(text) - end)
+        preview = (
+            f"{preview}\n\n"
+            f"[Preview truncated. offset={start}, max_chars={max_chars}, remaining_chars={remaining}. "
+            "Fetch again with offset/max_chars to continue.]"
+        )
+    return preview, truncated
+
+
+def _looks_like_plain_text_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    return (
+        parsed.hostname == "raw.githubusercontent.com"
+        or path.endswith((".md", ".markdown", ".txt", ".rst"))
+        or "/raw/" in path
+    )
+
+
+def _github_raw_readme_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.hostname not in {"github.com", "www.github.com"}:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 5 or parts[2] != "blob":
+        return None
+    filename = parts[-1].lower()
+    if not filename.startswith("readme"):
+        return None
+    owner, repo, branch = parts[0], parts[1], parts[3]
+    tail = "/".join(parts[4:])
+    return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{tail}"

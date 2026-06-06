@@ -165,13 +165,15 @@ class BraveSearchProvider:
         payload = response.json()
         results = []
         for item in payload.get("web", {}).get("results", [])[:limit]:
-            results.append(
-                {
-                    "title": str(item.get("title") or item.get("url") or "").strip(),
-                    "url": str(item.get("url") or "").strip(),
-                    "snippet": str(item.get("description") or "").strip(),
-                }
-            )
+            result = {
+                "title": str(item.get("title") or item.get("url") or "").strip(),
+                "url": str(item.get("url") or "").strip(),
+                "snippet": str(item.get("description") or "").strip(),
+            }
+            image_url = _result_image_url(item)
+            if image_url:
+                result["image_url"] = image_url
+            results.append(result)
         return results
 
 
@@ -317,10 +319,44 @@ def _normalize_results(items: list[Any], *, limit: int) -> list[dict[str, str]]:
         url = str(item.get("url") or item.get("link") or item.get("html_url") or "").strip()
         snippet = str(item.get("content") or item.get("snippet") or item.get("description") or "").strip()
         if title or url:
-            results.append({"title": title or url, "url": url, "snippet": snippet})
+            normalized = {"title": title or url, "url": url, "snippet": snippet}
+            image_url = _result_image_url(item)
+            if image_url:
+                normalized["image_url"] = image_url
+            results.append(normalized)
         if len(results) >= limit:
             break
     return results
+
+
+def _result_image_url(item: dict[str, Any]) -> str:
+    for key in ("image_url", "image", "thumbnail", "thumbnail_url"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            nested = _first_nested_url(value)
+            if nested:
+                return nested
+    pagemap = item.get("pagemap")
+    if isinstance(pagemap, dict):
+        for key in ("cse_thumbnail", "metatags"):
+            value = pagemap.get(key)
+            if isinstance(value, list):
+                for entry in value:
+                    if isinstance(entry, dict):
+                        nested = _first_nested_url(entry)
+                        if nested:
+                            return nested
+    return ""
+
+
+def _first_nested_url(item: dict[str, Any]) -> str:
+    for key in ("src", "url", "content", "image", "og:image", "twitter:image"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _zhipu_results(payload: dict[str, Any], *, limit: int) -> list[dict[str, str]]:

@@ -60,6 +60,60 @@ test("buildTranscript renders tool completion as collapsed activity", () => {
   assert.equal(assistantItems.some((item) => item.body.text.includes("25")), false);
 });
 
+test("buildTranscript attaches safe web result images to tool activity", () => {
+  const transcript = app.buildTranscript(
+    { messages: [] },
+    [
+      {
+        type: "tool_end",
+        timestamp: 1,
+        tool_name: "web.news",
+        message: "News result",
+        details: {
+          tool_call_id: "call-images",
+          results: [
+            { title: "A", url: "https://example.com/a", image_url: "https://example.com/a.png" },
+            { title: "B", url: "https://example.com/b", image_url: "javascript:alert(1)" },
+            { title: "C", url: "https://example.com/c", thumbnail: "https://example.com/c.png" },
+          ],
+        },
+      },
+    ],
+  );
+
+  const activity = transcript.find((item) => item.role === "activity");
+  assert.ok(activity);
+  assert.equal(activity.body.attachments.length, 2);
+  assert.equal(activity.body.attachments[0].url, "https://example.com/a.png");
+  assert.equal(activity.body.attachments[1].url, "https://example.com/c.png");
+});
+
+test("buildTranscript attaches fetched page images to tool activity", () => {
+  const transcript = app.buildTranscript(
+    { messages: [] },
+    [
+      {
+        type: "tool_end",
+        timestamp: 1,
+        tool_name: "web.fetch",
+        message: "Fetched article",
+        details: {
+          tool_call_id: "call-fetch-images",
+          images: [
+            { url: "https://example.com/hero.png", title: "Hero" },
+            { url: "file:///secret.png", title: "Blocked" },
+          ],
+        },
+      },
+    ],
+  );
+
+  const activity = transcript.find((item) => item.role === "activity");
+  assert.ok(activity);
+  assert.equal(activity.body.attachments.length, 1);
+  assert.equal(activity.body.attachments[0].url, "https://example.com/hero.png");
+});
+
 test("buildTranscript renders approval results as assistant feedback", () => {
   const transcript = app.buildTranscript(
     {

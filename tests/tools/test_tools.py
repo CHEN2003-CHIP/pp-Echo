@@ -283,6 +283,37 @@ def test_registry_materializes_tools_on_execute_and_reuses_cached_instance(tmp_p
     assert "read_file" in registry._instances
 
 
+def test_read_file_truncates_long_content_and_supports_offsets(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "README.md").write_text("0123456789" * 10, encoding="utf-8")
+
+    first = registry.execute("read_file", {"path": "README.md", "max_chars": 12})
+    second = registry.execute("read_file", {"path": "README.md", "offset": 12, "max_chars": 12})
+
+    assert first.details["truncated"] is True
+    assert first.details["text_length"] == 100
+    assert first.details["max_chars"] == 12
+    assert first.content.startswith("012345678901")
+    assert "Read again with offset/max_chars" in first.content
+    assert second.details["offset"] == 12
+    assert second.content.startswith("234567890123")
+
+
+def test_read_file_handles_bom_and_invalid_utf8_with_details(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "bom.md").write_bytes("\ufeffhello".encode("utf-8"))
+    (tmp_path / "latin1.txt").write_bytes("caf\xe9".encode("latin-1"))
+
+    bom = registry.execute("read_file", {"path": "bom.md"})
+    latin = registry.execute("read_file", {"path": "latin1.txt"})
+
+    assert bom.content == "hello"
+    assert bom.details["encoding"] == "utf-8-sig"
+    assert "caf" in latin.content
+    assert latin.details["encoding"]
+    assert latin.details["truncated"] is False
+
+
 def test_registry_does_not_cache_failed_tool_materialization(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     calls = 0

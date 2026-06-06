@@ -30,6 +30,7 @@ const MAX_MARKDOWN_RENDER_CHARS = 20_000;
 const MAX_INLINE_MEDIA_URL_CHARS = 4096;
 const MAX_MARKDOWN_PARSE_LINES = 1200;
 const MAX_MARKDOWN_PARSE_BLOCKS = 800;
+export const MAX_VISIBLE_ATTACHMENTS = 3;
 
 export function extractMessageBody(message: SnapshotMessage): RichMessageBody {
   const parts = Array.isArray(message.content) ? message.content : [];
@@ -90,9 +91,10 @@ export function RichMarkdown({ text, className = "", streaming = false, plain = 
 
 export function RichMessageAttachments({ attachments }: { attachments: RichAttachment[] }) {
   if (!attachments.length) return null;
+  const { visible, hiddenCount } = partitionVisibleAttachments(attachments);
   return (
     <div className="attachment-grid">
-      {attachments.map((attachment, index) => {
+      {visible.map((attachment, index) => {
         const label = attachment.alt || attachment.title || attachment.name || `Image ${index + 1}`;
         return (
           <figure className="attachment-card" key={`${attachment.url}-${index}`}>
@@ -106,8 +108,21 @@ export function RichMessageAttachments({ attachments }: { attachments: RichAttac
           </figure>
         );
       })}
+      {hiddenCount > 0 ? (
+        <div className="attachment-card attachment-overflow">
+          <span>{hiddenCount} more attachment{hiddenCount === 1 ? "" : "s"}</span>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+export function partitionVisibleAttachments(attachments: RichAttachment[], limit = MAX_VISIBLE_ATTACHMENTS) {
+  const safeLimit = Math.max(0, limit);
+  return {
+    visible: attachments.slice(0, safeLimit),
+    hiddenCount: Math.max(0, attachments.length - safeLimit),
+  };
 }
 
 export function RichMessageContent({ text, attachments, streaming = false, plain = false }: { text: string; attachments: RichAttachment[]; streaming?: boolean; plain?: boolean }) {
