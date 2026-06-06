@@ -3047,6 +3047,7 @@ function toolResultAttachments(details: Record<string, unknown>): RichAttachment
     if (!rawUrl) return;
     const url = sanitizeMediaUrl(rawUrl, { allowRelative: false });
     if (!url || seen.has(url)) return;
+    if (looksLikeDecorativeImage(url, firstStringValue(item.title, item.alt) || "")) return;
     seen.add(url);
     attachments.push({
       url,
@@ -3069,6 +3070,14 @@ function toolResultAttachments(details: Record<string, unknown>): RichAttachment
     if (attachments.length >= 3) break;
   }
   return attachments;
+}
+
+function looksLikeDecorativeImage(url: string, label: string) {
+  const value = `${url} ${label}`.toLowerCase();
+  if (["logo", "favicon", "icon", "sprite", "placeholder", "blank", "loading", "avatar", "qrcode", "qr-code", "wechat", "weixin", "广告", "二维码", "图标"].some((word) => value.includes(word))) {
+    return true;
+  }
+  return /(^|[/_.-])(ad|ads|advert|banner|sponsor|promo)([/_.-]|$)/.test(value);
 }
 
 function firstStringValue(...values: unknown[]) {

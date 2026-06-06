@@ -75,6 +75,7 @@ test("buildTranscript attaches safe web result images to tool activity", () => {
             { title: "A", url: "https://example.com/a", image_url: "https://example.com/a.png" },
             { title: "B", url: "https://example.com/b", image_url: "javascript:alert(1)" },
             { title: "C", url: "https://example.com/c", thumbnail: "https://example.com/c.png" },
+            { title: "Logo", url: "https://example.com/logo", image_url: "https://example.com/logo.png" },
           ],
         },
       },

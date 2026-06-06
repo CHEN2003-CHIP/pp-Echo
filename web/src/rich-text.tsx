@@ -99,7 +99,7 @@ export function RichMessageAttachments({ attachments }: { attachments: RichAttac
         return (
           <figure className="attachment-card" key={`${attachment.url}-${index}`}>
             <a href={attachment.url} target="_blank" rel="noreferrer noopener" title={label}>
-              <img src={attachment.url} alt={attachment.alt || label} loading="lazy" />
+              <img src={attachment.url} alt={attachment.alt || label} loading="lazy" referrerPolicy="no-referrer" />
             </a>
             <figcaption>
               <span>{label}</span>
@@ -558,7 +558,7 @@ function MarkdownImage({ url, alt, title }: { url: string; alt?: string; title?:
   return (
     <figure className="md-image">
       <a href={url} target="_blank" rel="noreferrer noopener" title={label}>
-        <img src={url} alt={alt || label} loading="lazy" onError={() => setBroken(true)} />
+        <img src={url} alt={alt || label} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} />
       </a>
       {title || alt ? <figcaption>{title || alt}</figcaption> : null}
     </figure>

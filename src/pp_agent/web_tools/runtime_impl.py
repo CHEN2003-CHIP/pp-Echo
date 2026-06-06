@@ -162,6 +162,8 @@ class WebRuntime:
                 "properties": {
                     "url": {"type": "string"},
                     "max_chars": {"type": "integer"},
+                    "timeout_seconds": {"type": "integer"},
+                    "include_decorative_images": {"type": "boolean"},
                 },
                 "required": ["url"],
             },
@@ -317,13 +319,19 @@ class WebRuntime:
         url = _github_raw_readme_url(source_url) or source_url
         max_chars = max(1, int(arguments.get("max_chars", 4000)))
         offset = max(0, int(arguments.get("offset", 0)))
-        client = GuardedHttpClient(self._guard_config())
+        timeout_seconds = self._fetch_timeout(arguments.get("timeout_seconds"))
+        include_decorative_images = bool(arguments.get("include_decorative_images", False))
+        client = GuardedHttpClient(self._guard_config(timeout_seconds=timeout_seconds))
         try:
             response = client.get(url, headers={"User-Agent": "pp-Echo web.fetch"})
             decoded, encoding = _decode_response_text(response)
             response_url = str(response.url)
             plain_text = _looks_like_plain_text_url(response_url)
-            images = [] if plain_text else _extract_page_images(decoded, base_url=response_url)
+            images = [] if plain_text else _extract_page_images(
+                decoded,
+                base_url=response_url,
+                include_decorative=include_decorative_images,
+            )
             raw_text = decoded if plain_text else _readable_text(decoded)
             text, truncated = _slice_text_preview(raw_text, offset=offset, max_chars=max_chars)
             details = {
@@ -337,6 +345,7 @@ class WebRuntime:
                 "truncated": truncated,
                 "offset": offset,
                 "max_chars": max_chars,
+                "timeout_seconds": timeout_seconds,
                 "encoding": encoding,
                 "executed_javascript": False,
                 "routing": "guarded_static_fetch",
@@ -352,6 +361,7 @@ class WebRuntime:
                     "raw_url": url if url != source_url else None,
                     "error": str(exc),
                     "error_type": type(exc).__name__,
+                    "timeout_seconds": timeout_seconds,
                     "executed_javascript": False,
                     "routing": "guarded_static_fetch",
                 },
@@ -417,10 +427,15 @@ class WebRuntime:
     def _web_config(self) -> WebCapabilityConfig:
         return self.settings.capabilities.web if self.settings is not None else WebCapabilityConfig()
 
-    def _guard_config(self) -> WebGuardConfig:
+    def _fetch_timeout(self, value: Any) -> int:
+        configured = self._web_config().fetch_timeout_seconds
+        timeout = configured if value is None else int(value)
+        return max(1, min(30, timeout))
+
+    def _guard_config(self, *, timeout_seconds: int | None = None) -> WebGuardConfig:
         config = self._web_config()
         return WebGuardConfig(
-            timeout_seconds=config.fetch_timeout_seconds,
+            timeout_seconds=timeout_seconds or config.fetch_timeout_seconds,
             allow_private_network=config.guard_allow_private_network,
             max_redirects=config.guard_max_redirects,
         )
@@ -490,7 +505,7 @@ def _readable_text(raw: str) -> str:
     return value
 
 
-def _extract_page_images(raw: str, *, base_url: str, limit: int = 6) -> list[dict[str, str]]:
+def _extract_page_images(raw: str, *, base_url: str, limit: int = 6, include_decorative: bool = False) -> list[dict[str, str]]:
     images: list[dict[str, str]] = []
     seen: set[str] = set()
 
@@ -503,6 +518,8 @@ def _extract_page_images(raw: str, *, base_url: str, limit: int = 6) -> list[dic
         absolute = urljoin(base_url, value)
         parsed = urlparse(absolute)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc or absolute in seen:
+            return
+        if not include_decorative and _looks_like_decorative_image(absolute, title):
             return
         seen.add(absolute)
         payload = {"url": absolute}
@@ -527,6 +544,39 @@ def _extract_page_images(raw: str, *, base_url: str, limit: int = 6) -> list[dic
         if len(images) >= limit:
             break
     return images
+
+
+def _looks_like_decorative_image(url: str, title: str = "") -> bool:
+    parsed = urlparse(url)
+    haystack = " ".join(
+        part.lower()
+        for part in [
+            parsed.path,
+            parsed.query,
+            title,
+        ]
+        if part
+    )
+    decorative_words = (
+        "logo",
+        "favicon",
+        "icon",
+        "sprite",
+        "placeholder",
+        "blank",
+        "loading",
+        "avatar",
+        "qrcode",
+        "qr-code",
+        "wechat",
+        "weixin",
+        "广告",
+        "二维码",
+        "图标",
+    )
+    if any(word in haystack for word in decorative_words):
+        return True
+    return bool(re.search(r"(^|[/_.-])(ad|ads|advert|banner|sponsor|promo)([/_.-]|$)", haystack))
 
 
 def _decode_response_text(response) -> tuple[str, str]:

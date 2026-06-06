@@ -211,7 +211,7 @@
 
       // Static search/fetch HTTP timeouts.
       "search_timeout_seconds": 10,
-      "fetch_timeout_seconds": 10,
+      "fetch_timeout_seconds": 20,
 
       // Zhipu search is skipped unless this environment variable is set.
       "zhipu_api_key_env": "ZHIPUAI_API_KEY",

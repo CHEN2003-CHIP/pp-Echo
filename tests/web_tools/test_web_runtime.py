@@ -46,6 +46,23 @@ def test_web_fetch_does_not_execute_js(tmp_path: Path, monkeypatch) -> None:
     assert "window.executed" not in result.details["text"]
 
 
+def test_web_fetch_timeout_is_bounded_per_call(tmp_path: Path, monkeypatch) -> None:
+    seen_timeouts: list[int] = []
+
+    class TimeoutCapturingClient(FakeHttpClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            seen_timeouts.append(kwargs["timeout"])
+
+    registry = ToolRegistry(tmp_path)
+    WebRuntime(tmp_path, registry)
+    monkeypatch.setattr("pp_agent.web_tools.guarded_fetch.httpx.Client", TimeoutCapturingClient)
+
+    result = registry.execute("web.fetch", {"url": "https://example.com/", "timeout_seconds": 99})
+
+    assert seen_timeouts == [30]
+    assert result.details["timeout_seconds"] == 30
+
+
 def test_web_fetch_converts_github_readme_blob_to_raw_preview(tmp_path: Path, monkeypatch) -> None:
     seen: list[str] = []
 
@@ -128,6 +145,47 @@ def test_web_fetch_extracts_page_images_from_html(tmp_path: Path, monkeypatch) -
     assert {"url": "https://cdn.example.com/twitter.jpg", "title": "page image"} in result.details["images"]
     assert any(item["url"] == "https://news.example.com/inline.jpg" for item in result.details["images"])
     assert "Readable" in result.details["text"]
+
+
+def test_web_fetch_filters_decorative_images_by_default(tmp_path: Path, monkeypatch) -> None:
+    class DecorativePageResponse:
+        status_code = 200
+        url = "https://news.example.com/article"
+        encoding = "utf-8"
+        content = b"""
+        <html><body>
+          <img src="/img/logo_v6.png" alt="site logo">
+          <img src="/ads/banner.jpg" alt="advert banner">
+          <img src="/photos/story.jpg" alt="Story photo">
+        </body></html>
+        """
+        extensions: dict[str, object] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class DecorativeHttpClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def __enter__(self) -> "DecorativeHttpClient":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def request(self, *_args: Any, **_kwargs: Any) -> DecorativePageResponse:
+            return DecorativePageResponse()
+
+    registry = ToolRegistry(tmp_path)
+    WebRuntime(tmp_path, registry)
+    monkeypatch.setattr("pp_agent.web_tools.guarded_fetch.httpx.Client", DecorativeHttpClient)
+
+    result = registry.execute("web.fetch", {"url": "https://news.example.com/article"})
+    all_images = registry.execute("web.fetch", {"url": "https://news.example.com/article", "include_decorative_images": True})
+
+    assert [item["url"] for item in result.details["images"]] == ["https://news.example.com/photos/story.jpg"]
+    assert len(all_images.details["images"]) == 3
 
 
 def test_normalize_results_preserves_image_url_candidates() -> None:

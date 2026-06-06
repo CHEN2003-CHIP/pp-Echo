@@ -189,7 +189,7 @@
       "_comment_search_timeout_seconds": "Static search HTTP timeout in seconds.",
       "search_timeout_seconds": 10,
       "_comment_fetch_timeout_seconds": "Static fetch HTTP timeout in seconds.",
-      "fetch_timeout_seconds": 10,
+      "fetch_timeout_seconds": 20,
       "_comment_zhipu_api_key_env": "Zhipu search is skipped unless this environment variable is set.",
       "zhipu_api_key_env": "ZHIPUAI_API_KEY",
       "_comment_zhipu_base_url": "Zhipu search endpoint.",

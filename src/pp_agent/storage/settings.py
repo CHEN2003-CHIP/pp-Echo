@@ -222,7 +222,7 @@ class WebCapabilityConfig(BaseModel):
     guard_allow_private_network: bool = False
     guard_max_redirects: int = 5
     search_timeout_seconds: int = 10
-    fetch_timeout_seconds: int = 10
+    fetch_timeout_seconds: int = 20
     zhipu_api_key_env: str = "ZHIPUAI_API_KEY"
     zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4/tools"
 
