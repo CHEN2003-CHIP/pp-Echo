@@ -94,6 +94,39 @@ test("buildTranscript renders approval results as assistant feedback", () => {
   assert.ok(assistantItems.some((item) => item.body.text.includes("1026")));
 });
 
+test("buildTurnMarkers groups transcript by user turns", () => {
+  const markers = app.buildTurnMarkers([
+    { id: "u1", role: "user", body: { text: "First question", attachments: [] } },
+    { id: "a1", role: "assistant", body: { text: "First answer", attachments: [] } },
+    { id: "u2", role: "user", body: { text: "Second question", attachments: [] } },
+    { id: "act1", role: "activity", body: { text: "Tool output", attachments: [] }, activity: { title: "Done", summary: "ran tests", detail: "ok" } },
+    { id: "a2", role: "assistant", body: { text: "Second answer", attachments: [] } },
+  ]);
+
+  assert.equal(markers.length, 2);
+  assert.equal(markers[0].id, "u1");
+  assert.equal(markers[0].turnNumber, 1);
+  assert.equal(markers[0].userPreview, "First question");
+  assert.equal(markers[0].assistantPreview, "First answer");
+  assert.equal(markers[1].id, "u2");
+  assert.equal(markers[1].turnNumber, 2);
+  assert.ok(markers[1].assistantPreview.includes("ran tests"));
+  assert.ok(markers[1].assistantPreview.includes("Second answer"));
+});
+
+test("buildTurnMarkers handles empty and single-turn transcripts", () => {
+  assert.deepEqual(app.buildTurnMarkers([]), []);
+
+  const markers = app.buildTurnMarkers([
+    { id: "intro", role: "assistant", body: { text: "Hello", attachments: [] } },
+    { id: "u1", role: "user", body: { text: "Only turn", attachments: [] } },
+  ]);
+
+  assert.equal(markers.length, 1);
+  assert.equal(markers[0].userPreview, "Only turn");
+  assert.equal(markers[0].assistantPreview, "");
+});
+
 let failures = 0;
 for (const entry of tests) {
   try {

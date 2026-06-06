@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Activity,
+  ArrowDown,
   Bot,
   BookOpen,
   Boxes,
@@ -63,6 +64,13 @@ type TranscriptItem = {
   };
 };
 
+type TurnMarker = {
+  id: string;
+  turnNumber: number;
+  userPreview: string;
+  assistantPreview: string;
+};
+
 type Notice = {
   id: string;
   tone: NoticeTone;
@@ -92,6 +100,7 @@ type DirectoryPickerWindow = Window & {
 };
 
 const MAX_SESSION_EVENTS = 2000;
+const SCROLL_BOTTOM_THRESHOLD = 96;
 const ACTIONABLE_APPROVAL_STATES = new Set(["", "staged_not_granted", "grant_attached"]);
 const STORAGE_THEME_KEY = "pp-echo-web-theme";
 const STORAGE_ACTIVE_VIEW_KEY = "pp-echo-web-view";
@@ -1473,6 +1482,65 @@ function ChatWorkspace({
   inspectorOpen: boolean;
   setInspectorOpen: (value: boolean | ((current: boolean) => boolean)) => void;
 }) {
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [activeTurnId, setActiveTurnId] = useState("");
+  const nearBottomRef = useRef(true);
+  const turnMarkers = useMemo(() => buildTurnMarkers(transcript), [transcript]);
+  const transcriptTailKey = useMemo(() => {
+    const tail = transcript[transcript.length - 1];
+    return tail ? `${tail.id}:${tail.body.text.length}:${tail.streaming ? "streaming" : "done"}` : "empty";
+  }, [transcript]);
+
+  useEffect(() => {
+    const target = transcriptRef.current;
+    if (!target) return;
+
+    const updateScrollState = () => {
+      const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+      const nearBottom = distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD;
+      nearBottomRef.current = nearBottom;
+      setShowScrollToBottom(!nearBottom && transcript.length > 0);
+      setActiveTurnId(findActiveTurnId(target, turnMarkers));
+    };
+
+    updateScrollState();
+    target.addEventListener("scroll", updateScrollState, { passive: true });
+    return () => target.removeEventListener("scroll", updateScrollState);
+  }, [transcriptRef, transcript.length, turnMarkers]);
+
+  useEffect(() => {
+    const target = transcriptRef.current;
+    if (!target || !nearBottomRef.current) return;
+    window.requestAnimationFrame(() => {
+      target.scrollTo({ top: target.scrollHeight, behavior: "smooth" });
+    });
+  }, [transcriptRef, transcriptTailKey]);
+
+  useEffect(() => {
+    const target = transcriptRef.current;
+    if (!target) return;
+    window.requestAnimationFrame(() => {
+      target.scrollTop = target.scrollHeight;
+      nearBottomRef.current = true;
+      setShowScrollToBottom(false);
+      setActiveTurnId(turnMarkers[turnMarkers.length - 1]?.id || "");
+    });
+  }, [activeSessionId, transcriptRef]);
+
+  const scrollToBottom = () => {
+    const target = transcriptRef.current;
+    if (!target) return;
+    target.scrollTo({ top: target.scrollHeight, behavior: "smooth" });
+  };
+
+  const jumpToTurn = (marker: TurnMarker) => {
+    const target = transcriptRef.current;
+    const element = target ? findTranscriptElement(target, marker.id) : null;
+    if (!target || !element) return;
+    target.scrollTo({ top: Math.max(0, element.offsetTop - 16), behavior: "smooth" });
+    setActiveTurnId(marker.id);
+  };
+
   return (
     <div className={inspectorOpen ? "chat-layout with-inspector" : "chat-layout"}>
       <section className="chat-stage">
@@ -1509,7 +1577,7 @@ function ChatWorkspace({
             </div>
           )}
           {transcript.map((item) => (
-            <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id}>
+            <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id} data-transcript-id={item.id}>
               <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : item.role === "activity" ? <Code2 size={15} /> : <MessageSquare size={15} />}</div>
               {item.role === "activity" && item.activity ? (
                 <ToolActivityBlock item={item} />
@@ -1527,6 +1595,12 @@ function ChatWorkspace({
             </article>
           ))}
         </section>
+        <ConversationTurnRail markers={turnMarkers} activeTurnId={activeTurnId} onJump={jumpToTurn} />
+        {showScrollToBottom ? (
+          <button className="scroll-to-bottom" onClick={scrollToBottom} title="滚动到底部" aria-label="滚动到底部">
+            <ArrowDown size={17} />
+          </button>
+        ) : null}
 
         {activeApproval ? (
           <section className="composer-approval" aria-live="polite">
@@ -1582,6 +1656,38 @@ function ChatWorkspace({
         </div>
       </section>
     </div>
+  );
+}
+
+function ConversationTurnRail({
+  markers,
+  activeTurnId,
+  onJump
+}: {
+  markers: TurnMarker[];
+  activeTurnId: string;
+  onJump: (marker: TurnMarker) => void;
+}) {
+  if (markers.length < 2) return null;
+  return (
+    <nav className="turn-rail" aria-label="对话轮次导航">
+      {markers.map((marker) => (
+        <button
+          className={`turn-marker${marker.id === activeTurnId ? " active" : ""}`}
+          key={marker.id}
+          onClick={() => onJump(marker)}
+          title={`第 ${marker.turnNumber} 轮`}
+          aria-label={`跳转到第 ${marker.turnNumber} 轮`}
+        >
+          <span className="turn-marker-line" />
+          <span className="turn-preview" role="tooltip">
+            <strong>第 {marker.turnNumber} 轮</strong>
+            <span>{marker.userPreview || "用户消息"}</span>
+            {marker.assistantPreview ? <em>{marker.assistantPreview}</em> : null}
+          </span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -2789,6 +2895,65 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     items.push({ id: "thinking", role: "assistant", body: { text: "Thinking", attachments: [] }, streaming: true });
   }
   return items;
+}
+
+export function buildTurnMarkers(transcript: TranscriptItem[]): TurnMarker[] {
+  const markers: TurnMarker[] = [];
+  let current: TurnMarker | null = null;
+  const assistantParts: string[] = [];
+
+  const finishCurrent = () => {
+    if (!current) return;
+    current.assistantPreview = summarizePreview(assistantParts.join(" "));
+    markers.push(current);
+    current = null;
+    assistantParts.length = 0;
+  };
+
+  transcript.forEach((item) => {
+    if (item.role === "user") {
+      finishCurrent();
+      current = {
+        id: item.id,
+        turnNumber: markers.length + 1,
+        userPreview: summarizePreview(item.body.text),
+        assistantPreview: ""
+      };
+      return;
+    }
+    if (!current || item.id === "thinking") return;
+    if (item.role === "assistant") {
+      assistantParts.push(item.body.text);
+    } else if (item.role === "activity" && item.activity) {
+      assistantParts.push(item.activity.summary || item.body.text);
+    } else if (item.role === "error") {
+      assistantParts.push(item.body.text);
+    }
+  });
+
+  finishCurrent();
+  return markers;
+}
+
+function findActiveTurnId(target: HTMLElement, markers: TurnMarker[]) {
+  if (markers.length === 0) return "";
+  const anchorTop = target.scrollTop + 80;
+  let active = markers[0].id;
+  markers.forEach((marker) => {
+    const element = findTranscriptElement(target, marker.id);
+    if (element && element.offsetTop <= anchorTop) active = marker.id;
+  });
+  return active;
+}
+
+function findTranscriptElement(target: HTMLElement, id: string) {
+  const items = Array.from(target.querySelectorAll<HTMLElement>("[data-transcript-id]"));
+  return items.find((item) => item.dataset.transcriptId === id) || null;
+}
+
+function summarizePreview(value: string) {
+  const clean = normalizeText(value);
+  return clean ? truncate(clean, 120) : "";
 }
 
 function normalizeText(value: string) {
