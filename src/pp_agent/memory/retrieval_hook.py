@@ -18,6 +18,11 @@ RECALL_METADATA_KEY = "memory_recall"
 
 @dataclass
 class MemoryRetrievalHook:
+    """
+    记忆检索钩子类：用于在AI对话上下文处理中自动检索历史记忆、生成记忆片段
+    并将其插入到对话消息中，增强AI的上下文记忆能力
+    核心功能：检索历史对话记忆 → 去重 → 构建提示片段 → 插入系统消息
+    """
     retriever: HistoryRetriever | None = None
     builder: RecallSnippetBuilder | None = None
     session_id: str | None = None

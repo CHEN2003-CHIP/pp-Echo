@@ -13,6 +13,21 @@ IGNORED_SUFFIXES = {".pyc", ".pyo"}
 
 
 class WorkspaceEnvironment:
+    """
+    评测任务工作区环境管理器。
+
+    WorkspaceEnvironment 负责为每个 EvalTask 创建、初始化、管理独立的运行环境：
+    - 从 fixture 模板目录复制初始项目文件到专属工作区；
+    - 提供工作区文件快照，用于执行前后状态对比；
+    - 在隔离工作区内执行任务验证命令，产出可判定成功的 CommandResult；
+    - 保证每个评测用例环境干净、隔离、可复现。
+
+    它依据 EvalTask 定义的 fixture 与验证命令，自动完成环境准备与结果校验。
+    所有执行都在独立的 run_root 目录下，不污染原始代码仓库。
+
+    它不负责用例执行逻辑、Agent 交互与评分计算；
+    它只负责工作区生命周期管理、文件准备、命令执行与状态快照。
+    """
     def __init__(self, repo_root: Path, task: EvalTask, run_root: Path) -> None:
         self.repo_root = repo_root
         self.task = task

@@ -81,6 +81,30 @@ class RetrievalScoringConfig:
 
 
 class HistoryRetriever:
+    """
+    历史对话 chunk 检索器。
+
+    HistoryRetriever 根据当前 query_text，
+    从 memory store / vector index 中召回相关历史片段。
+
+    它只负责检索，不负责写入、不负责切 chunk、
+    也不负责把召回结果拼成最终 prompt。
+
+    典型调用链：
+        MemoryRetrievalHook.transform_context()
+            -> HistoryRetriever.retrieve()
+            -> RecallSnippetBuilder.build()
+            -> memory recall 注入 system context
+
+    返回结果通常包含：
+    - chunk 文本；
+    - 来源 message / session 信息；
+    - 相似度或排序分数；
+    - metadata。
+
+    简单说：
+    它负责“从历史记忆里找相关片段”。
+    """
     def __init__(
         self,
         *,

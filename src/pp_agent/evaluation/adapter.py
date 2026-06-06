@@ -24,12 +24,28 @@ class AgentAdapter:
 
 
 class ScriptedAgentAdapter(AgentAdapter):
+    """
+    脚本化代理适配器。
+
+    ScriptedAgentAdapter 是一个固定行为的模拟 Agent 适配器：
+    - 不调用真实大模型，根据预设的 EvalTask ID 执行硬编码逻辑；
+    - 模拟文件编辑、工具调用、审批等待、记忆召回、子代理等标准交互行为；
+    - 维护工作区初始文件快照，支持 checkpoint 回滚、审批通过/拒绝等流程；
+    - 自动填充 AgentTrace 轨迹数据，用于评测用例的确定性验证与回归测试。
+
+    它通过 task_id 匹配预设脚本，自动完成工具调用、文件修改、审批交互、事件记录。
+    完全可复现、无随机性，专门用于评测框架的功能验证与流程测试。
+
+    它不依赖任何模型服务、不产生动态决策，
+    只负责按预定脚本模拟代理行为并输出标准轨迹数据。
+    """
     def __init__(self) -> None:
         self._task: Optional[EvalTask] = None
         self._workspace: Optional[Path] = None
         self._initial_files: dict[str, bytes] = {}
 
     def start(self, task: EvalTask, workspace: Path) -> AgentTrace:
+        #初始化适配器，记录初始环境，返回空轨迹
         self._task = task
         self._workspace = workspace
         self._initial_files = {path.relative_to(workspace).as_posix(): path.read_bytes() for path in workspace.rglob("*") if path.is_file()}
@@ -124,6 +140,22 @@ class ScriptedAgentAdapter(AgentAdapter):
 
 
 class SdkAgentAdapter(AgentAdapter):
+    """
+    SDK 代理适配器。
+
+    SdkAgentAdapter 是对接真实 AI Agent 的运行时适配器：
+    - 通过 SDK 调用真实模型服务，发送用户消息并获取助手回复；
+    - 在指定工作区中执行文件操作、工具调用、审批流程等真实交互；
+    - 捕获异常、记录耗时、合并事件流，更新 AgentTrace 执行轨迹；
+    - 支持 pending 动作的审批通过/拒绝，与评测框架无缝衔接。
+
+    它作为评测引擎与实际 Agent 之间的桥梁，将评测用例的输入转发给 SDK，
+    并把 Agent 运行结果、事件、工具调用、审批状态回填到轨迹中。
+    所有操作均在隔离工作区内执行，确保安全与可复现。
+
+    它不实现 Agent 逻辑、不生成决策，
+    只负责通过 SDK 调用真实 Agent 并标准化采集运行时数据。
+    """
     def __init__(self, *, timeout_seconds: int = 120) -> None:
         self.timeout_seconds = timeout_seconds
         self._workspace: Optional[Path] = None

@@ -48,6 +48,7 @@ def create_app(
     manager: Optional[WebSessionManager] = None,
     workspace_manager: Optional[WebWorkspaceManager] = None,
 ):
+    """创建 FastAPI应用  定义 API 路由"""
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from fastapi.middleware.cors import CORSMiddleware

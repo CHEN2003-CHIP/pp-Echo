@@ -6,8 +6,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AgentStepManifest(BaseModel):
-    """结构化地描述一个任务节点执行后的产出，包括执行状态、摘要、发现、风险等。它替代了简单地将原始 TaskNode 对象存入黑板的方式，提供了更丰富的调试和上下文传递能力。
-字段详解"""
+    """结构化地描述一个任务节点执行后的产出，包括执行状态、摘要、发现、风险等。
+    它替代了简单地将原始 TaskNode 对象存入黑板的方式，提供了更丰富的调试和上下文传递能力。
+    """
     agent: str
     status: str
     summary: str

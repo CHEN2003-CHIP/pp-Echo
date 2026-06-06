@@ -940,6 +940,7 @@ def create_runtime_from_record(
         provider=provider_config_for_llm(settings.provider),
         model=model_config_for_llm(settings.model),
     )
+    #----------------------------------------------------------------------------------------------------------------
     agent = AgentRuntime(
         llm_client=llm_client,
         tool_registry=tool_registry,
@@ -963,6 +964,7 @@ def create_runtime_from_record(
         config_snapshot=config_snapshot,
         config_refresh_callback=_refresh_runtime_from_config,
     )
+    #----------------------------------------------------------------------------------------------------------------
     # 安装自动检查点钩子
     _install_auto_checkpoint_hook(
         agent=agent,

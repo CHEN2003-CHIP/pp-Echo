@@ -25,6 +25,24 @@ def _get_subagent_manager_class():
 
 
 class SpawnSubagentTool(BaseTool):
+    """
+    主 Agent 用来启动受控子 Agent 的工具。
+
+    SpawnSubagentTool 会把一个明确的子任务交给新的 AgentRuntime 执行。
+    子 Agent 拥有独立上下文和会话状态，通常受 capability profile 限制，
+    只能使用指定工具或在隔离 worktree 中操作。
+
+    执行流程：
+    1. 父 Agent 调用 spawn_subagent，传入 task / label / profile 等参数；
+    2. 工具通过 SessionHost 创建子会话和子 AgentRuntime；
+    3. 子 Agent 独立运行自己的 prompt 和 _run_loop；
+    4. 子 Agent 完成后返回摘要、状态、工具使用情况或 artifact 信息；
+    5. SpawnSubagentTool 将结果包装成 ToolExecutionResult；
+    6. 父 Agent 把该结果作为 observation 写回 messages 并继续推理。
+
+    它不是普通的一步工具，而是“子 Agent 会话启动器”。
+    主要用于上下文隔离、任务委托、权限收敛和风险隔离。
+    """
     def __init__(
         self,
         workspace: Path,

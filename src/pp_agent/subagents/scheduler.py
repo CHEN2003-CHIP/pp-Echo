@@ -11,6 +11,24 @@ logger = logging.getLogger(__name__)
 
 
 class DeterministicScheduler:
+    """
+    确定性编排调度器。
+
+    DeterministicScheduler 根据 OrchestrationStep.depends_on 依赖关系，
+    以稳定、可复现的顺序决定哪些步骤可以执行。
+
+    它只做调度，不运行子 Agent。
+    真正的 step 执行由 SubAgentOrchestrator 调用 SubAgentManager 完成。
+
+    主要能力：
+    - 校验 step_id 唯一性；
+    - 校验 depends_on 是否引用有效步骤；
+    - 检测依赖环；
+    - 根据 completed steps 计算 ready steps；
+    - 当多个步骤同时 ready 时，使用固定排序保证调度结果可复现。
+
+    它的价值是让多 Agent 编排具备可调试、可测试、可复现的执行顺序。
+    """
     def __init__(self, template: WorkflowTemplate) -> None:
         self.template = template
         self._nodes = {node.id: node.model_copy(deep=True) for node in template.nodes}

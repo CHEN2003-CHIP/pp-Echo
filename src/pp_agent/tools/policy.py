@@ -32,6 +32,24 @@ class PolicyDecision:
 
 
 class ToolPolicyEvaluator:
+    """
+    ToolPolicyEvaluator 是工具执行前的策略判断层。
+    
+    它根据工具调用的 effect analysis 和当前 ToolPolicy，
+    判断本次工具调用应该 allow、ask 还是 deny。
+    
+    - allow：低风险操作，允许直接执行；
+    - ask：有副作用或风险，需要进入用户审批；
+    - deny：违反安全策略，直接拒绝。
+    
+    它主要用于保护 workspace 边界、敏感路径、危险 shell 命令、
+    写文件/编辑文件等有副作用操作，并为 Runtime 的 approval gate
+    提供决策依据。
+    
+    注意：
+    ToolPolicyEvaluator 不执行工具；
+    它只决定“这次工具调用能不能执行、要不要审批、为什么”。
+    """
     def __init__(
         self,
         workspace: Path,

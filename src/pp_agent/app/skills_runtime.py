@@ -45,6 +45,9 @@ class ActiveSkill:
 
 @dataclass
 class SkillRuntime:
+    """
+    SkillRuntime 负责发现可用 Skill、判断当前任务该不该用 Skill、懒加载 SKILL.md 正文，并把 Skill 内容注入到模型上下文。
+    """
     workspace: Path
     user_root: Path
     config: object

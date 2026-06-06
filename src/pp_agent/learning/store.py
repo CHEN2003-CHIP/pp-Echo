@@ -7,6 +7,27 @@ from pp_agent.learning.models import LearningCandidate, LearningStatusSummary
 
 
 class LearningStore:
+    """
+    learning 系统的本地文件存储层。
+
+    LearningStore 维护两个核心文件：
+    - candidates.jsonl：保存 LearningRuntime 生成的学习候选；
+    - memory.md：保存已经采纳的项目级长期记忆。
+
+    它负责：
+    - 追加学习候选；
+    - 按 status 读取候选；
+    - 根据 id 查询候选；
+    - 更新候选状态；
+    - 追加或替换项目 memory.md；
+    - 检查 memory.md 中是否已有相似内容；
+    - 汇总 pending / applied / rejected 数量。
+
+    它不负责从对话中抽取候选，
+    也不负责把 memory 注入上下文。
+    抽取由 LearningRuntime / extractor 完成；
+    注入由 ProjectMemoryContextHook 完成。
+    """
     def __init__(self, root: Path) -> None:
         self.root = root
         self.candidates_path = root / "candidates.jsonl"

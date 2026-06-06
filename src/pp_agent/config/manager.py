@@ -87,17 +87,25 @@ class ConfigManager:
         return self._read_project_config()
 
     def get_effective_snapshot(self, *, session_id: str | None = None) -> ConfigSnapshot:
+        """
+        加锁 → 读取所有配置源 → 按优先级合并 → 生成最终生效配置 → 打包成不可变的快照返回
+        配置优先级：项目基础配置 < 激活的 profile < 会话配置 < 运行时覆盖配置
+        """
         with self._lock:
             project = self._read_project_config()
             session = SessionConfigStore(self.workspace).load(session_id)
             runtime = runtime_overrides.get(self.workspace)
             active_profile = _active_profile(project, session)
+
             base_project = _settings_only_config(project)
             profile = _profile_config(project, active_profile)
             session_settings = _settings_only_session(session)
             runtime_settings = _settings_only_runtime(runtime)
+
             merged = merge_patch(merge_patch(merge_patch(base_project, profile), session_settings), runtime_settings)
+           
             settings = self._settings_from_project_data(merged)
+
             source_map = self._source_map(base_project, profile, session_settings, runtime_settings, active_profile=active_profile)
             project_hash = hash_config(project)
             effective_payload = settings.model_dump(mode="json")
@@ -123,6 +131,8 @@ class ConfigManager:
             )
 
     def patch_project_config(self, patch: dict[str, Any], *, base_hash: str | None = None) -> ConfigSnapshot:
+        """安全地给项目配置打补丁 → 校验并发冲突 → 合并修改 → 写入文件 → 返回最新生效快照
+（本质：线程安全 + 乐观锁 + 配置热更新）"""
         if not isinstance(patch, dict):
             raise ValueError("Config patch must be a JSON object")
         with self._lock:
@@ -137,6 +147,8 @@ class ConfigManager:
             return self.get_effective_snapshot()
 
     def set_path(self, path: str, value: Any, *, base_hash: str | None = None) -> ConfigSnapshot:
+        """根据「点分隔路径」直接修改配置里的任意字段（比如 api.key），
+        自动处理嵌套结构、并发安全、校验、写入，最后返回最新快照。"""
         with self._lock:
             current = self._read_project_config()
             current_hash = hash_config(current)
@@ -201,6 +213,8 @@ class ConfigManager:
         return config_schema()
 
     def _validate_project_config(self, data: dict[str, Any]) -> None:
+        """校验项目配置的格式和逻辑，包括 profile 和 active_profile 的有效性、
+        项目配置路径的合法性、项目配置的完整性和有效性。"""
         _validate_profile_block(data)
         validate_project_config_paths(data)
         validate_settings(self._settings_from_project_data(_settings_only_config(data)))
@@ -234,6 +248,9 @@ class ConfigManager:
         validate_settings(self._settings_from_project_data(merged))
 
     def _settings_from_project_data(self, data: dict[str, Any]) -> Settings:
+        """
+        把纯字典格式的合并配置 → 转换成强类型的 Settings 对象，并完成目录创建、环境变量覆盖、系统提示注入等初始化工作。
+        """
         workspace = self.workspace.resolve()
         project_dir = workspace / ".pp-agent"
         project_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +273,7 @@ class ConfigManager:
         settings.system_prompt += "\n\nSubagent orchestration protocol:\n" + SUBAGENT_ORCHESTRATION_PROMPT
 
     def _read_project_config(self) -> dict[str, Any]:
+        """读取并解析项目的 JSON 配置文件，返回字典；如果文件不存在返回空字典；格式非法则抛错。"""
         if not self.config_path.exists():
             return {}
         try:
@@ -310,6 +328,7 @@ _manager_lock = RLock()
 
 
 def get_config_manager(workspace: Path) -> ConfigManager:
+    """为每个工作目录（workspace）创建且仅创建一个 ConfigManager 实例"""
     key = str(workspace.resolve())
     with _manager_lock:
         manager = _managers.get(key)
@@ -320,16 +339,19 @@ def get_config_manager(workspace: Path) -> ConfigManager:
 
 
 def _settings_only_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
+    """ 忽略 debug 项，返回其他项的深拷贝副本 """
     if not runtime:
         return {}
     return {key: value for key, value in runtime.items() if key != "debug"}
 
 
 def _settings_only_config(config: dict[str, Any]) -> dict[str, Any]:
+    """忽略 profiles 和 active_profile 项，返回其他项的深拷贝副本 """
     return {key: deepcopy(value) for key, value in config.items() if key not in {"profiles", "active_profile"}}
 
 
 def _settings_only_session(session: dict[str, Any]) -> dict[str, Any]:
+    """忽略 active_profile 项，返回其他项的深拷贝副本 """
     return {key: deepcopy(value) for key, value in session.items() if key != "active_profile"}
 
 
@@ -341,6 +363,7 @@ def _profiles(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _profile_config(project: dict[str, Any], active_profile: str | None) -> dict[str, Any]:
+    """返回激活的 profile 配置，如果没有激活的 profile 返回空字典 """
     if not active_profile:
         return {}
     return _profiles(project).get(active_profile, {})
@@ -381,6 +404,7 @@ def _validate_profile_name(profile: str | None) -> str:
 
 
 def _pending_effects(paths: list[str]) -> list[str]:
+    """检查哪些配置项修改后不能热重载，需要提示用户重启 / 重新加载。"""
     effects: list[str] = []
     for path in paths:
         policy = reload_policy_for_paths([path])

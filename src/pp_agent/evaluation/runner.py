@@ -52,6 +52,23 @@ def run_suite(
     output_dir: Optional[Path] = None,
     save_history: bool = False,
 ) -> EvalReport:
+    """
+    评测套件执行入口函数。
+
+    run_suite 负责驱动整套评测流程的全生命周期执行：
+    - 加载并解析指定评测套件，展开待执行的评测任务列表；
+    - 为每个任务创建隔离工作区，从 fixture 初始化环境；
+    - 根据运行模式选择脚本化模拟器或真实 SDK 代理执行任务；
+    - 驱动模拟用户交互，收集 Agent 执行轨迹、文件变更与验证结果；
+    - 对每个用例自动打分，汇总所有结果生成最终评测报告；
+    - 将报告写入指定目录，支持历史存档与可视化图表产出。
+
+    它是评测系统的顶层调度器，串联环境准备、任务执行、结果校验、报告生成全链路。
+    支持确定性复现模式与真实在线模式，适配测试、回归验证、批量评测场景。
+
+    它不实现具体用例逻辑、不执行模型推理，
+    只负责评测流程编排、资源管理与结果汇总。
+    """
     tasks = expand_tasks(load_suite(repo_root, suite), case_count=case_count)
     scores = []
     simulator = ScriptedUserSimulator()

@@ -25,6 +25,21 @@ WorkflowName = str
 
 @dataclass(frozen=True)
 class OrchestrationStep:
+    """
+    多 Agent 编排中的单个步骤描述。
+
+    OrchestrationStep 只描述一个子任务节点，不直接运行子 Agent。
+    它告诉 OrchestrateAgentsTool：
+    - 这一步的 step_id 是什么；
+    - 要使用哪个子 Agent 规格 spec_name；
+    - 要执行什么 task；
+    - 依赖哪些前置步骤 depends_on；
+    - 输出结果应该保存到哪里；
+    - 失败时应该中止还是继续。
+
+    真正执行时，OrchestrateAgentsTool 会按依赖顺序调度这些 step，
+    并通过 SubAgentManager 为每个 step 创建受控子 AgentRuntime。
+    """
     agent: str
     task: str
     status: str
@@ -132,6 +147,27 @@ ManagerFactory = Callable[[dict[str, SubAgentSpec]], RunsSubagents]
 
 
 class SubAgentOrchestrator:
+    """
+    多子 Agent 编排执行器。
+
+    SubAgentOrchestrator 负责执行由多个 OrchestrationStep 组成的计划。
+    它本身不运行 LLM，也不直接创建工具；
+    每个 step 真正执行时，会委托 SubAgentManager 创建并运行对应的子 Agent。
+
+    它主要负责：
+    - 校验 step_id、depends_on、spec_name 等编排计划是否合法；
+    - 根据 depends_on 构建步骤执行顺序；
+    - 按顺序或按依赖调度多个子 Agent；
+    - 把前置 step 的输出传给后续 step；
+    - 记录每个 step 的状态、结果、失败原因和子会话信息；
+    - 根据失败策略决定终止、跳过还是继续；
+    - 汇总所有子 Agent 的结果，生成最终 orchestration result；
+    - 向父 Agent / UI / timeline 发出编排进度事件。
+
+    简单说：
+    SubAgentManager 负责“跑一个子 Agent”；
+    SubAgentOrchestrator 负责“按计划跑一组子 Agent”。
+    """
     def __init__(
         self,
         *,
@@ -589,6 +625,27 @@ class SubAgentOrchestrator:
         run_id: str,
         run_started_at: float,
     ) -> OrchestrationStep:
+        """
+        在隔离 worktree 中执行一个编排节点。
+    
+        该方法用于多 Agent 编排中需要真实试改代码的步骤。
+        它会为当前节点准备 worktree workspace，并使用 workspace.mode="worktree"
+        的 capability profile 运行子 Agent。
+    
+        子 Agent 在该模式下调用 edit_file / write_file / run_shell 时，
+        ToolRegistry 会走 _execute_worktree_edit / _execute_worktree_write /
+        _execute_worktree_shell 等内部路径，直接修改隔离 worktree，
+        而不是修改主 workspace。
+    
+        执行结束后，本方法负责收集子 Agent summary、changed files、
+        worktree diff、effect 和 patch artifact 信息，并返回节点结果。
+        后续是否把这些改动应用到主 workspace，由 reviewer / 父 Agent /
+        用户审批流程决定。
+    
+        简单说：
+        它让子 Agent 可以在沙盒工作树里真实试错和产出 patch，
+        同时保证主 workspace 不被直接污染。
+        """
         #初始化工件树
         worktrees = WorktreeManager(self.workspace)
         last_step: OrchestrationStep | None = None

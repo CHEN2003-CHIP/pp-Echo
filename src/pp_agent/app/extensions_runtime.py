@@ -124,6 +124,10 @@ def _policy_injects_context(policy) -> bool:
 
 @dataclass
 class MCPRuntime:
+    """"
+    把 MCPManager 发现到的外部 MCP 能力，
+    动态注册成 pp-Echo Runtime 可以调用的普通 Tool，并在上下文构建时按需提示模型优先使用相关 MCP 工具。
+    """
     workspace: Path
     settings: Settings
     tool_registry: ToolRegistry

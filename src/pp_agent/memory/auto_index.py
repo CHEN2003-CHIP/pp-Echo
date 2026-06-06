@@ -27,6 +27,22 @@ class NoopAutoIndexScheduler:
 
 
 class AsyncMemoryIndexScheduler:
+    """
+    异步 memory 索引调度器。
+
+    Runtime 在 turn 持久化后会调用 submit()。
+    submit() 不直接在主线程里做 embedding / vector indexing，
+    而是启动一个后台 daemon thread，
+    调用 MemoryIndexPipeline.index_pending_chunks(limit)。
+
+    它通过 _lock + _running 保证同一时间只有一个索引线程在跑。
+    如果已有索引任务正在执行，新的 submit() 会返回 False，
+    避免重复索引和并发写 vector index。
+
+    它只负责调度后台索引，不负责写入 messages、
+    不负责切 chunks，也不负责检索。
+    真正的索引逻辑在 MemoryIndexPipeline 中。
+    """
     def __init__(
         self,
         *,

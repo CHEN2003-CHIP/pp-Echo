@@ -366,7 +366,7 @@ class Settings(BaseModel):
         self.apply_project_config_data(data)
 
     def apply_project_config_data(self, data: dict) -> None:
-        """Apply project config data without reading from disk."""
+        """利用data字典，动态更新 Settings 对象的配置项"""
         if "model" in data:
             if isinstance(data["model"], dict):
                 self.model = self.model.model_copy(update=data["model"], deep=True)

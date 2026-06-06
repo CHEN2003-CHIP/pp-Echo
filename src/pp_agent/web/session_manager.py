@@ -57,6 +57,9 @@ class WebSessionHandle:
         return self._worker is not None and self._worker.is_alive()
 
     def snapshot(self) -> dict:
+        """
+        获取当前正在运行的对话会话的「实时状态快照」，直接返回给前端，让网页实时显示最新对话、状态、进度。
+        """
         pending_artifacts = list_pending_patch_artifacts(
             bootstrap.pending_action_store_for(self.workspace),
             session_id=self.session_id,
@@ -89,6 +92,7 @@ class WebSessionHandle:
         }
 
     def drain_events(self) -> list[dict]:
+        """抽取所有事件，直到队列为空。"""
         items: list[dict] = []
         while True:
             try:
@@ -98,6 +102,9 @@ class WebSessionHandle:
             items.append(_web_event_payload(queued.event))
 
     def prompt(self, text: str) -> dict:
+        """
+        agent获取用户输入的文本，然后调用agent的prompt方法，将用户输入的文本作为prompt参数传递给agent的prompt方法。
+        """
         if not text.strip():
             raise ValueError("Prompt cannot be empty.")
         if self.agent.state.pending_plan_token:
@@ -110,6 +117,9 @@ class WebSessionHandle:
         return {"session_id": self.session_id, "queued": False}
 
     def continue_(self) -> dict:
+        """
+        agent继续当前对话，调用agent的continue方法，继续当前对话。
+        """
         self._start_worker("continue", lambda: self.agent.continue_())
         return {"session_id": self.session_id}
 
@@ -142,6 +152,9 @@ class WebSessionHandle:
         return {"session_id": self.session_id, "cancel_requested": True, "busy": self.is_busy()}
 
     def record_external_approval_result(self, result: dict) -> None:
+        """
+        用户 / 系统同意或拒绝了 AI 的操作后，把结果记录到对话里，让 AI 知道 “你刚刚的申请被通过 / 拒绝了”。
+        """
         if result.get("session_id") and str(result.get("session_id")) != self.session_id:
             return
         recorder = getattr(self.agent, "record_external_approval_result", None)
@@ -182,6 +195,10 @@ class WebSessionHandle:
         return bool(callable(checker) and checker())
 
     def _build_runtime(self, session_id: Optional[str]):
+        """
+        这个函数就是创建 / 组装 AI 的「运行时环境」，
+        并且把「事件推送通道」接进去 —— 让 AI 产生的所有消息、状态更新，能自动发到前端队列里。
+        """
         return self._runtime_factory(
             self.workspace,
             session_id,
@@ -202,6 +219,9 @@ class WebSessionHandle:
         )
 
     def _start_worker(self, action: str, fn) -> None:
+        """
+        启动一个线程，执行指定的函数，当函数执行完毕后，会自动推送一个事件到前端队列里。这样前端就能实时收到 AI 的消息和状态更新。
+        """
         with self._lock:
             if self.is_busy():
                 raise RuntimeError(f"Agent is busy; cannot start {action}.")
@@ -228,6 +248,7 @@ class WebSessionHandle:
 
 
 class WebSessionManager:
+    
     def __init__(
         self,
         workspace: Path,
@@ -326,6 +347,9 @@ class WebSessionManager:
 
 
 def _stored_event_snapshot(workspace: Path, session_root: Path, session_id: str) -> dict | None:
+    """
+    从磁盘上的 JSONL 日志文件里，读取一次对话会话（session）的历史记录，然后整理成前端页面能直接显示的 “当前状态快照”。
+    """
     path = session_root / f"{session_id}.jsonl"
     if not path.exists():
         return None
@@ -415,6 +439,9 @@ def _parse_web_event_line(raw: str) -> tuple[str | None, dict]:
 
 
 def _stored_session_list_entry(path: Path) -> dict | None:
+    """
+    读取一个会话的 .jsonl 日志文件，快速提取出「会话列表页需要显示的摘要信息」，然后返回一条列表条目。
+    """
     session_id = path.stem
     parent_id = None
     updated_at = path.stat().st_mtime
@@ -556,6 +583,9 @@ def _extract_json_int(raw: str, key: str) -> int | None:
 
 
 def _tail_for_web(messages: list[dict]) -> list[dict]:
+    """
+    从一长串消息里，只截取最后 N 条前端可见的消息 **，返回给网页显示。**
+    """
     tail: list[dict] = []
     visible_count = 0
     for message in reversed(messages):
@@ -568,6 +598,9 @@ def _tail_for_web(messages: list[dict]) -> list[dict]:
 
 
 def _stored_branch_tail(store, record) -> tuple[list[object], int]:
+    """
+    从一个对话分支（branch/head）里，只截取最后 N 条可见消息，返回给前端显示；同时返回这个分支里的总消息数。
+    """
     path = store.turn_path(record, record.active_head_id)
     total_message_count = sum(
         node.end_message_index - node.start_message_index
@@ -595,6 +628,9 @@ def _is_web_visible_message(message) -> bool:
 
 
 def _web_message_payloads(messages) -> list[dict]:
+    """
+    把原始消息 → 筛选可见 → 截取最新 N 条 → 限制总文本长度 → 转换成前端能直接渲染的消息格式并返回。
+    """
     visible = [message for message in messages if _is_web_visible_message(message)]
     payloads: list[dict] = []
     remaining = MAX_WEB_TOTAL_TEXT_CHARS
@@ -730,6 +766,9 @@ def _safe_optional_string(value) -> str | None:
 
 
 def _web_event_payload(event: AgentEvent) -> dict:
+    """
+    将event转为前端可见的payload，用于前端显示。
+    """
     payload = event.model_dump(mode="json")
     for key in ("message", "delta"):
         if isinstance(payload.get(key), str):

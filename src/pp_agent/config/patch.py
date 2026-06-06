@@ -5,11 +5,7 @@ from typing import Any
 
 
 def merge_patch(target: Any, patch: Any) -> Any:
-    """Apply JSON merge patch semantics.
-
-    Objects merge recursively, null deletes an object member, and arrays or
-    scalars replace the target value.
-    """
+    """递归合并patch到target"""
     if not isinstance(patch, dict):
         return deepcopy(patch)
     result = deepcopy(target) if isinstance(target, dict) else {}

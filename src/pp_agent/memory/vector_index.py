@@ -41,6 +41,21 @@ class NoopVectorIndex:
 
 
 class ChromaVectorIndex:
+    """
+    基于 ChromaDB 的向量索引适配器。
+
+    ChromaVectorIndex 负责把 IndexedChunk 写入本地 Chroma collection，
+    并根据 query embedding 检索相似 chunks。
+
+    它只负责 vector index：
+    - upsert_chunks()：写入 chunk_id、text、embedding、metadata；
+    - query()：根据 query_embedding 和 where 过滤条件查询相似片段；
+    - _metadata()：把 IndexedChunk 的 session、turn、message、role 等信息整理成 Chroma metadata；
+    - _client()：创建 chromadb.PersistentClient；
+    - _collection()：获取或创建 Chroma collection。
+
+    它不负责 message 持久化、chunk 切分、embedding 生成或 prompt 注入。
+    """
     def __init__(
         self,
         *,

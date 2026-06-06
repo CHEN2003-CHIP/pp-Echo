@@ -65,6 +65,29 @@ def build_subagent_tool_registry(
 
 
 class SubAgentManager:
+    """
+    受控子 Agent 的生命周期管理器。
+
+    SubAgentManager 不直接作为模型工具暴露；
+    SpawnSubagentTool 会调用它来真正运行子 Agent。
+
+    它负责：
+    - 根据 spec_name 从 SubAgentCatalog 查找子 Agent 规格；
+    - 校验子 Agent 的工具 allowlist、workspace mode 和输出格式；
+    - 通过 SessionHost.fork_session(...) 从父会话分叉子会话；
+    - 通过 runtime_factory 创建子 AgentRuntime；
+    - 克隆父 ToolRegistry 的允许工具子集，形成受限工具面；
+    - 设置子 Agent 的 system prompt、模型、审批策略和 capability profile；
+    - 同步运行子 Agent，并限制 max_turns；
+    - 解析子 Agent 的 summary 输出，生成 SubAgentRunResult；
+    - 向父 Agent 发出 SUBAGENT_START / PROGRESS / END / FAIL 事件；
+    - 统一处理取消、超轮数、空结果、格式错误和子 Runtime 异常。
+
+    简单说：
+    它把“父 Agent 的委托任务”转换成
+    “一个独立子会话中的受限 AgentRuntime 执行”，
+    并把最终摘要作为结构化结果返回。
+    """
     def __init__(
         self,
         *,

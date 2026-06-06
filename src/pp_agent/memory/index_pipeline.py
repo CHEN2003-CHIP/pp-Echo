@@ -12,10 +12,24 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryIndexPipeline:
-    """先从 SQLite 里找还没建索引的文本 chunk 
-    → 调 embedding 模型转成向量 
-    → 写进向量库 
-    → 再回写 SQLite，标记这个 chunk 已经 embed / indexed"""
+    """
+    memory chunks 的向量索引流水线。
+
+    它从 SQLiteHistoryStore 中读取 pending chunks，
+    调用 EmbeddingProvider 生成 embedding，
+    再把 IndexedChunk 写入 VectorIndex，
+    最后回写 SQLite 标记 embedded / indexed / failed 状态。
+
+    它只负责索引，不负责：
+    - 原始消息持久化；
+    - chunk 切分；
+    - 历史检索；
+    - recall prompt 构造。
+
+    Runtime 一轮结束后，AsyncMemoryIndexScheduler 会在后台调用
+    index_pending_chunks()，让向量索引异步补齐，
+    避免 embedding 阻塞 Agent 主循环。
+    """
     def __init__(
         self,
         *,

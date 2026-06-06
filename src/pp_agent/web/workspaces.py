@@ -15,6 +15,9 @@ SessionManagerFactory = Callable[[Path], WebSessionManager]
 
 
 class WebWorkspaceManager:
+    """
+    负责管理所有工作区、所有对话会话、所有生命周期 —— 相当于系统的顶层控制中心。
+    """
     def __init__(
         self,
         initial_workspace: Path,
@@ -55,6 +58,10 @@ class WebWorkspaceManager:
             return {"active": self._workspace_entry(self._active_workspace), "recent": list(self._recent)}
 
     def open_workspace(self, raw_path: str, *, confirmed: bool = False) -> dict:
+        """
+        这个函数就是「切换工作区（项目目录）」的核心方法！
+        用户在界面上选择「打开文件夹 / 切换项目」时，就会调用它，负责校验路径、安全确认、切换目录、记住历史。
+        """
         workspace = self._normalize_workspace(raw_path)
         if not workspace.exists():
             raise FileNotFoundError(f"Workspace does not exist: {workspace}")
@@ -80,6 +87,9 @@ class WebWorkspaceManager:
             }
 
     def _remember(self, workspace: Path) -> None:
+        """
+        把当前打开的工作区（项目文件夹），更新到「最近打开列表」的最顶部，并且保持列表不超长，最后自动保存到磁盘。
+        """
         entry = self._workspace_entry(workspace)
         entry["last_opened_at"] = time.time()
         self._recent = [item for item in self._recent if item.get("path") != entry["path"]]

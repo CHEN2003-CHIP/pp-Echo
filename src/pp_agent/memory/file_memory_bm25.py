@@ -58,6 +58,22 @@ class _FallbackBM25Okapi:
 
 
 class FileMemoryBM25Index:
+    """
+    文件型 memory 的 BM25 关键词检索索引。
+
+    它从 MEMORY.md、workspace memory、daily/debug/architecture 等
+    Markdown 记忆文件中构建 chunk 级倒排索引，
+    根据 query 用 BM25 分数召回相关片段。
+
+    它只负责文件记忆检索，不负责：
+    - 对话消息持久化；
+    - embedding 生成；
+    - Chroma 向量索引；
+    - prompt 注入。
+
+    它的价值是低成本、可解释、可复现，
+    特别适合召回路径名、错误日志、函数名、配置项、项目术语等精确关键词。
+    """
     def __init__(self, chunks: list[FileMemoryChunk]) -> None:
         self.chunks = list(chunks)
         self._tokens = [tokenize_file_memory_text(self._document_text(chunk)) for chunk in self.chunks]

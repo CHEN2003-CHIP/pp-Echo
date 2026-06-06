@@ -15,6 +15,22 @@ _SUPPORTED_RISK_OVERRIDES = {
 
 
 class ToolMetadata(BaseModel):
+    """
+    ToolMetadata 用来描述“工具在系统层面的属性”，不是给模型看的工具参数说明。
+    
+    它主要服务于：
+    1. 工具分类：标记工具属于 file、shell、repo、mcp、memory、subagent 等类别。
+    2. 模型可见性：通过 model_callable 控制该工具是否暴露给 LLM 调用。
+    3. 权限控制：记录 permission_domain，配合 ToolPolicyEvaluator 判断 read/write/bash/dynamic 等权限。
+    4. 风险判断：标记工具是否 sensitive、是否需要确认、是否可能访问网络或外部系统。
+    5. 能力过滤：配合 capability profile 控制子 Agent 或受限 Runtime 能使用哪些工具。
+    6. 前端展示：为 capabilities、runtime report、工具面板提供工具来源、类别、风险等信息。
+    7. 动态工具支持：MCP、extension、browser、memory 等动态注册工具会通过 metadata 告诉系统它们的来源和副作用特征。
+    
+    简单说：
+    ToolSpec 是“给模型看的工具说明”；
+    ToolMetadata 是“给 Runtime / Policy / UI / Capability 系统看的工具元信息”。
+    """
     name: str
     category: str
     requires_confirmation: bool = False

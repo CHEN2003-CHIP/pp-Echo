@@ -27,6 +27,9 @@ def list_pending_patch_artifacts(
     *,
     session_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
+    """
+    从待执行任务列表里，筛选出「AI 准备要打的文件补丁」，整理成前端能显示的待修改文件列表。
+    """
     artifacts: list[dict[str, Any]] = []
     for item in pending_store.list():
         if item.get("action_type") != "apply_patch_artifact":
@@ -61,6 +64,10 @@ def summarize_runtime_control(
     turn_phase: str,
     pending_artifacts: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """
+    这是整个 AI 对话系统的「状态大脑」，
+    根据当前所有运行数据，自动判断出 AI 现在到底处于什么状态，然后返回给前端显示（比如：等待批准、执行中、空闲、已取消）。
+    """
     if cancel_requested:
         status = "canceled"
     elif pending_artifacts:

@@ -132,10 +132,20 @@ class ToolRegistration:
 
 class ToolRegistry:
     """
-    【核心服务】工具注册中心
-    【业务功能】统一管理所有AI工具：注册、查询、执行、权限控制、动态扩展
-    【架构角色】工具层入口，隔离工具实现与调用方
-    【安全策略】支持执行前确认、超时控制、动态开关
+    ToolRegistry 是工具系统的统一注册、暴露和执行入口。
+
+    它管理内置工具与动态工具，负责：
+    - 注册工具及其 ToolSpec / ToolMetadata；
+    - 生成 openapi_specs()，把可被模型调用的工具暴露给 LLM；
+    - 根据 capability profile 和 model_callable 过滤工具；
+    - 在 execute() 前进行 effect analysis 和 ToolPolicyEvaluator 安全评估；
+    - 根据 allow / ask / deny 决策决定直接执行、进入审批或拒绝；
+    - 懒加载并缓存具体工具实例；
+    - 支持 MCP、extension、memory、browser、subagent 等动态工具接入。
+
+    ToolRegistry 不负责 Agent 主循环；
+    AgentRuntime 负责决定何时调用工具，
+    ToolRegistry 负责管理“有哪些工具、能不能调用、怎么调用”。
     """
     def __init__(
         self,
@@ -223,13 +233,13 @@ class ToolRegistry:
         """
         【扩展方法】动态注册函数式工具（插件机制）
         【业务功能】允许外部传入普通函数，自动包装为标准AI工具
-        :param name: 工具名
-        :param description: 工具描述（给AI看）
-        :param parameters: 入参定义
-        :param executor: 执行函数
-        :param category: 分类
-        :param requires_confirmation: 是否需要确认
-        :param replace: 是否覆盖
+         - :param name: 工具名
+         - :param description: 工具描述（给AI看）
+         - :param parameters: 入参定义
+         - :param executor: 执行函数
+         - :param category: 分类
+         - :param requires_confirmation: 是否需要确认
+         - :param replace: 是否覆盖
         """
         if deprecated_kwargs:
             unexpected = ", ".join(sorted(deprecated_kwargs))
@@ -285,6 +295,7 @@ class ToolRegistry:
                 "tool dynamic registration denied by capability profile",
                 extra={"tool_name": name, "category": category, "tool_family": tool_family},
             )
+            print(f"tool dynamic registration denied by capability profile: {name}")
             return
         spec = ToolSpec(
             name=name,

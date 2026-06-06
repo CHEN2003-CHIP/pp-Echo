@@ -17,6 +17,9 @@ class SessionConfigStore:
         self._lock = RLock()
 
     def load(self, session_id: str | None) -> dict[str, Any]:
+        """
+        根据 session_id 加载配置文件，如果不存在则返回空字典。
+        """
         if not session_id:
             return {}
         path = self._path(session_id)
@@ -64,6 +67,9 @@ class SessionConfigStore:
         return payload
 
     def _path(self, session_id: str) -> Path:
+        """
+        由 session_id 生成配置文件路径。
+        """
         safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in session_id)
         return self.root / f"{safe}.json"
 

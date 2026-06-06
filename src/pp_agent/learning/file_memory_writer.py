@@ -30,6 +30,23 @@ class FileMemoryWriteResult:
 
 
 class FileMemoryWriter:
+    """
+    LearningCandidate 的文件记忆写入器。
+
+    FileMemoryWriter 负责把学习候选写入长期 Markdown 记忆体系：
+    - 全局用户偏好 -> global bootstrap memory；
+    - 项目约定 / 工作流 / 经验 -> workspace/MEMORY.md；
+    - 临时或当天记录 -> memory/daily/YYYY-MM-DD.md；
+    - bug/debug/architecture/workflow/lesson 等详细经验 -> memory/*.md。
+
+    它会根据 candidate.suggested_target、kind、confidence 和 auto_apply 设置
+    决定是否自动写入、写到哪里、是否需要保持 pending。
+    写入成功后会更新 LearningStore 中候选状态，
+    并在需要时同步 BootstrapMemoryManager 和 FileMemorySearchEngine index。
+
+    它不负责候选抽取，也不负责检索；
+    它只负责把候选安全、去重、分类地落到文件 memory 中。
+    """
     def __init__(self, *, workspace: Path, settings: LearningSettings, store: LearningStore | None = None) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings

@@ -18,7 +18,20 @@ class BootstrapMemorySyncResult:
 
 
 class BootstrapMemoryManager:
-    """Maintains pp-Echo's managed section inside a bootstrap MEMORY.md file."""
+    """
+    项目级 bootstrap memory 管理器。
+
+    BootstrapMemoryManager 负责读取、初始化和维护 workspace 的长期项目记忆。
+    这些记忆通常包括项目结构、架构决策、调试经验、常用命令、约定规则等，
+    会在 Runtime 构造上下文时通过 ProjectMemoryContextHook 注入给模型。
+
+    它不负责对话历史写入、向量索引、BM25 检索或 LLM 抽取；
+    它更像是项目启动时的长期上下文提供者。
+
+    简单说：
+    它管理“Agent 进入这个项目时应该先知道什么”。
+    """
+   
     #Learned Notes：从项目学习系统提取的简洁记忆（例如用户偏好、项目约定）。
     #Detailed Memory Index：自动扫描 workspace/memory/ 目录下的所有 *.md 文件，生成一个带标题的链接列表，方便 AI 或用户快速定位详细笔记。
     def __init__(

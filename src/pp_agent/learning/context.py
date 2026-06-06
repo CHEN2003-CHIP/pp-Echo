@@ -10,8 +10,8 @@ from pp_agent.runtime.state import AgentState
 
 
 class ProjectMemoryContextHook:
-    """负责向对话上下文中注入项目级记忆。
-    所谓“项目级”，通常指当前工作区（workspace）范围内的知识，例如从项目文档、代码注释或之前的交互中提取的长期事实。"""
+    
+    
     def __init__(self, *, workspace: Path, settings: LearningSettings) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings
