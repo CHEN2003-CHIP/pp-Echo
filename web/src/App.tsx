@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { api, ApprovalActionResponse, ApprovalsSummary, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
+import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 
 type ViewKey =
   | "chat"
@@ -42,6 +43,7 @@ type ViewKey =
   | "memory"
   | "model"
   | "logs"
+  | "traceInspect"
   | "usage"
   | "skills"
   | "users";
@@ -124,6 +126,7 @@ const navItems: Array<{
   { view: "memory", label: "记忆", icon: BookOpen, description: "记忆视图" },
   { view: "model", label: "模型", icon: Monitor, description: "模型与环境" },
   { view: "logs", label: "日志", icon: FileText, description: "时间线与日志" },
+  { view: "traceInspect", label: "TraceInspect", icon: Activity, description: "Agent Trace 审计与回放" },
   { view: "usage", label: "用量", icon: Database, description: "运行统计" },
   { view: "skills", label: "技能", icon: ShieldCheck, description: "技能与规则" },
   { view: "users", label: "设置", icon: Settings, description: "系统设置" }
@@ -133,7 +136,7 @@ const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "对话", views: ["chat", "history", "group", "search"] },
   { title: "执行", views: ["workspace", "tasks", "board", "channels"] },
   { title: "扩展", views: ["plugins", "memory", "model"] },
-  { title: "监控", views: ["logs", "usage", "skills", "users"] }
+  { title: "监控", views: ["logs", "traceInspect", "usage", "skills", "users"] }
 ];
 
 const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
@@ -767,6 +770,11 @@ export function App() {
               notice={notice}
               inspectorOpen={inspectorOpen}
               setInspectorOpen={setInspectorOpen}
+            />
+          ) : activeView === "traceInspect" ? (
+            <TraceInspectPage
+              activeSessionId={activeSessionId}
+              onBack={() => setActiveView("chat")}
             />
           ) : activeView === "logs" ? (
             <ObservabilityPanel
@@ -1765,7 +1773,7 @@ function ObservabilityPanel({
   async function reloadLogs() {
     try {
       setError("");
-      const payload = await api.logs({ level, source, search, limit: 300 });
+      const payload = await api.logs({ level, source, search, sessionId: activeSessionId || undefined, limit: 300 });
       setLogs(payload.logs);
       setSources(payload.sources);
       if (follow) {
@@ -3298,17 +3306,23 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean) {
 
 function buildActiveApproval(snapshot: SessionSnapshot | undefined, events: RuntimeEvent[], summary: ApprovalsSummary): ActiveApproval | null {
   const plannerToken = snapshot?.pending_plan_token;
+  const sessionId = snapshot?.session_id || "";
+  const eventTokens = eventPendingTokens(events);
   if (plannerToken) {
+    const sourceItems = summary.active_items || summary.items;
+    const plannerAction = sourceItems.find(
+      (item) => item.action_type === "planner_approval" && item.token === plannerToken && isActionableApproval(item) && approvalBelongsToSession(item, sessionId, eventTokens)
+    );
+    const plannerEventDetails = latestPlannerApprovalDetails(events, plannerToken);
     return {
       kind: "planner",
       token: plannerToken,
-      title: "Step 1 of 2: approve plan",
-      description: "Review the model's proposed tool plan. This step does not apply file changes yet.",
-      approveLabel: "Approve plan"
+      title: "Step 1 of 2: 确认执行计划",
+      description: plannerApprovalDescription(plannerAction, plannerEventDetails),
+      approveLabel: "确认计划",
+      meta: plannerApprovalMeta(plannerAction, plannerEventDetails)
     };
   }
-  const sessionId = snapshot?.session_id || "";
-  const eventTokens = eventPendingTokens(events);
   const sourceItems = summary.active_items || summary.items;
   const pending = sourceItems.find(
     (item) => item.action_type !== "planner_approval" && isActionableApproval(item) && approvalBelongsToSession(item, sessionId, eventTokens)
@@ -3343,6 +3357,62 @@ function approvalBelongsToSession(item: PendingAction, sessionId: string, eventT
 function isActionableApproval(item: PendingAction) {
   const state = item.lifecycle?.state || "";
   return ACTIONABLE_APPROVAL_STATES.has(state);
+}
+
+function latestPlannerApprovalDetails(events: RuntimeEvent[], token: string): Record<string, unknown> | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type !== "planner_gate_pending" && event.type !== "planner_start" && event.type !== "planner_end") continue;
+    const details = event.details || {};
+    const eventToken = details.token;
+    if (typeof eventToken === "string" && eventToken && eventToken !== token) continue;
+    if (Array.isArray(details.summary) || Array.isArray(details.plan_steps) || Array.isArray(details.tools)) return details;
+  }
+  return undefined;
+}
+
+function plannerApprovalDescription(item: PendingAction | undefined, eventDetails: Record<string, unknown> | undefined) {
+  const details = item?.details || eventDetails || {};
+  const steps = plannerStepSummaries(details);
+  if (steps.length > 0) {
+    const visible = steps.slice(0, 3).map((step, index) => `${index + 1}. ${step}`).join("  ");
+    const suffix = steps.length > 3 ? `  另有 ${steps.length - 3} 步。` : "";
+    return `即将执行 ${steps.length} 步：${visible}${suffix}`;
+  }
+  const tools = stringList(details.tools);
+  if (tools.length > 0) return `即将调用工具：${tools.slice(0, 5).join(", ")}。批准后才会进入具体执行。`;
+  return "确认模型提出的工具执行计划。批准计划本身不会直接改文件，下一步仍会对具体动作单独确认。";
+}
+
+function plannerApprovalMeta(item: PendingAction | undefined, eventDetails: Record<string, unknown> | undefined) {
+  const details = item?.details || eventDetails || {};
+  const tools = stringList(details.tools);
+  const files = stringList(details.files_touched_guess);
+  const bits: string[] = [];
+  if (tools.length > 0) bits.push(`tools: ${tools.slice(0, 4).join(", ")}${tools.length > 4 ? ", ..." : ""}`);
+  if (files.length > 0) bits.push(`files: ${files.slice(0, 3).join(", ")}${files.length > 3 ? ", ..." : ""}`);
+  return bits.join(" · ");
+}
+
+function plannerStepSummaries(details: Record<string, unknown>) {
+  const summary = stringList(details.summary);
+  if (summary.length > 0) return summary;
+  const planSteps = Array.isArray(details.plan_steps) ? details.plan_steps : [];
+  return planSteps
+    .map((step) => {
+      if (!step || typeof step !== "object") return "";
+      const record = step as Record<string, unknown>;
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      const tool = typeof record.tool_name === "string" ? record.tool_name.trim() : "";
+      if (title && tool) return `${title} [${tool}]`;
+      return title || tool;
+    })
+    .filter((value) => value.length > 0);
+}
+
+function stringList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter((item) => item.length > 0);
 }
 
 function approvalEmptyText(busy: boolean, workspaceApprovalCount: number) {

@@ -186,6 +186,103 @@ export type TimelineEntry = {
   details?: Record<string, unknown>;
 };
 
+export type TraceStatus = "running" | "ok" | "error" | "blocked" | "pending" | "cancelled";
+
+export type TraceRunSummary = {
+  schema_version: string;
+  run_id: string;
+  session_id?: string | null;
+  turn_id?: string | number | null;
+  workspace: string;
+  user_goal_preview: string;
+  status: TraceStatus;
+  started_at: number;
+  ended_at?: number | null;
+  duration_ms?: number | null;
+  provider?: string | null;
+  model?: string | null;
+  llm_calls: number;
+  tool_calls: number;
+  approval_count: number;
+  memory_recall_count: number;
+  checkpoint_count: number;
+  subagent_count: number;
+  error_count: number;
+  blocked_count: number;
+  pending_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  risk_level: "low" | "medium" | "high";
+  changed_path_count: number;
+  attributes?: Record<string, unknown>;
+};
+
+export type TraceSpan = {
+  schema_version: string;
+  run_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  session_id?: string | null;
+  turn_id?: string | number | null;
+  name: string;
+  span_type: string;
+  status: TraceStatus;
+  started_at: number;
+  ended_at?: number | null;
+  duration_ms?: number | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  attributes: Record<string, unknown>;
+  error_kind?: string | null;
+  error_message?: string | null;
+  redaction_applied?: boolean;
+};
+
+export type TraceEvent = {
+  schema_version: string;
+  run_id: string;
+  event_id: string;
+  name: string;
+  timestamp: number;
+  session_id?: string | null;
+  turn_id?: string | number | null;
+  span_id?: string | null;
+  attributes: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  redaction_applied?: boolean;
+};
+
+export type TraceDiagnosis = {
+  code: string;
+  severity: "info" | "warning" | "error";
+  title: string;
+  message: string;
+  span_id?: string | null;
+  attributes?: Record<string, unknown>;
+};
+
+export type TraceArtifact = {
+  schema_version: string;
+  run_id: string;
+  artifact_id: string;
+  artifact_type: string;
+  path?: string | null;
+  token?: string | null;
+  preview: string;
+  attributes: Record<string, unknown>;
+};
+
+export type TraceDetail = {
+  run: Record<string, unknown> | null;
+  summary: TraceRunSummary | null;
+  spans: TraceSpan[];
+  events: TraceEvent[];
+  artifacts: TraceArtifact[];
+  diagnosis: TraceDiagnosis[];
+  warnings: string[];
+};
+
 export type LogEntry = {
   timestamp?: string | number | null;
   level: string;
@@ -344,6 +441,17 @@ export const api = {
         ? `/api/sessions/${encodeURIComponent(sessionId)}/timeline?limit=${limit}`
         : `/api/timeline?limit=${limit}`
     ),
+  traces: (params: { limit?: number; sessionId?: string } = {}) => {
+    const query = new URLSearchParams();
+    query.set("limit", String(params.limit || 50));
+    if (params.sessionId) query.set("session_id", params.sessionId);
+    return request<{ runs: TraceRunSummary[] }>(`/api/traces?${query.toString()}`);
+  },
+  latestTrace: (sessionId?: string) =>
+    request<TraceRunSummary>(sessionId ? `/api/traces/latest?session_id=${encodeURIComponent(sessionId)}` : "/api/traces/latest"),
+  traceDetail: (runId: string) => request<TraceDetail>(`/api/traces/${encodeURIComponent(runId)}`),
+  sessionTraces: (sessionId: string, limit = 20) =>
+    request<{ runs: TraceRunSummary[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/traces?limit=${limit}`),
   logs: (params: { level?: string; source?: string; sessionId?: string; search?: string; limit?: number } = {}) => {
     const query = new URLSearchParams();
     if (params.level) query.set("level", params.level);

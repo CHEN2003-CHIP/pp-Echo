@@ -41,6 +41,7 @@ from pp_agent.memory.file_memory_tools import register_file_memory_tools
 from pp_agent.memory.vector_index import ChromaVectorIndex, NoopVectorIndex
 from pp_agent.mcp import MCPManager
 from pp_agent.mcp.config import load_mcp_server_configs
+from pp_agent.observability import TraceRecorder, TraceStore
 from pp_agent.runtime.git_checkpoint import GitCheckpointManager
 from pp_agent.runtime.hooks import BeforeToolCallDecision, RuntimeHooks
 from pp_agent.runtime.lifecycle import CHECKPOINT_BEFORE_CREATE, CHECKPOINT_CREATED
@@ -420,6 +421,17 @@ def pending_action_store_for(workspace: Path) -> PendingActionStore:
     :return: 待执行动作存储实例
     """
     return PendingActionStore(workspace.resolve() / ".pp-agent" / "pending-edits")
+
+
+def trace_store_for(workspace: Path) -> TraceStore:
+    """
+    根据工作区创建本地 TraceStore。
+
+    Trace 文件固定写入 workspace/.pp-agent/traces，用于 Web TraceInspect 和后续
+    eval 指标读取。该函数只构造 store，不会主动写入任何记录。
+    """
+
+    return TraceStore(workspace.resolve())
 
 
 def memory_provider_for(workspace: Path):
@@ -963,6 +975,7 @@ def create_runtime_from_record(
         config_manager=config_manager,
         config_snapshot=config_snapshot,
         config_refresh_callback=_refresh_runtime_from_config,
+        observability=TraceRecorder(trace_store_for(workspace), workspace=workspace),
     )
     #----------------------------------------------------------------------------------------------------------------
     # 安装自动检查点钩子

@@ -3454,3 +3454,317 @@ body {
   color: var(--app-danger);
   font-size: 12px;
 }
+
+.trace-inspect-page {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: var(--app-bg);
+}
+
+.trace-inspect-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-2);
+}
+
+.trace-inspect-toolbar button,
+.trace-inspect-filters input,
+.trace-inspect-filters select {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+  color: var(--app-text);
+}
+
+.trace-inspect-toolbar span {
+  min-width: 0;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.trace-inspect-error {
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(239, 141, 141, 0.28);
+  background: rgba(239, 141, 141, 0.08);
+  color: var(--app-danger);
+  font-size: 12px;
+}
+
+.trace-inspect-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+}
+
+.trace-inspect-sidebar {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-right: 1px solid var(--app-border);
+  background: var(--app-bg-2);
+}
+
+.trace-inspect-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.trace-inspect-run-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.trace-inspect-run-list button {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--app-border);
+  text-align: left;
+  background: transparent;
+}
+
+.trace-inspect-run-list button:hover,
+.trace-inspect-run-list button.active,
+.trace-timeline-list button:hover,
+.trace-timeline-list button.active {
+  background: var(--app-panel);
+}
+
+.trace-inspect-run-list strong,
+.trace-inspect-run-list span,
+.trace-inspect-run-list small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-inspect-run-list span,
+.trace-inspect-run-list small {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.trace-inspect-detail {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 12px;
+}
+
+.trace-inspect-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trace-inspect-summary div,
+.trace-inspect-section {
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
+.trace-inspect-summary div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.trace-inspect-summary span,
+.trace-inspect-section h3,
+.trace-span-inspector dt {
+  color: var(--app-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.trace-inspect-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.trace-inspect-section {
+  min-width: 0;
+  padding: 10px;
+}
+
+.trace-inspect-section h3 {
+  margin: 0 0 8px;
+  letter-spacing: 0.06em;
+}
+
+.trace-inspect-two-col {
+  height: clamp(360px, 56vh, 560px);
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.trace-timeline-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.trace-span-inspector {
+  min-height: 0;
+  overflow: auto;
+}
+
+.trace-timeline-list button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) 82px 72px;
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  border-bottom: 1px solid var(--app-border);
+  text-align: left;
+}
+
+.trace-timeline-list strong,
+.trace-timeline-list span,
+.trace-timeline-list em,
+.trace-timeline-list small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.trace-timeline-list span,
+.trace-timeline-list small {
+  color: var(--app-muted);
+}
+
+.trace-timeline-list em,
+.trace-inspect-run-list em {
+  font-style: normal;
+}
+
+.trace-status-success { color: var(--app-success); }
+.trace-status-warning { color: var(--app-warning); }
+.trace-status-danger { color: var(--app-danger); }
+.trace-status-muted { color: var(--app-muted); }
+
+.trace-span-inspector dl {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.trace-span-inspector dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.trace-span-inspector details,
+.trace-span-list details,
+.trace-inspect-section details {
+  border-top: 1px solid var(--app-border);
+  padding: 8px 0;
+}
+
+.trace-span-inspector summary,
+.trace-span-list summary,
+.trace-inspect-section summary {
+  cursor: pointer;
+  color: var(--app-text);
+  font-size: 12px;
+}
+
+.trace-inspect-section pre {
+  max-height: 360px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--app-bg-2);
+  color: var(--app-text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.trace-span-inspector pre {
+  max-height: none;
+}
+
+.trace-diagnosis {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+
+.trace-diagnosis span,
+.trace-span-list p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.trace-diagnosis-error { border-color: rgba(239, 141, 141, 0.34); }
+.trace-diagnosis-warning { border-color: rgba(224, 188, 99, 0.34); }
+.trace-diagnosis-info { border-color: rgba(89, 189, 243, 0.26); }
+
+@media (max-width: 980px) {
+  .trace-inspect-layout,
+  .trace-inspect-two-col {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .trace-inspect-two-col {
+    height: auto;
+    overflow: visible;
+  }
+
+  .trace-timeline-list,
+  .trace-span-inspector {
+    max-height: 420px;
+  }
+
+  .trace-inspect-sidebar {
+    max-height: 320px;
+    border-right: 0;
+    border-bottom: 1px solid var(--app-border);
+  }
+
+  .trace-inspect-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trace-timeline-list button {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+}

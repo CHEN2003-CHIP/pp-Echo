@@ -14,6 +14,9 @@ from typing import Optional
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
 from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.provider import MemoryProvider, NoopMemoryProvider
+from pp_agent.observability.hooks import ObservabilityHooks
+from pp_agent.observability.noop import NoopObservabilityHooks
+from pp_agent.observability.redaction import safe_preview, sanitize_tool_args
 from pp_agent.runtime.cancellation import CancellationToken, OperationCancelled
 from pp_agent.runtime.compaction import ConversationCompactor
 from pp_agent.runtime.emitter import LifecycleEmitter
@@ -30,6 +33,12 @@ from pp_agent.runtime.lifecycle import (
     AGENT_END,
     AGENT_START,
     BEFORE_PROVIDER_REQUEST,
+    CHECKPOINT_BEFORE_CREATE,
+    CHECKPOINT_BEFORE_RESTORE,
+    CHECKPOINT_CREATED,
+    CHECKPOINT_RESTORE_FAILED,
+    CHECKPOINT_RESTORE_PREVIEW,
+    CHECKPOINT_RESTORED,
     COMPACTION,
     CONTEXT_BUILT,
     ERROR,
@@ -50,6 +59,8 @@ from pp_agent.runtime.lifecycle import (
     SESSION_BEFORE_COMPACT,
     SESSION_COMPACTED,
     SESSION_RESTORE,
+    SESSION_SAFE_REWIND_COMPLETED,
+    SESSION_SAFE_REWIND_STARTED,
     TOOL_CALL,
     TOOL_END,
     TOOL_ERROR,
@@ -126,6 +137,7 @@ class AgentRuntime:
         config_manager: Optional[object] = None,
         config_snapshot: Optional[object] = None,
         config_refresh_callback: Optional[ConfigRefreshCallback] = None,
+        observability: Optional[ObservabilityHooks] = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -180,6 +192,9 @@ class AgentRuntime:
         self.config_version = getattr(config_snapshot, "config_version", None)
         self.pending_config_effects: list[str] = []
         self._config_refresh_callback = config_refresh_callback
+        self.observability = observability or NoopObservabilityHooks()
+        self._trace_event_starts: dict[str, AgentEvent] = {}
+        self.lifecycle.subscribe(self._observe_runtime_event)
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -244,7 +259,21 @@ class AgentRuntime:
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
             turn_started_at=user_message.timestamp,
         )
-        return self._collect_runtime_events(self._run_loop(turn_persist_context=context))
+        self.observability.start_run(
+            session_id=self.session_id,
+            turn_id=context.turn_id,
+            user_goal_preview=safe_preview(text, 1000),
+            provider=self._provider_name(),
+            model=self.llm_client.model.model,
+            attributes={"entrypoint": "prompt"},
+        )
+        try:
+            events = self._collect_runtime_events(self._run_loop(turn_persist_context=context))
+        except Exception as exc:
+            self.observability.end_run(status="error", error=exc)
+            raise
+        self.observability.end_run(status=self._trace_status_from_events(events))
+        return events
 
     def continue_(self) -> list[AgentEvent]:
         """如果当前没有挂起的 tool calls,并且没有挂起的 planner approval token,那才允许从 queued_messages 里取下一条消息出来；"""
@@ -264,7 +293,21 @@ class AgentRuntime:
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
             turn_started_at=time.time(),
         )
-        return self._collect_runtime_events(self._run_loop(turn_persist_context=context))
+        self.observability.start_run(
+            session_id=self.session_id,
+            turn_id=context.turn_id,
+            user_goal_preview=safe_preview(next_message.text if next_message is not None else "continue", 1000),
+            provider=self._provider_name(),
+            model=self.llm_client.model.model,
+            attributes={"entrypoint": "continue", "decision": decision.action},
+        )
+        try:
+            events = self._collect_runtime_events(self._run_loop(turn_persist_context=context))
+        except Exception as exc:
+            self.observability.end_run(status="error", error=exc)
+            raise
+        self.observability.end_run(status=self._trace_status_from_events(events))
+        return events
 
     def enqueue_message(self, text: str, delivery: str = "follow_up") -> QueuedMessage:
         """把一条消息先存进 runtime 的排队区，保存状态，并通知外界‘队列有新消息了"""
@@ -1220,6 +1263,239 @@ class AgentRuntime:
         )
         yield from self._set_turn_phase("idle", "canceled")
 
+    def _observe_runtime_event(self, event: AgentEvent) -> None:
+        """把既有 Runtime lifecycle event 转换为结构化 Trace 事件和 span。"""
+        try:
+            self._observe_runtime_event_impl(event)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("trace observer ignored lifecycle event failure: %s", exc)
+
+    def _observe_runtime_event_impl(self, event: AgentEvent) -> None:
+        """执行 Runtime event 到 Trace 的实际转换；调用方负责异常隔离。"""
+        if event.type == MESSAGE_DELTA:
+            return
+        details = dict(event.details or {})
+        payload = {
+            "message": event.message,
+            "tool_name": event.tool_name,
+            "is_error": event.is_error,
+            "details": details,
+        }
+        self.observability.event(event.type, attributes=self._trace_event_attributes(event), payload=payload)
+        record_span = getattr(self.observability, "record_completed_span", None)
+        if not callable(record_span):
+            return
+        key = self._trace_span_key(event)
+        if event.type in {TURN_START, BEFORE_PROVIDER_REQUEST, TOOL_START}:
+            if key:
+                self._trace_event_starts[key] = event
+            return
+        if event.type == CONTEXT_BUILT:
+            record_span(
+                "context.build",
+                "context",
+                started_at=event.timestamp,
+                ended_at=event.timestamp,
+                attributes={
+                    "message_count": details.get("message_count"),
+                    "queue_count": details.get("queue_count"),
+                    "memory_count": self._trace_memory_count(details),
+                    "estimated_tokens": details.get("estimated_tokens"),
+                },
+                output={"memory_recall": details.get("memory_recall")} if isinstance(details.get("memory_recall"), dict) else {},
+            )
+            self._record_memory_span_from_context(event, record_span)
+            return
+        if event.type == PROVIDER_RESPONSE:
+            start = self._trace_event_starts.pop("llm", None)
+            record_span(
+                "llm.call",
+                "llm",
+                started_at=start.timestamp if start is not None else event.timestamp,
+                ended_at=event.timestamp,
+                attributes={
+                    "provider": details.get("provider"),
+                    "model": details.get("model"),
+                    "message_count": details.get("message_count"),
+                    "tool_count": details.get("tool_count"),
+                    "finish_reason": ",".join(details.get("finish_reasons") or []),
+                    "tool_call_count": details.get("tool_count"),
+                },
+                output={
+                    "text_length": details.get("text_length"),
+                    "streamed_event_count": details.get("streamed_event_count"),
+                },
+            )
+            if int(details.get("tool_count") or 0) == 0 and not event.is_error:
+                record_span("final.answer", "system", started_at=event.timestamp, ended_at=event.timestamp, attributes={"source": "provider_response"})
+            return
+        if event.type == PROVIDER_ERROR:
+            start = self._trace_event_starts.pop("llm", None)
+            record_span(
+                "llm.call",
+                "llm",
+                status="error",
+                started_at=start.timestamp if start is not None else event.timestamp,
+                ended_at=event.timestamp,
+                attributes={"provider": details.get("provider"), "model": details.get("model")},
+                error=event.message or "provider_error",
+            )
+            return
+        if event.type == TOOL_END:
+            start = self._trace_event_starts.pop(key or "", None)
+            output = dict(details)
+            output["content_preview"] = safe_preview(event.message, 2000)
+            record_span(
+                "tool.call",
+                "tool",
+                status="error" if event.is_error else ("pending" if details.get("staged") or details.get("approval_pending") else "ok"),
+                started_at=start.timestamp if start is not None else event.timestamp,
+                ended_at=event.timestamp,
+                attributes={
+                    "tool_name": event.tool_name,
+                    "tool_call_id": details.get("tool_call_id"),
+                    "requires_confirmation": details.get("requires_confirmation"),
+                    "permission_domain": details.get("permission_domain"),
+                    "tool_origin": details.get("tool_family") or details.get("category"),
+                    "is_subagent_tool": event.tool_name in {"spawn_subagent", "orchestrate_agents"},
+                },
+                input={"arguments": sanitize_tool_args(event.tool_args or {})},
+                output=output,
+                error=event.message if event.is_error else None,
+            )
+            if event.tool_name in {"spawn_subagent", "orchestrate_agents"}:
+                record_span(
+                    "subagent.run",
+                    "subagent",
+                    status="error" if event.is_error else "ok",
+                    started_at=start.timestamp if start is not None else event.timestamp,
+                    ended_at=event.timestamp,
+                    attributes=details,
+                    error=event.message if event.is_error else None,
+                )
+            return
+        if event.type == TURN_END:
+            start = self._trace_event_starts.pop(key or "", None)
+            record_span(
+                "agent.turn",
+                "turn",
+                status="error" if event.is_error or details.get("failed") else "ok",
+                started_at=start.timestamp if start is not None else event.timestamp,
+                ended_at=event.timestamp,
+                attributes=details,
+                error=details.get("failure_kind") if details.get("failed") else None,
+            )
+            return
+        if event.type in {PLANNER_GATE_PENDING, PLANNER_GATE_APPROVED, PLANNER_GATE_REJECTED}:
+            status = "pending" if event.type == PLANNER_GATE_PENDING else ("blocked" if event.type == PLANNER_GATE_REJECTED else "ok")
+            record_span(
+                "approval.decision",
+                "approval",
+                status=status,
+                started_at=event.timestamp,
+                ended_at=event.timestamp,
+                attributes={
+                    **details,
+                    "approval_token": details.get("token"),
+                    "decision": "pending" if status == "pending" else ("rejected" if status == "blocked" else "approved"),
+                },
+            )
+            return
+        if event.type == TOOL_CALL and details.get("policy_action"):
+            status = "blocked" if details.get("policy_action") in {"deny", "reject"} else "ok"
+            record_span(
+                "policy.decision",
+                "policy",
+                status=status,
+                started_at=event.timestamp,
+                ended_at=event.timestamp,
+                attributes={**details, "source_tool_name": event.tool_name},
+            )
+            return
+        if event.type in {
+            CHECKPOINT_BEFORE_CREATE,
+            CHECKPOINT_CREATED,
+            CHECKPOINT_RESTORE_PREVIEW,
+            CHECKPOINT_BEFORE_RESTORE,
+            CHECKPOINT_RESTORED,
+            CHECKPOINT_RESTORE_FAILED,
+            SESSION_SAFE_REWIND_STARTED,
+            SESSION_SAFE_REWIND_COMPLETED,
+        }:
+            name = "checkpoint.create" if event.type in {CHECKPOINT_BEFORE_CREATE, CHECKPOINT_CREATED} else (
+                "checkpoint.preview_rewind" if event.type == CHECKPOINT_RESTORE_PREVIEW else "checkpoint.execute_rewind"
+            )
+            record_span(
+                name,
+                "checkpoint",
+                status="error" if event.is_error or event.type == CHECKPOINT_RESTORE_FAILED else "ok",
+                started_at=event.timestamp,
+                ended_at=event.timestamp,
+                attributes=details,
+                error=event.message if event.is_error else None,
+            )
+
+    def _trace_event_attributes(self, event: AgentEvent) -> dict[str, object]:
+        return {
+            "session_id": event.session_id,
+            "turn_id": event.turn_id,
+            "phase": event.phase,
+            "tool_name": event.tool_name,
+            "is_error": event.is_error,
+        }
+
+    def _trace_span_key(self, event: AgentEvent) -> str:
+        if event.type in {TURN_START, TURN_END}:
+            return f"turn:{event.turn_id}"
+        if event.type in {TOOL_START, TOOL_END, TOOL_ERROR, TOOL_RESULT}:
+            tool_call_id = event.details.get("tool_call_id") if event.details else None
+            return f"tool:{tool_call_id or event.tool_name or ''}"
+        if event.type in {BEFORE_PROVIDER_REQUEST, PROVIDER_RESPONSE, PROVIDER_ERROR}:
+            return "llm"
+        return ""
+
+    @staticmethod
+    def _trace_memory_count(details: dict[str, object]) -> int:
+        recall = details.get("memory_recall")
+        if not isinstance(recall, dict):
+            return 0
+        return int(recall.get("returned_count") or len(recall.get("hits") or recall.get("snippets") or []))
+
+    @staticmethod
+    def _record_memory_span_from_context(event: AgentEvent, record_span) -> None:
+        recall = event.details.get("memory_recall") if event.details else None
+        if not isinstance(recall, dict):
+            return
+        record_span(
+            "memory.recall",
+            "memory",
+            started_at=event.timestamp,
+            ended_at=event.timestamp,
+            input={
+                "query_preview": recall.get("query") or recall.get("query_preview"),
+                "scope": recall.get("scope"),
+                "top_k": recall.get("top_k"),
+                "mode": recall.get("mode"),
+            },
+            output={
+                "returned_count": recall.get("returned_count") or len(recall.get("hits") or recall.get("snippets") or []),
+                "injected_count": recall.get("injected_count"),
+                "injected_tokens": recall.get("injected_tokens"),
+                "hits": recall.get("hits") or recall.get("snippets") or [],
+                "warnings": recall.get("warnings") or [],
+            },
+        )
+
+    @staticmethod
+    def _trace_status_from_events(events: list[AgentEvent]):
+        if any(event.details.get("cancelled") for event in events if event.details):
+            return "cancelled"
+        if any(event.type in {PLANNER_GATE_PENDING} for event in events):
+            return "pending"
+        if any(event.is_error or event.type == ERROR for event in events):
+            return "error"
+        return "ok"
+
     def _set_turn_phase(self, phase: str, reason: str) -> Iterator[AgentEvent]:
         """安全、规范地修改回合的执行阶段 + 自动触发阶段变更事件"""
         self.state.turn.phase = phase
@@ -2111,6 +2387,8 @@ class AgentRuntime:
         for callback in self._subscribers:
             self.lifecycle.subscribe(callback)
         self._runtime_hooks.register_with_lifecycle(self.lifecycle)
+        if hasattr(self, "observability"):
+            self.lifecycle.subscribe(self._observe_runtime_event)
 
     def _attach_runtime_context_to_tool_registry(self) -> None:
         set_emitter = getattr(self.tool_registry, "set_runtime_event_emitter", None)
