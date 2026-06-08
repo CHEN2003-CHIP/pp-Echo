@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pp-agent"
-version = "0.2.0"
+version = "0.1.0a1"
 description = "A Windows-first coding agent CLI with plan-before-act, approval gates, session branching, and git-backed safe rewind."
 readme = "README.md"
 requires-python = ">=3.9"

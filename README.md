@@ -1,5 +1,15 @@
 # pp-Echo
 
+## Release
+
+Current preview release target:
+
+- `v0.1.0-alpha.1`
+- Teaching-oriented local Agent Runtime preview
+- See `releases/v0.1.0-alpha.1.md` for release notes.
+
+This project is still an alpha learning/research project. It includes approval, trace auditing, and checkpoint/rewind, but it is not a production sandbox.
+
 <p align="center">
   <img src="docs/assets/logo-echo.svg" alt="pp-Echo logo" width="420" />
 </p>

@@ -36,6 +36,16 @@ pp-Echo is a practical local coding agent and a readable reference project for a
 - `@subagent` and `orchestrate_agents` are implemented, but the model is still a bounded local orchestration layer rather than a mature autonomous agent team platform.
 - The repo is stable enough to study and extend, but it is still evolving and should be described honestly.
 
+## Release
+
+Current preview release target:
+
+- `v0.1.0-alpha.1`
+- Teaching-oriented local Agent Runtime preview
+- See `releases/v0.1.0-alpha.1.md` for release notes.
+
+This project is still an alpha learning/research project. It includes approval, trace auditing, and checkpoint/rewind, but it is not a production sandbox.
+
 ## Why pp-Echo
 
 - It is not just a demo chatbot. The runtime, tool registry, approvals, rewind, and persistence paths are implemented in code and covered by tests.

@@ -1,7 +1,7 @@
 # pp-Echo Tau-Style Eval Report
 
-- Commit: `8fcefb8`
-- Date: `2026-06-05T06:45:02.636544+00:00`
+- Commit: `ac5f582`
+- Date: `2026-06-08T06:28:46.514908+00:00`
 - Suite: `pp_echo_core`
 - Mode: `deterministic`
 - Provider: `scripted`
