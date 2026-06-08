@@ -173,6 +173,36 @@ export type RuntimeDoctorReport = {
   findings: Array<Record<string, unknown>>;
 };
 
+export type OnboardingCheckStatus = "ok" | "warning" | "error" | "skipped";
+
+export type OnboardingCheck = {
+  id: string;
+  title: string;
+  status: OnboardingCheckStatus;
+  summary: string;
+  detail?: string;
+  action_label?: string | null;
+  action_command?: string | null;
+  docs_hint?: string | null;
+};
+
+export type OnboardingStatus = {
+  workspace: string;
+  overall_status: "ready" | "partial" | "blocked";
+  checks: OnboardingCheck[];
+  command_hints: Array<{
+    title: string;
+    command: string;
+    description?: string;
+  }>;
+  next_steps: Array<{
+    title: string;
+    description: string;
+    action_label?: string | null;
+    target_view?: string | null;
+  }>;
+};
+
 export type TimelineEntry = {
   id: string;
   session_id: string;
@@ -434,6 +464,8 @@ export const api = {
   health: () => request<{ ok: boolean; workspace: string }>("/api/health"),
   workspace: () => request<{ path: string; name: string }>("/api/workspace"),
   workspaceStatus: () => request<WorkspaceStatus>("/api/workspace/status"),
+  onboardingStatus: () => request<OnboardingStatus>("/api/onboarding/status"),
+  onboardingCheckModel: () => request<OnboardingCheck>("/api/onboarding/check-model", { method: "POST" }),
   workspaces: () => request<WorkspacesState>("/api/workspaces"),
   openWorkspace: (path: string, confirmed = false) =>
     request<OpenWorkspaceResponse>("/api/workspaces/open", {

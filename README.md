@@ -128,6 +128,8 @@ python -m pp_agent.cli.main chat
 .\start-web.bat
 ```
 
+Startup Guide: 启动 Web UI 后点击左上角 `pp-Echo`；CLI 可运行 `python -m pp_agent.cli.main onboard`。
+
 Web UI 默认访问：
 
 ```text
@@ -138,6 +140,9 @@ http://127.0.0.1:8765
 
 ```powershell
 set PYTHONPATH=src
+python -m pp_agent.cli.main onboard
+python -m pp_agent.cli.main onboard --json
+python -m pp_agent.cli.main onboard --check-model
 python -m pp_agent.cli.main workflow doctor --json
 python -m pp_agent.cli.main config show --workspace .
 python -m pp_agent.cli.main memory search "project conventions" --scope workspace

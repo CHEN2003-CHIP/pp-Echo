@@ -75,10 +75,12 @@ def create_app(
 
     from pp_agent.server.routes.config import mount_config_routes
     from pp_agent.server.routes.capability_config import mount_capability_config_routes
+    from pp_agent.server.routes.onboarding import mount_onboarding_routes
     from pp_agent.server.routes.traces import mount_trace_routes
 
     mount_config_routes(app, active_workspace, session_manager)
     mount_capability_config_routes(app, active_workspace)
+    mount_onboarding_routes(app, active_workspace)
     mount_trace_routes(app, active_workspace)
 
     @app.middleware("http")

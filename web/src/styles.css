@@ -1179,14 +1179,18 @@ body {
 }
 
 .app-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-rows: 29px 29px;
+  gap: 4px 8px;
+  align-items: stretch;
 }
 
 .brand-button {
   flex: 1;
   min-width: 0;
+  min-height: 62px;
+  grid-row: 1 / -1;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1268,6 +1272,10 @@ body {
   border-radius: 9px;
   background: var(--app-panel);
   color: var(--app-text);
+}
+
+.app-brand > .icon-button {
+  height: 29px;
 }
 
 .icon-button.active {
@@ -1421,6 +1429,198 @@ body {
   color: var(--app-muted);
 }
 
+.startup-guide-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.startup-guide-hero,
+.startup-guide-section {
+  border: 1px solid var(--app-border);
+  background: var(--app-panel);
+  border-radius: 8px;
+  box-shadow: var(--app-shadow);
+}
+
+.startup-guide-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+}
+
+.startup-guide-hero small {
+  color: var(--app-muted);
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.startup-guide-hero h2,
+.startup-guide-section h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.startup-guide-hero p,
+.startup-guide-section p,
+.startup-next-steps p,
+.startup-action-card p {
+  margin: 6px 0 0;
+  color: var(--app-muted);
+}
+
+.startup-guide-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.startup-overall,
+.startup-check-title span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--app-border);
+}
+
+.startup-overall-ready,
+.onboarding-status-ok {
+  color: #3fb983;
+}
+
+.startup-overall-partial,
+.onboarding-status-warning {
+  color: #d9a441;
+}
+
+.startup-overall-blocked,
+.onboarding-status-error {
+  color: #ef6f6c;
+}
+
+.onboarding-status-skipped {
+  color: var(--app-muted);
+}
+
+.startup-secondary-button,
+.startup-copy-command,
+.startup-action-card button,
+.startup-model-check button,
+.startup-safe-task button,
+.startup-next-steps button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-panel-2);
+  color: inherit;
+  padding: 7px 10px;
+}
+
+.startup-guide-section {
+  padding: 16px;
+}
+
+.startup-guide-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.startup-checklist,
+.startup-next-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.startup-check-item {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-bg-2);
+}
+
+.startup-check-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
+.startup-check-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.startup-check-item small {
+  display: block;
+  margin-top: 4px;
+  color: var(--app-muted);
+}
+
+.startup-copy-command {
+  margin-top: 8px;
+}
+
+.startup-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.startup-action-card,
+.startup-next-steps article,
+.startup-model-check,
+.startup-safe-task {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-bg-2);
+}
+
+.startup-action-card code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--app-panel);
+  color: var(--app-text);
+}
+
+.startup-model-result {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
+.startup-guide-error,
+.startup-guide-loading {
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
 .session-search input {
   width: 100%;
   border: 0;
@@ -1546,6 +1746,10 @@ body {
 .canvas-body {
   min-height: 0;
   overflow: hidden;
+}
+
+.canvas-body-startupGuide {
+  overflow: auto;
 }
 
 .chat-layout {
@@ -2940,6 +3144,57 @@ body {
   .composer-approval .split-actions button {
     flex: 1;
   }
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.app-shell.sidebar-collapsed.mode-sessions,
+.app-shell.sidebar-collapsed.mode-observer {
+  grid-template-columns: 88px var(--shell-session-width) minmax(0, 1fr);
+}
+
+.app-shell.sidebar-collapsed .app-nav {
+  padding: 12px 8px;
+}
+
+.app-shell.sidebar-collapsed .app-brand {
+  grid-template-columns: 34px 34px;
+  gap: 4px;
+}
+
+.app-shell.sidebar-collapsed .brand-button {
+  display: flex;
+  justify-content: center;
+  padding: 0;
+}
+
+.app-shell.sidebar-collapsed .brand-copy,
+.app-shell.sidebar-collapsed .nav-entry span,
+.app-shell.sidebar-collapsed .nav-group-label,
+.app-shell.sidebar-collapsed .footer-line span,
+.app-shell.sidebar-collapsed .footer-meta {
+  display: none;
+}
+
+.app-shell.sidebar-collapsed .nav-groups {
+  padding-right: 0;
+}
+
+.app-shell.sidebar-collapsed .nav-entry {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  padding: 0;
+}
+
+.app-shell.sidebar-collapsed .nav-entry svg:last-child {
+  display: none;
+}
+
+.app-shell.sidebar-collapsed .footer-line {
+  justify-content: center;
+  padding: 0;
 }
 
 .workspace-dialog-backdrop {

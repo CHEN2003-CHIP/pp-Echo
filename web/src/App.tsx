@@ -16,6 +16,8 @@ import {
   LayoutDashboard,
   MessageSquare,
   Monitor,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   Search,
@@ -23,12 +25,14 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Sun,
   Users,
   X
 } from "lucide-react";
 import { api, ApprovalActionResponse, ApprovalsSummary, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
+import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
 
 type ViewKey =
   | "chat"
@@ -43,6 +47,7 @@ type ViewKey =
   | "memory"
   | "model"
   | "logs"
+  | "startupGuide"
   | "traceInspect"
   | "usage"
   | "skills"
@@ -149,6 +154,7 @@ const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activ
 
 export function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => readTheme());
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspacesState>({ active: { name: "pp-Echo", path: "", exists: true, is_dir: true }, recent: [] });
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null);
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
@@ -608,10 +614,10 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell theme-${theme} ${middleMode ? `mode-${middleMode}` : "mode-chat"}`}>
+    <div className={`app-shell theme-${theme} ${middleMode ? `mode-${middleMode}` : "mode-chat"} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="app-nav">
         <div className="app-brand">
-          <button className="brand-button" onClick={() => openView("chat")} title="pp-Echo">
+          <button className="brand-button" onClick={() => openView("startupGuide")} title="启动指引">
             <div className="brand-mark">
               <Sparkles size={17} />
             </div>
@@ -621,7 +627,14 @@ export function App() {
             </div>
           </button>
           <button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="切换主题">
-            <Monitor size={16} />
+            <Sun size={15} />
+          </button>
+          <button
+            className="icon-button"
+            onClick={() => setSidebarCollapsed((current) => !current)}
+            title={sidebarCollapsed ? "Open sidebar" : "Close sidebar"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
           </button>
         </div>
 
@@ -740,8 +753,14 @@ export function App() {
           </div>
         </header>
 
-        <div className="canvas-body">
-          {activeView === "chat" || activeView === "history" || activeView === "board" ? (
+        <div className={`canvas-body canvas-body-${activeView}`}>
+          {activeView === "startupGuide" ? (
+            <StartupGuidePage
+              onBack={() => setActiveView("chat")}
+              onOpenTrace={() => setActiveView("traceInspect")}
+              onOpenChat={() => setActiveView("chat")}
+            />
+          ) : activeView === "chat" || activeView === "history" || activeView === "board" ? (
             <ChatWorkspace
               transcriptRef={transcriptRef}
               transcript={transcript}

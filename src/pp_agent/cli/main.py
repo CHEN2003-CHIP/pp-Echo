@@ -73,6 +73,17 @@ if app:
 
         web_main(workspace, host=host, port=port)
 
+    @app.command()
+    def onboard(
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+        json_mode: bool = typer.Option(False, "--json"),
+        check_model: bool = typer.Option(False, "--check-model"),
+        no_color: bool = typer.Option(False, "--no-color"),
+    ) -> None:
+        from pp_agent.cli.commands.onboarding import onboarding_main
+
+        onboarding_main(workspace, json_mode=json_mode, check_model=check_model, no_color=no_color)
+
     @app.command("claw-tui")
     def claw_tui(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
         from pp_agent.cli.commands.claw_tui import claw_tui_main
@@ -518,6 +529,11 @@ def main() -> None:
     web_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     web_parser.add_argument("--host", default="127.0.0.1")
     web_parser.add_argument("--port", type=int, default=8765)
+    onboard_parser = subparsers.add_parser("onboard")
+    onboard_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    onboard_parser.add_argument("--json", action="store_true")
+    onboard_parser.add_argument("--check-model", action="store_true")
+    onboard_parser.add_argument("--no-color", action="store_true")
     claw_tui_parser = subparsers.add_parser("claw-tui")
     claw_tui_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     run_parser = subparsers.add_parser("run")
@@ -684,6 +700,10 @@ def main() -> None:
         from pp_agent.cli.commands.web import web_main
 
         web_main(Path(args.workspace), host=args.host, port=args.port)
+    elif command == "onboard":
+        from pp_agent.cli.commands.onboarding import onboarding_main
+
+        onboarding_main(Path(args.workspace), json_mode=args.json, check_model=args.check_model, no_color=args.no_color)
     elif command == "claw-tui":
         from pp_agent.cli.commands.claw_tui import claw_tui_main
 
