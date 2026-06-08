@@ -1,4 +1,4 @@
-# pp-Echo 学习指南（中文）
+﻿# pp-Echo 学习指南（中文）
 
 阅读这份文档前，先记住一个最重要的前提：`pp-Echo` 当前是一个 `Windows-first` 项目。它的 runtime、审批模型、safe rewind、session tree 和工具体系都是真实存在并且值得学习的，但它还不应该被描述成一个已经完成的跨平台 agent 平台，也不应该被包装成一个成熟的 agent team 框架。
 
@@ -361,7 +361,7 @@ memory 相关模块适合帮助你理解“检索增强”是怎样嵌进 runtim
 配合阅读：
 
 - [docs/source-map.md](/E:/Pycharm%20Project/pp-Echo/docs/source-map.md)
-- [docs/legacy/PROJECT_LEARNING.md](legacy/PROJECT_LEARNING.md)
+- [docs/source-reading-roadmap.md](source-reading-roadmap.md)
 
 如果你是中文读者，这份文档应该帮助你快速回答三个问题：
 

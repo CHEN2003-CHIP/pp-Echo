@@ -1,53 +1,45 @@
-# Configuration Guide
+﻿# pp-Echo 配置说明
 
-This page collects the configuration material that used to make the README home page too long. It covers environment variables, project config, resource manifests, and a complete sample JSON configuration.
+本文集中说明 pp-Echo 的本地配置入口。它覆盖环境变量、项目级配置、资源清单以及常用 JSON 示例，方便读者在不展开 README 的情况下理解配置优先级。
 
-## Resolution order
+## 配置加载顺序
 
-At a high level, pp-Echo loads configuration in this order:
+pp-Echo 按下面顺序合并配置，后面的配置会覆盖前面的默认值：
 
-1. built-in defaults from `Settings`
-2. environment variable overrides
-3. project overrides from `.pp-agent/config.json`
-4. workspace instructions from `AGENTS.md`
-5. optional `.pp-agent/SYSTEM.md`
+1. 代码内置默认值，来自 `Settings`。
+2. 环境变量覆盖。
+3. 工作区配置 `.pp-agent/config.json`。
+4. 仓库指引 `AGENTS.md`。
+5. 可选系统指引 `.pp-agent/SYSTEM.md`。
 
-Core implementation lives in `src/pp_agent/storage/settings.py`.
+核心实现位于 `src/pp_agent/storage/settings.py`。
 
-## Environment variables
+## 常用环境变量
 
-| Variable | Purpose |
+| 变量 | 作用 |
 | --- | --- |
-| `PP_AGENT_API_KEY` | API key for the configured OpenAI-compatible provider |
-| `PP_AGENT_BASE_URL` | Override provider base URL |
-| `PP_AGENT_MODEL` | Override model name |
-| `PP_AGENT_ENABLE_THINKING` | Toggle provider-specific thinking/reasoning flag |
-| `PP_AGENT_HOME` | Override the global pp-Echo state directory |
-| `PP_AGENT_SESSIONS_DIR` | Override session storage path |
-| `PP_AGENT_TIMELINES_DIR` | Override timeline storage path |
-| `PP_AGENT_CHECKPOINTS_DIR` | Override checkpoint storage path |
+| `PP_AGENT_API_KEY` | OpenAI-compatible provider 的 API key。 |
+| `PP_AGENT_BASE_URL` | 覆盖模型 provider base URL。 |
+| `PP_AGENT_MODEL` | 覆盖默认模型名。 |
+| `PP_AGENT_ENABLE_THINKING` | 开关 provider 特定 thinking/reasoning 参数。 |
+| `PP_AGENT_HOME` | 覆盖全局 pp-Echo 状态目录。 |
+| `PP_AGENT_SESSIONS_DIR` | 覆盖会话存储目录。 |
+| `PP_AGENT_TIMELINES_DIR` | 覆盖 timeline 存储目录。 |
+| `PP_AGENT_CHECKPOINTS_DIR` | 覆盖 checkpoint 存储目录。 |
 
-## Project config
+## 项目级配置
 
-Create `.pp-agent/config.json` for per-project overrides.
-
-### Complete sample JSON
+在仓库根目录创建 `.pp-agent/config.json` 可以设置当前项目专属配置。典型字段包括：
 
 ```json
 {
-  "model": "qwen3.5-plus",
-  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "model": "your_model_name",
+  "base_url": "https://your-provider.example/v1",
   "enable_thinking": false,
   "tool_policy": {
     "shell_timeout_seconds": 30,
     "permission_mode": "workspace-write",
-    "allowed_tools": [],
-    "ask_tools": [
-      "run_shell",
-      "write_file",
-      "edit_file"
-    ],
-    "denied_tools": [],
+    "ask_tools": ["run_shell", "write_file", "edit_file"],
     "tool_confirmation": {
       "write_file": true,
       "edit_file": true,
@@ -56,230 +48,17 @@ Create `.pp-agent/config.json` for per-project overrides.
     }
   },
   "capabilities": {
-    "builtin_tools": {
-      "enable": true
-    },
-    "skills": {
-      "enable_project": true,
-      "enable_user": true,
-      "enable_builtin": true,
-      "custom_directories": [],
-      "ignored": [],
-      "include": []
-    },
-    "extensions": {
-      "enable_project": true,
-      "enable_user": true,
-      "enable_builtin": false,
-      "custom_directories": [],
-      "ignored": [],
-      "include": []
-    },
-    "mcp": {
-      "enable": false,
-      "config_paths": [],
-      "server_filters": []
-    },
-    "browser": {
-      "enable": false,
-      "browser_executable": "",
-      "user_data_dir": "",
-      "screenshot_dir": "",
-      "launch_flags": [],
-      "default_profile": "isolated",
-      "allow_private_network": false,
-      "allowed_hostnames": [],
-      "deny_hostnames": [],
-      "allow_user_profile": false,
-      "allow_remote_profile": false,
-      "allow_high_risk_actions": false,
-      "evaluate_enabled": false,
-      "connect_timeout_seconds": 20,
-      "navigation_timeout_ms": 5000,
-      "cdp_http_timeout_seconds": 3,
-      "cdp_response_timeout_seconds": 20,
-      "action_timeout_ms": 1500,
-      "shutdown_timeout_seconds": 5,
-      "snapshot_defaults": {
-        "refs": true,
-        "interactive": true,
-        "compact": true,
-        "max_chars": 4000
-      }
-    },
-    "web": {
-      "search_providers": ["baidu", "zhipu", "bing", "duckduckgo"],
-      "search_timeout_seconds": 10,
-      "fetch_timeout_seconds": 10,
-      "zhipu_api_key_env": "ZHIPUAI_API_KEY",
-      "zhipu_base_url": "https://open.bigmodel.cn/api/paas/v4/tools"
-    }
-  },
-  "subagents": {
-    "default_max_turns": 4,
-    "max_turns": {
-      "memory-scout": 3,
-      "repo-researcher": 4,
-      "api-scout": 4,
-      "test-investigator": 4,
-      "change-reviewer": 4,
-      "implementation-planner": 4,
-      "code-worker": 4
-    },
-    "enforce_orchestrated_edit_contract": true,
-    "require_patch_artifact_for_code_change": true
-  },
-  "tool_confirmation": {
-    "write_file": true,
-    "edit_file": true,
-    "run_shell": true,
-    "high_risk_plan": true
-  },
-  "storage": {
-    "sessions_dir": "./.pp-agent/sessions",
-    "timelines_dir": "./.pp-agent/timelines",
-    "checkpoints_dir": "./.pp-agent/checkpoints"
-  },
-  "memory": {
-    "enable": false,
-    "backend": "sqlite",
-    "sqlite_path": "./.pp-agent/history.db",
-    "chunk_target_tokens": 350,
-    "chunk_max_tokens": 420,
-    "sqlite_busy_timeout_ms": 5000,
-    "embedding_enable": false,
-    "embedding_provider": "dashscope",
-    "embedding_model": "multimodal-embedding-v1",
-    "dashscope_api_key_env": "DASHSCOPE_API_KEY",
-    "embedding_batch_size": 16,
-    "vector_enable": false,
-    "vector_backend": "chroma",
-    "chroma_path": "./.pp-agent/chroma",
-    "chroma_collection": "pp_agent_history",
-    "chroma_collection_per_embedding": true,
-    "indexing_enable": false,
-    "indexing_batch_size": 100,
-    "retrieval_enable": false,
-    "retrieval_limit": 6,
-    "retrieval_same_session_bias": 1.0,
-    "retrieval_max_per_session": 2,
-    "retrieval_max_snippets": 4,
-    "retrieval_max_chars": 1600,
-    "hybrid_enable": false,
-    "hybrid_keyword_limit": 12,
-    "hybrid_vector_limit": 12,
-    "recent_dedup_enable": true,
-    "recent_dedup_use_chunk_metadata": true,
-    "snippet_categorize_enable": true,
-    "reranker_enable": false,
-    "reranker_backend": "lightweight",
-    "reranker_limit": 8,
-    "snippet_prioritize_long_term_preferences": true,
-    "snippet_compress_error_stacks": true,
-    "snippet_path_weight_boost": 1.0,
-    "file_memory_enable": true,
-    "file_memory_search_enable": true,
-    "file_memory_root": ".",
-    "file_memory_extra_paths": [],
-    "file_memory_index_path": "./.pp-agent/file-memory-index.json",
-    "file_memory_chroma_collection": "pp_agent_file_memory",
-    "file_memory_chunk_target_chars": 1600,
-    "file_memory_chunk_overlap_lines": 3,
-    "file_memory_top_k": 5,
-    "file_memory_candidate_multiplier": 4,
-    "file_memory_vector_weight": 0.7,
-    "file_memory_bm25_weight": 0.3,
-    "file_memory_max_per_file": 3,
-    "file_memory_snippet_chars": 700,
-    "file_memory_sync_on_search": true,
-    "file_memory_allow_remote_embedding": true
-  },
-  "learning": {
-    "enable": true,
-    "auto_extract": true,
-    "auto_apply_memory": true,
-    "auto_apply_min_confidence": "medium",
-    "project_memory_enable": true,
-    "project_memory_char_limit": 4000,
-    "detailed_memory_enable": true,
-    "detailed_memory_char_limit": 12000,
-    "detailed_memory_auto_consolidate": true,
-    "detailed_memory_sync_index_after_write": true,
-    "candidate_limit_per_turn": 3,
-    "min_confidence_to_suggest": "medium",
-    "llm_extractor_enable": true
+    "builtin_tools": { "enable": true },
+    "skills": { "enable_project": true, "enable_user": true },
+    "extensions": { "enable_project": true, "enable_user": true },
+    "mcp": { "enable": false, "config_paths": [] }
   }
 }
 ```
 
-## Browser and web tools
+## 配置原则
 
-The model-facing browser API is a single `browser` tool. It is selected by an `action` field rather than separate tool names:
-
-- Lifecycle and discovery: `status`, `doctor`, `start`, `stop`, `profiles`, `tabs.list`
-- Tab control: `tabs.open`, `tabs.focus`, `tabs.close`
-- Page read/control: `snapshot`, `screenshot`, `navigate`, `act`
-
-Browser snapshots return a structured UI tree and stable refs such as `e1`, `e2`, and `e3`. Follow-up actions should use those refs through `browser` with `action=act`; raw CSS selectors are internal controller details and should not be used by the model. Snapshot content is marked as `untrusted_web_content`.
-
-Use `web.search` and `web.fetch` for static web research. `web.fetch` performs HTTP GET plus readable extraction and does not execute JavaScript or use browser login state. Use `browser` only for JS-heavy, logged-in, or interactive tasks.
-
-`web.search` defaults to `provider=auto`, which tries providers in `capabilities.web.search_providers` order. The default order prefers China-friendly providers (`baidu`, `zhipu`, `bing`) before falling back to `duckduckgo`. Zhipu search requires the configured API key environment variable; if it is missing or a provider times out, auto mode records the failed attempt and continues to the next provider.
-
-Browser policy defaults are conservative: private/internal IP navigation is blocked, `user` and `remote` profiles require explicit enablement, high-risk submits/clicks and sensitive fields are gated, and JavaScript `evaluate` is disabled unless configured.
-
-## Notes on compatibility
-
-- `tool_confirmation` still exists for planner-era compatibility, but it is no longer the whole safety model on its own.
-- Sensitive execution also passes through the execution-time policy gate and exact-effect review flow.
-- `tool_policy.tool_confirmation` is the preferred nested location; the top-level compatibility block may still appear in older configs.
-
-## Resource manifests and discovery
-
-Project resources can be declared in:
-
-- `.pp-agent/resources.json`
-- `.pp-agent/package.json`
-
-If no manifest is present, pp-Echo falls back to conventional directories such as:
-
-- `skills`
-- `<pp-Echo repo>/skills`
-- `skills/`
-- `.pp-agent/extensions`
-- `.pi/skills`
-- `.agents/skills`
-
-For a workspace-local skill, the friendliest path is now:
-
-```text
-skills/<skill-name>/SKILL.md
-```
-
-For an external skill folder, add it to the workspace config:
-
-```powershell
-python -m pp_agent.cli.main skills add-dir "D:\lab\experiment-report-skill" --workspace .
-python -m pp_agent.cli.main skills roots --workspace .
-python -m pp_agent.cli.main skills list --workspace .
-```
-
-`custom_directories` may point either to a directory that contains many skill folders, or directly to one skill folder that contains `SKILL.md`. Relative paths are resolved from the workspace.
-
-The pp-Echo repository root `skills` directory is loaded as a shared default for every workspace, so skills placed there appear in the frontend even after switching to another workspace. A workspace-local `skills` directory still has higher precedence when names collide.
-
-## Helpful commands
-
-```powershell
-python -m pp_agent.cli.main config show --workspace .
-python -m pp_agent.cli.main capabilities list --workspace .
-python -m pp_agent.cli.main skills list --workspace .
-python -m pp_agent.cli.main skills roots --workspace .
-```
-
-## Reference files in this repo
-
-- `example-config.json`
-- `example-config.jsonc`
-- `example-mcp.json`
-- `example-mcp.jsonc`
+- 不要把真实 `.env`、API key、token 或 cookie 提交到仓库。
+- release 前应确认 `.env.example` 可表达必要字段，而 `.env` 已被 `.gitignore` 忽略。
+- 对工具权限、MCP、Browser、Memory 等能力做改动后，优先运行 `workflow doctor --json` 检查当前工作区状态。
+- 如果配置会影响 runtime 装配，应同时检查 `src/pp_agent/app/bootstrap.py` 和 `src/pp_agent/storage/settings.py`。

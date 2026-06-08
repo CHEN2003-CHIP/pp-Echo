@@ -1,43 +1,50 @@
-# Multi-Agent Demo
+﻿# SubAgent 编排演示
 
-pp-Echo supports an OpenClaw-style subagent orchestration demo through the `orchestrate_agents` tool.
-Subagents run in forked sessions, use restricted tools, and return announce-style summaries to the parent agent.
+pp-Echo 支持通过 `orchestrate_agents` 工具演示 OpenClaw-style subagent 编排。子 agent 会在受控子会话中运行，使用受限工具，并向父 agent 返回摘要。
 
-## Research Demo
+## 研究型演示
 
-Ask in the web chat:
+在 Web chat 中输入：
 
 ```text
 并行分析文件型长期记忆模块的调用链、风险和可优化点。
 ```
 
-Expected workflow: `memory-scout`, `repo-researcher`, and `api-scout` run in parallel.
+预期流程：
 
-## Debug Demo
+- `memory-scout`
+- `repo-researcher`
+- `api-scout`
 
-Ask:
+这些 worker 会并行分析不同侧面，再由父 agent 汇总。
+
+## 调试型演示
+
+输入：
 
 ```text
 并行定位为什么全量 pytest 在 test_catalog 冲突，并告诉我最小修复方案。
 ```
 
-Expected workflow: `memory-scout`, `test-investigator`, and `change-reviewer` run in parallel.
+预期流程：
 
-## Staged Edit Demo
+- `memory-scout`
+- `test-investigator`
+- `change-reviewer`
 
-Ask explicitly:
+## Staged Edit 演示
+
+输入：
 
 ```text
 允许子 agent 生成 staged diff，但不要自动落盘。请修复 pytest test_catalog collection 冲突。
 ```
 
-The orchestrator may run `code-worker` with `allow_edits=true`. The worker can only stage edits through
-`edit_file` or `write_file`; it cannot call approval tools. Review generated tokens with
-`preview_pending_action`, then approve selected tokens through the normal host approval flow.
+当 `allow_edits=true` 时，`code-worker` 只能通过 `edit_file` 或 `write_file` 生成 staged pending action，不能直接调用 approval 工具。用户需要用 `preview_pending_action` 审阅 token，再通过正常 host approval 流程选择性批准。
 
-## Safety Model
+## 安全模型
 
-- Subagents are leaf workers and cannot spawn other subagents.
-- `allow_edits=false` is the default.
-- Editing subagents stage pending actions only; they do not write directly to disk.
-- The parent agent receives summaries, findings, inspected paths, and staged tokens, not raw child transcripts.
+- 子 agent 是 leaf worker，不能继续 spawn 子 agent。
+- 默认 `allow_edits=false`。
+- 编辑型子 agent 只能 staged pending action，不直接写盘。
+- 父 agent 接收摘要、发现、检查路径和 staged token，不接收完整子会话 transcript。

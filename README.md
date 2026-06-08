@@ -1,4 +1,4 @@
-# pp-Echo
+﻿# pp-Echo
 
 ## Release
 
@@ -174,6 +174,11 @@ python -m pp_agent.cli.main memory search "project conventions" --scope workspac
 
 ## 核心模块导览
 
+<p align="center">
+  <img src="docs/assets/pp-echo-architecture.png"  width="920">
+</p>
+
+
 | 学习问题 | 完整工程路径 |
 | --- | --- |
 | 一轮对话如何进入运行时 | `src/pp_agent/runtime/runtime.py`, `src/pp_agent/runtime/turn_loop.py` |
@@ -280,14 +285,15 @@ pp-Echo 的安全设计重点是“可见、可审、可回退”：
 - [docs/teaching-positioning.md](docs/teaching-positioning.md)：为什么 pp-Echo 适合做 Agent 工程课。
 - [docs/source-reading-roadmap.md](docs/source-reading-roadmap.md)：完整工程源码阅读路线。
 - [docs/source-map.md](docs/source-map.md)：源码路径导览。
+- [docs/agent-learning-zh.md](docs/agent-learning-zh.md)：中文学习导引。
+- [docs/architecture/README.md](docs/architecture/README.md)：系统架构导引。
 - [docs/interview-guide.md](docs/interview-guide.md)：实习与面试准备索引。
 - [docs/safety.md](docs/safety.md)：安全边界与审批策略。
 - [docs/configuration.md](docs/configuration.md)：配置模型、工具和项目设置。
 - [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)：MCP 集成说明。
 - [docs/multi_agent_demo.md](docs/multi_agent_demo.md)：SubAgent 演示。
+- [docs/release-checklist.md](docs/release-checklist.md)：发布前检查清单。
 - [README_en.md](README_en.md)：英文参考文档。
-- [docs/legacy/README_ZH.md](docs/legacy/README_ZH.md)：旧版中文参考文档。
-- [docs/legacy/](docs/legacy/README.md)：历史文档入口。
 
 ## 贡献路线
 

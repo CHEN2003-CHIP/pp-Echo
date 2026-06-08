@@ -1,4 +1,4 @@
-# pp-Echo
+﻿# pp-Echo
 
 The Chinese README is now the primary teaching-oriented entry. English docs are kept as a secondary reference.
 
@@ -111,8 +111,8 @@ pp-Echo is evaluated with a τ-bench style harness, not a prompt-only checklist.
 
 | Evaluation layer | Entry | What it proves |
 | --- | --- | --- |
-| Tau-style agent eval | [docs/evaluation-demo.md](docs/evaluation-demo.md) | File edits, tool selection, approvals, protected paths, checkpoint rewind, memory recall, and constrained subagents. |
-| Deterministic benchmark | [docs/benchmarks/latest.md](docs/benchmarks/latest.md) | Planner gating, rewind, lazy MCP activation, and compaction without model randomness. |
+| Tau-style agent eval | `python -m pp_agent.cli.main eval run` | File edits, tool selection, approvals, protected paths, checkpoint rewind, memory recall, and constrained subagents. |
+| Deterministic benchmark | `python -m pp_agent.cli.main eval report` | Planner gating, rewind, lazy MCP activation, and compaction without model randomness. |
 
 Run the canonical eval:
 
@@ -169,12 +169,7 @@ python -m pp_agent.cli.main config show --workspace .
 
 ## Demo / Screenshots
 
-![pp-Echo demo](docs/assets/demo.gif)
-
-| Interactive chat | Checkpoint + rewind |
-| --- | --- |
-| ![Interactive chat screenshot](docs/assets/screenshot-chat.png) | ![Checkpoint screenshot](docs/assets/screenshot-checkpoint.png) |
-
+![pp-Echo demo](docs/assets/pp-Echo.webp)
 ![Web UI screenshot](docs/assets/screenshot-web-ui.png)
 
 ## Documentation Guide
@@ -182,17 +177,17 @@ python -m pp_agent.cli.main config show --workspace .
 ### Runtime and architecture
 
 If you want to understand the real execution path, start with `AgentRuntime`, `ToolRegistry`, and `SessionHost`. These files explain how a prompt becomes a planned turn, how tools are gated and executed, and how session state is restored or rewound. The source map and learning guides are the quickest way to build a correct mental model before reading code in depth.
-Docs: [docs/source-map.md](docs/source-map.md), [docs/agent-learning-en.md](docs/agent-learning-en.md), [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
+Docs: [docs/source-map.md](docs/source-map.md), [docs/agent-learning-zh.md](docs/agent-learning-zh.md), [docs/architecture/README.md](docs/architecture/README.md)
 
 ### Safety and approvals
 
 The safety story now spans multiple phases: protected-path gating, exact-effect approvals, shell effect classification, and shared effect analysis for dynamic tools. The README home page now keeps only the overview, while the details live in dedicated docs so the main entry stays readable. This is the best place to understand what is enforced today versus what is still future work.
-Docs: [docs/safety.md](docs/safety.md), [docs/effect-analysis.md](docs/effect-analysis.md), [docs/dynamic-tool-declarations.md](docs/dynamic-tool-declarations.md)
+Docs: [docs/safety.md](docs/safety.md), [docs/release-checklist.md](docs/release-checklist.md)
 
 ### Subagents and orchestration
 
-`@subagent` is real, but intentionally narrow: explicit handoff, bounded child profiles, restricted tool allowlists, and staged edit artifacts for code-change workflows. The current design is meant for supervised repo analysis and constrained implementation fan-out, not open-ended autonomous agent teams. Use the demo and validation docs to see the current boundary clearly.
-Docs: [docs/multi_agent_demo.md](docs/multi_agent_demo.md), [docs/subagent-validation.md](docs/subagent-validation.md)
+`@subagent` is real, but intentionally narrow: explicit handoff, bounded child profiles, restricted tool allowlists, and staged edit artifacts for code-change workflows. The current design is meant for supervised repo analysis and constrained implementation fan-out, not open-ended autonomous agent teams. Use the demo docs to see the current boundary clearly.
+Docs: [docs/multi_agent_demo.md](docs/multi_agent_demo.md)
 
 ### Memory and learning
 
@@ -202,12 +197,12 @@ Docs: [MEMORY.md](MEMORY.md), [docs/source-map.md](docs/source-map.md)
 ### Configuration and capability loading
 
 Project behavior is controlled by environment variables, project config, resource manifests, and capability discovery rules. The full sample config and manifest notes have moved out of the README so the homepage stays focused, but they are still documented in one place. This is the right entry if you want to customize runtime behavior or ship extensions.
-Docs: [docs/configuration.md](docs/configuration.md), [docs/dynamic-tool-declarations.md](docs/dynamic-tool-declarations.md), [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)
+Docs: [docs/configuration.md](docs/configuration.md), [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)
 
 ### Evaluation and release readiness
 
 The repo includes τ-bench style behavior evals and deterministic runtime checks. It also includes doctor-style commands for runtime status. If you want to verify current health before a release or a public demo, start here rather than scanning the whole README.
-Docs: [docs/evaluation-demo.md](docs/evaluation-demo.md), [docs/benchmarks/latest.md](docs/benchmarks/latest.md), [docs/release-readiness.md](docs/release-readiness.md)
+Docs: [docs/release-checklist.md](docs/release-checklist.md)
 
 ## Core Commands
 
@@ -232,12 +227,11 @@ python -m pp_agent.cli.main doctor --workspace .
 ## Learning Docs
 
 - Chinese learning guide: [docs/agent-learning-zh.md](docs/agent-learning-zh.md)
-- English learning guide: [docs/agent-learning-en.md](docs/agent-learning-en.md)
 - Source map / module call graph: [docs/source-map.md](docs/source-map.md)
 
 ## Releases
 
-- Release notes for the first formal release live in [releases/v0.2.0.md](releases/v0.2.0.md)
+- Release notes for the first alpha preview live in [releases/v0.1.0-alpha.1.md](releases/v0.1.0-alpha.1.md)
 - GitHub Releases page: [github.com/CHEN2003-CHIP/pp-Echo/releases](https://github.com/CHEN2003-CHIP/pp-Echo/releases)
 
 ## Contributing

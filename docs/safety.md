@@ -1,17 +1,18 @@
-# Safety and Approvals
+﻿# 安全边界与审批机制
 
-This document collects the safety material that used to live inline in the README home page. It describes the current implemented boundary, the exact-effect approval model, and the present shell-review semantics.
+本文说明 pp-Echo 当前已经实现的安全边界。它强调的是“教学向、可观察、可审批”的本地 Agent Runtime，而不是完整系统级沙箱。
 
-## Safety Boundary Phase 1
+## 总体边界
 
-Phase 1 uses a mandatory policy gate for sensitive execution. The gate is enforced at execution time, not only at planner time.
+pp-Echo 对高风险动作使用执行期 policy gate。模型可以提出计划或 staged effect，但敏感动作必须经过宿主侧或用户侧确认后才能执行。
 
-- The policy gate returns `allow`, `ask`, or `deny`.
-- `ask` means the model can stage a proposed effect, but only the host or user side may approve it.
-- Protected paths are enforced through path protection plus policy gating.
-- This phase is not a true shell sandbox. The existing shell runner remains in place behind the policy gate and host approval flow.
+当前策略结果包括：
 
-Protected paths in Phase 1:
+- `allow`：低风险动作可以执行。
+- `ask`：动作需要进入审批流程。
+- `deny`：动作被策略拒绝。
+
+受保护路径包括：
 
 - `.pp-agent/**`
 - `.git/**`
@@ -20,48 +21,47 @@ Protected paths in Phase 1:
 - `*.pem`
 - `*.key`
 
-Important Phase 1 limit:
+重要限制：`.pp-agent/**` 会从模型可见工具中逻辑隔离，但这不等同于物理隔离或完整 sandbox。
 
-- `.pp-agent/**` is logically isolated from model-facing tools, but it is not physically separated from the repository yet.
+## Exact-Effect Approval
 
-## Exact-Effect Approvals Phase 2A
+敏感文件和 shell 动作会先生成 effect record，再等待审批。审批绑定的是具体 effect，而不是宽泛的“允许执行”。
 
-Phase 2A upgrades sensitive approval binding so host approval applies to an exact staged effect, not just a token.
+关键点：
 
-- Sensitive file and shell proposals produce an effect record before execution.
-- `payload_digest` is the primary approval binding.
-- Human-readable summaries are review output and a secondary consistency check, not the primary security anchor.
-- File effects distinguish whether the target was absent or present at staging time.
-- Shell effects use narrow normalization: whitespace-only differences normalize, but command content, separators, redirection, quotes, parameter order, and timeout changes remain material.
-- Planner approval is still not execution approval.
-- The Web UI mirrors the two-step model: first approve the plan, then approve or apply the concrete staged write, edit, or command.
+- `payload_digest` 是主要审批绑定。
+- 人类可读摘要用于审阅，不是主要安全锚点。
+- 文件 effect 会记录目标文件在 staging 时是否存在。
+- shell effect 只做窄归一化：空白差异可归一，但命令内容、重定向、引号、参数顺序、timeout 等变化都视为实质变化。
+- planner approval 不等于 execution approval。
 
-## Shell Effect Classification Phase 2B
+## Shell 风险分类
 
-Phase 2B keeps exact-effect approval binding, but makes staged shell effects easier to review and reason about.
+shell effect 会补充结构化字段，帮助用户理解风险：
 
-- Shell effects now include structured fields such as `normalized_command`, `command_head`, `risk_class`, `writes_workspace_files`, `touches_external_paths`, `requests_network`, and `destructive_hint`.
-- Current shell classes are `inspect`, `workspace_mutation`, `external_mutation`, `networked`, and `destructive`.
-- Human-readable shell summaries are stable review output such as `Inspect repository status with git status` or `Fetch remote content with curl`.
-- Classification enriches policy decisions and previews, but it does not bypass host-side approval and it is not a shell sandbox.
-- Normalization remains intentionally narrow: whitespace-only differences normalize to the same effect, while command, parameter, separator, redirection, quote, and timeout changes remain material.
+- `command_head`
+- `risk_class`
+- `writes_workspace_files`
+- `touches_external_paths`
+- `requests_network`
+- `destructive_hint`
 
-Current Phase 2B limits:
+常见分类包括：
 
-- Shell classification is still conservative heuristic matching, not a full shell parser or AST.
-- The existing shell runner is still used; this phase does not add sandbox infrastructure.
-- Policy still keeps shell execution behind host-side approval even for `inspect` commands.
+- `inspect`
+- `workspace_mutation`
+- `external_mutation`
+- `networked`
+- `destructive`
 
-## Relationship to later phases
+这些分类用于更清晰的预览和审批，不会绕过 host-side approval。
 
-- Shared cross-tool analysis now lives in [effect-analysis.md](effect-analysis.md).
-- Dynamic author-facing tool declarations now live in [dynamic-tool-declarations.md](dynamic-tool-declarations.md).
-- Release-gate checks for legacy declarations now live in [release-readiness.md](release-readiness.md).
-
-## Quick command references
+## 常用检查命令
 
 ```powershell
 python -m pp_agent.cli.main approvals list
 python -m pp_agent.cli.main approvals summary
 python -m pp_agent.cli.main workflow doctor --json
 ```
+
+release 前检查请参考 [release-checklist.md](release-checklist.md)。

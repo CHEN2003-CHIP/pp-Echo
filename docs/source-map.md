@@ -1,27 +1,15 @@
-# pp-Echo Source Map
+﻿# pp-Echo 源码地图
 
-如果你是第一次读完整工程源码，建议先阅读 [source-reading-roadmap.md](source-reading-roadmap.md)，再回到本文查具体模块路径。
+如果你第一次阅读完整工程，建议先看 [source-reading-roadmap.md](source-reading-roadmap.md)，再用本文定位具体模块。
 
-Before using this map, keep these repository facts in mind:
+本文回答两个问题：
 
-- `pp-Echo` is currently Windows-first.
-- The runtime, approval, rewind, and session model are real and worth studying.
-- Subagent support exists, but it is still MVP-level.
-- “Agent team” should be treated as a future direction, not a completed subsystem.
+1. 每个核心模块负责什么。
+2. 一次 agent 任务运行时主要调用链如何流动。
 
-This document is a practical source-code reading map for the `pp-Echo` project.  
-It is designed for developers who want to answer two questions quickly:
+pp-Echo 当前是 Windows-first 的教学向本地 Agent Runtime。runtime、approval、rewind、session、memory、tool registry、MCP、subagent、TraceInspect 都是真实实现，但它不是生产级安全沙箱，也不是 Claude Code / Cursor 的替代品。
 
-1. Which module is responsible for what?
-2. What is the main call chain when the agent runs?
-
-It complements the learning guides:
-
-- Source reading roadmap: [source-reading-roadmap.md](source-reading-roadmap.md)
-- Chinese guide: [agent-learning-zh.md](/E:/Pycharm%20Project/pp-Echo/docs/agent-learning-zh.md)
-- English guide: [agent-learning-en.md](/E:/Pycharm%20Project/pp-Echo/docs/agent-learning-en.md)
-
-## 1. High-Level Module Map
+## 总体模块图
 
 ```mermaid
 flowchart TD
@@ -38,13 +26,10 @@ flowchart TD
   BOOT --> REG["tools/registry.py"]
   BOOT --> RUNTIME["runtime/runtime.py"]
   BOOT --> MEMORY["memory/*"]
-  BOOT --> SKILLS["skills/*"]
-  BOOT --> EXT["extensions/*"]
   BOOT --> MCP["mcp/*"]
   BOOT --> SUB["subagents/*"]
 
   RUNTIME --> TURN["runtime/turn_loop.py"]
-  RUNTIME --> EVENTS["runtime/events.py + runtime/lifecycle.py"]
   RUNTIME --> STATE["runtime/state.py"]
   RUNTIME --> STORES["storage/sessions.py + storage/timeline.py"]
   RUNTIME --> REG
@@ -58,280 +43,75 @@ flowchart TD
 
   HOST --> CHECKPOINT["runtime/git_checkpoint.py"]
   HOST --> REWIND["runtime/safe_rewind.py"]
-
-  TUI --> TUIAPP["tui/app.py"]
-  TUIAPP --> TUIREDUCER["tui/reducer.py"]
-  TUIAPP --> TUISTATE["tui/state.py + tui/view_model.py"]
 ```
 
-## 2. The Most Important Files
+## 入口与装配
 
-If you only have time to understand a handful of files, start here:
+优先阅读：
 
-### Entry and system assembly
+- `src/pp_agent/cli/main.py`
+- `src/pp_agent/app/bootstrap.py`
+- `src/pp_agent/storage/settings.py`
 
-- [src/pp_agent/cli/main.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/cli/main.py)
-- [src/pp_agent/app/bootstrap.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/app/bootstrap.py)
+这些文件说明 CLI 命令如何进入系统，以及 runtime、tools、stores、memory、skills、extensions、MCP 如何被装配。
 
-These files show:
+## Runtime 主链路
 
-- what commands exist,
-- how the system is started,
-- and how runtime, tools, stores, memory, skills, extensions, and MCP are wired together.
+优先阅读：
 
-### Runtime core
+- `src/pp_agent/runtime/runtime.py`
+- `src/pp_agent/runtime/turn_loop.py`
+- `src/pp_agent/runtime/state.py`
+- `src/pp_agent/runtime/session_host.py`
 
-- [src/pp_agent/runtime/runtime.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/runtime.py)
-- [src/pp_agent/runtime/turn_loop.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/turn_loop.py)
-- [src/pp_agent/runtime/state.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/state.py)
+这些文件定义 turn loop、runtime state、事件生命周期、session 创建/恢复、分支和回放。
 
-These files define:
+## 工具与安全
 
-- the agent loop,
-- turn decisions,
-- runtime state,
-- and the event-driven behavior of the system.
+优先阅读：
 
-### Tooling and safety
-
-- [src/pp_agent/tools/registry.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/registry.py)
-- [src/pp_agent/tools/policy.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/policy.py)
-- [src/pp_agent/tools/effects.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/effects.py)
-
-These files explain:
-
-- how tools are registered,
-- how permissions are evaluated,
-- and how risky actions are staged for approval.
-
-### Sessions and rewind
-
-- [src/pp_agent/runtime/session_host.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/session_host.py)
-- [src/pp_agent/runtime/git_checkpoint.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/git_checkpoint.py)
-- [src/pp_agent/runtime/safe_rewind.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/safe_rewind.py)
-
-These files explain:
-
-- how sessions are created and restored,
-- how session trees work,
-- how checkpoints are created,
-- and how workspace + conversation rewind is coordinated.
-
-### Subagent MVP path
-
-- [src/pp_agent/tools/subagent_tool.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/subagent_tool.py)
-- [src/pp_agent/subagents/specs.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/subagents/specs.py)
-- [src/pp_agent/subagents/manager.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/subagents/manager.py)
-
-These files explain the current real scope of subagent support:
-
-- explicit child handoff
-- limited built-in child roles
-- restricted tool allowlists
-- summary-oriented child execution
-
-### Persistence and configuration
-
-- [src/pp_agent/storage/settings.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/storage/settings.py)
-- [src/pp_agent/storage/sessions.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/storage/sessions.py)
-- [src/pp_agent/storage/timeline.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/storage/timeline.py)
-- [src/pp_agent/storage/checkpoints.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/storage/checkpoints.py)
-
-### Memory and capability extension
-
-- [src/pp_agent/memory/retrieval_hook.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/memory/retrieval_hook.py)
-- [src/pp_agent/skills/loader.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/skills/loader.py)
-- [src/pp_agent/extensions/loader.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/extensions/loader.py)
-- [src/pp_agent/mcp/manager.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/mcp/manager.py)
-
-### UI layers
-
-- [src/pp_agent/cli/chat.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/cli/chat.py)
-- [src/pp_agent/tui/app.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/app.py)
-- [src/pp_agent/tui/reducer.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/reducer.py)
-- [src/pp_agent/tui/state.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/state.py)
-- [src/pp_agent/tui/view_model.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/view_model.py)
-
-## 3. Main Runtime Call Chain
-
-The most useful end-to-end path to understand is:
-
-```mermaid
-sequenceDiagram
-  participant User
-  participant CLI as CLI/TUI
-  participant Boot as bootstrap.py
-  participant Host as SessionHost
-  participant RT as AgentRuntime
-  participant LLM as LLM Client
-  participant Tools as ToolRegistry
-  participant Store as Session/Timeline Stores
-
-  User->>CLI: enter prompt
-  CLI->>Boot: build or restore agent
-  Boot->>Host: create/restore session runtime
-  Host->>RT: return active AgentRuntime
-  CLI->>RT: prompt(...)
-  RT->>RT: build context
-  RT->>LLM: request completion / tool calls
-  LLM-->>RT: assistant text + tool calls
-  RT->>Tools: evaluate and execute tools
-  Tools-->>RT: results / staged approvals
-  RT->>Store: persist session and timeline
-  RT-->>CLI: emit runtime events
-  CLI-->>User: render output
-```
-
-In code terms, the main flow is usually:
-
-1. `cli/main.py`
-2. `cli/chat.py` or `tui/main.py`
-3. `app/bootstrap.py`
-4. `runtime/session_host.py`
-5. `runtime/runtime.py`
-6. `tools/registry.py`
-7. `storage/*`
-
-## 4. TUI-Specific Flow
-
-The TUI has its own UI state layer, but it still reuses the same runtime and event model.
-
-```mermaid
-flowchart LR
-  USER["Keyboard input"] --> TUIAPP["tui/app.py"]
-  TUIAPP --> CONTROLLER["tui/controller.py"]
-  CONTROLLER --> RUNTIME["runtime Agent"]
-  RUNTIME --> EVENTS["AgentEvent stream"]
-  EVENTS --> REDUCER["tui/reducer.py"]
-  REDUCER --> TUISTATE["tui/state.py"]
-  REDUCER --> VIEWMODEL["tui/view_model.py"]
-  TUISTATE --> TUIAPP
-  VIEWMODEL --> TUIAPP
-```
-
-The important takeaway is:
-
-- the TUI does not invent business logic,
-- it consumes runtime events,
-- reduces them into UI state,
-- and renders transcript blocks.
-
-## 5. Capability Expansion Flow
-
-One strong design feature of this repo is that new capabilities do not have to be added only as built-ins.
-
-There are several extension paths:
-
-### Built-in tools
-
-Add or change code under:
-
-- `src/pp_agent/tools/*`
 - `src/pp_agent/tools/registry.py`
+- `src/pp_agent/tools/policy.py`
+- `src/pp_agent/tools/effects.py`
+- `src/pp_agent/tools/file_tools.py`
+- `src/pp_agent/tools/shell_tool.py`
 
-### Skills
+这里可以看到工具如何注册、schema 如何暴露、权限如何判断、风险动作如何进入 staged approval。
 
-Add or discover skills under:
+## Checkpoint 与 Rewind
 
-- `src/pp_agent/skills/*`
-- project or user skill directories loaded by settings
+优先阅读：
 
-### Extensions
+- `src/pp_agent/runtime/git_checkpoint.py`
+- `src/pp_agent/runtime/safe_rewind.py`
+- `src/pp_agent/storage/sessions.py`
 
-Add extensions under:
+这些模块解释 Git-backed checkpoint、workspace restore、conversation rewind 与 session tree 如何协作。
 
-- `src/pp_agent/extensions/*`
+## Memory、MCP 与 SubAgent
 
-### MCP
+优先阅读：
 
-Expose remote tools/resources/prompts through:
-
+- `src/pp_agent/memory/*`
 - `src/pp_agent/mcp/*`
+- `src/pp_agent/subagents/*`
+- `src/pp_agent/tools/subagent_tool.py`
 
-This layered design is important because it separates:
+这些模块负责长期记忆、外部 MCP server、受控子 agent 编排和 staged artifact 边界。
 
-- core runtime behavior,
-- local tool behavior,
-- contextual augmentation,
-- and external capability integration.
+## Web、Trace 与诊断
 
-## 6. Session and Persistence Map
+优先阅读：
 
-```mermaid
-flowchart TD
-  SETTINGS["storage/settings.py"] --> SESSIONDIR["sessions dir"]
-  SETTINGS --> TIMELINEDIR["timelines dir"]
-  SETTINGS --> CHECKPOINTDIR["checkpoints dir"]
-  SETTINGS --> MEMORYDB["history.db / chroma dir"]
+- `src/pp_agent/web/*`
+- `src/pp_agent/server/routes/*`
+- `src/pp_agent/tracing/*`
+- `web/src/*`
 
-  HOST["runtime/session_host.py"] --> SESSIONS["storage/sessions.py"]
-  HOST --> CHECKPOINTS["storage/checkpoints.py"]
-  HOST --> REWIND["runtime/safe_rewind.py"]
+这些模块连接 Web UI、Startup Guide、TraceInspect、approval panel 和运行时诊断。
 
-  RUNTIME["runtime/runtime.py"] --> SESSIONS
-  RUNTIME --> TIMELINE["storage/timeline.py"]
-  RUNTIME --> APPROVALS["storage/approvals.py"]
-```
+## 配合阅读
 
-This map is helpful when you want to answer:
-
-- where state is stored,
-- what is session state vs runtime event state,
-- and where rewind/approval metadata lives.
-
-## 7. If You Want to Learn by Task
-
-Use this table as a shortcut.
-
-### “I want to understand how prompts become tool calls”
-
-Read:
-
-- [src/pp_agent/runtime/runtime.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/runtime.py)
-- [src/pp_agent/runtime/turn_loop.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/turn_loop.py)
-
-### “I want to understand how tool approval works”
-
-Read:
-
-- [src/pp_agent/tools/registry.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/registry.py)
-- [src/pp_agent/tools/policy.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/policy.py)
-- [src/pp_agent/storage/approvals.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/storage/approvals.py)
-
-### “I want to understand rewind and checkpoints”
-
-Read:
-
-- [src/pp_agent/runtime/session_host.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/session_host.py)
-- [src/pp_agent/runtime/git_checkpoint.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/git_checkpoint.py)
-- [src/pp_agent/runtime/safe_rewind.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/safe_rewind.py)
-
-### “I want to understand memory retrieval”
-
-Read:
-
-- [src/pp_agent/memory/retrieval_hook.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/memory/retrieval_hook.py)
-- [src/pp_agent/memory/retrieval.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/memory/retrieval.py)
-
-### “I want to understand the TUI”
-
-Read:
-
-- [src/pp_agent/tui/app.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/app.py)
-- [src/pp_agent/tui/reducer.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/reducer.py)
-- [src/pp_agent/tui/state.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/state.py)
-- [src/pp_agent/tui/view_model.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tui/view_model.py)
-
-## 8. Best “Three Files First” Shortcut
-
-If you want the shortest possible path into the architecture, start here:
-
-1. [runtime.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/runtime.py)
-2. [registry.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/tools/registry.py)
-3. [session_host.py](/E:/Pycharm%20Project/pp-Echo/src/pp_agent/runtime/session_host.py)
-
-These three files together explain:
-
-- how the agent thinks in turns,
-- how it acts through tools safely,
-- and how it persists and rewinds its work over time.
+- [agent-learning-zh.md](agent-learning-zh.md)
+- [source-reading-roadmap.md](source-reading-roadmap.md)
+- [architecture/README.md](architecture/README.md)

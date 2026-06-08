@@ -1,4 +1,4 @@
-# pp-Echo 完整工程源码阅读路线
+﻿# pp-Echo 完整工程源码阅读路线
 
 这份路线面向已经跑过 `mini-pp-echo/`，但还不知道如何阅读完整工程源码的读者。它不要求你一次读完整个仓库，而是把 pp-Echo 拆成 7 个关卡：每一关只理解一个核心概念，跑一组最小命令，读一组真实文件，最后能把它讲成实习和面试里的工程表达。
 
@@ -198,7 +198,6 @@ python -m pytest tests/test_approval_feedback_loop.py tests/cli/test_approvals_d
 - `src/pp_agent/tools/file_tools.py`
 - `src/pp_agent/tools/shell_tool.py`
 - `docs/safety.md`
-- `docs/effect-analysis.md`
 
 ### 读代码时先看什么
 
@@ -365,7 +364,6 @@ python -m pytest tests/mcp/test_mcp_discovery.py tests/mcp/test_mcp_execution.py
 - `src/pp_agent/web_tools/runtime.py`
 - `docs/mcp-fetch-integration.md`
 - `docs/multi_agent_demo.md`
-- `docs/subagent-validation.md`
 
 ### 读代码时先看什么
 

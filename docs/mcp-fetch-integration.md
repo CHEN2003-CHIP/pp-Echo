@@ -1,32 +1,35 @@
-﻿# Community MCP integration: fetch-mcp
+﻿# fetch-mcp 社区 MCP 集成说明
 
-This repo has been validated against the free community MCP server [`zcaceres/fetch-mcp`](https://github.com/zcaceres/fetch-mcp), which exposes webpage fetching tools such as `fetch_html`, `fetch_markdown`, `fetch_txt`, `fetch_json`, `fetch_readable`, and `fetch_youtube_transcript`.
+pp-Echo 已验证可以接入社区 MCP server [`zcaceres/fetch-mcp`](https://github.com/zcaceres/fetch-mcp)。该 server 提供 `fetch_html`、`fetch_markdown`、`fetch_txt`、`fetch_json`、`fetch_readable`、`fetch_youtube_transcript` 等网页获取工具。
 
-## Why this matters
+## 为什么需要这项验证
 
-The MCP runtime in `pp-Echo` originally handled:
+pp-Echo 的 MCP runtime 原本支持：
+
 - legacy line-delimited compat MCP
-- standard HTTP JSON-RPC MCP
-- standard stdio MCP with `Content-Length` framing
+- 标准 HTTP JSON-RPC MCP
+- 标准 stdio MCP，使用 `Content-Length` framing
 
-During real integration testing, `fetch-mcp` exposed two mainstream compatibility gaps:
-- many JavaScript MCP servers built on the MCP SDK use newline-delimited JSON over stdio instead of `Content-Length` framing
-- many community MCP servers are tool-only and return `Method not found` for `resources/list` and `prompts/list`
+实际接入 `fetch-mcp` 时暴露了两个常见兼容性问题：
 
-The runtime has now been updated to:
-- try standard stdio line-delimited JSON first, then fall back to framed stdio
-- tolerate `-32601 Method not found` for `resources/list` and `prompts/list` by treating them as empty capability sets
+- 一些 JavaScript MCP server 使用 stdio newline-delimited JSON，而不是 `Content-Length` framing。
+- 一些社区 MCP server 只提供 tools，对 `resources/list` 和 `prompts/list` 返回 `Method not found`。
 
-## Local install used for verification
+因此 runtime 已调整为：
 
-The verified local setup in this workspace uses a repo-local install:
+- stdio 优先尝试 line-delimited JSON，再回退到 framed stdio。
+- 对 `resources/list` 和 `prompts/list` 的 `-32601 Method not found` 做容忍处理，将其视为空能力集合。
+
+## 本地验证配置
+
+示例配置如下：
 
 ```json
 {
   "servers": [
     {
       "name": "fetch",
-      "description": "Community standard MCP server for fetching web pages as HTML, text, markdown, JSON, and readable article content.",
+      "description": "Community MCP server for fetching web pages.",
       "protocol": "standard",
       "command": "node",
       "args": [
@@ -42,21 +45,23 @@ The verified local setup in this workspace uses a repo-local install:
 }
 ```
 
-The package was installed with:
+安装命令：
 
 ```powershell
 npm install mcp-fetch-server --prefix .mcp-tools\fetch-mcp
 ```
 
-## Verified behavior
+## 已验证行为
 
-The following were verified successfully in this repo:
+已验证通过：
+
 - `python -m pp_agent.cli.main capabilities list --include-mcp`
 - `python -m pp_agent.cli.main capabilities show mcp_tool fetch.fetch_markdown --include-mcp`
-- `fetch.fetch_markdown` against `http://example.com`
-- `fetch.fetch_json` against `https://httpbin.org/json`
+- `fetch.fetch_markdown` 访问 `http://example.com`
+- `fetch.fetch_json` 访问 `https://httpbin.org/json`
 
-One target failed during live testing:
-- `https://www.example.com` returned `fetch failed`
+曾经失败的目标：
 
-That failure came from the target fetch attempt, not from MCP discovery or tool execution. The MCP integration itself was working at that point.
+- `https://www.example.com` 返回 `fetch failed`
+
+该失败来自目标抓取本身，不是 MCP discovery 或 tool execution 失败。
