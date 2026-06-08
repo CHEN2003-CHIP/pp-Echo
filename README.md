@@ -32,7 +32,7 @@ pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangCha
 你可以从 `mini-pp-echo/` 的 7 个独立小脚本开始，理解 Agent Loop、工具调用、文件修改、审批、记忆、checkpoint 和 MCP mock；再回到完整工程，阅读 `SessionHost`、`AgentRuntime`、`ToolRegistry`、memory、MCP、SubAgent 等真实模块。
 
 <p align="center">
-  <img src="docs/assets/hero.gif" alt="pp-Echo demo: 可见规划、审批优先执行、Git-backed rewind、分层记忆、受控子 Agent" width="920">
+  <img src="docs/assets/pp-Echo.webp" alt="pp-Echo demo: 可见规划、审批优先执行、Git-backed rewind、分层记忆、受控子 Agent" width="920">
 </p>
 
 ## 你应该从哪里开始？
