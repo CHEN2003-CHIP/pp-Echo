@@ -50,6 +50,7 @@ class LLMClient(BaseLLMClient):
             "model": self.model.model,
             "messages": [self._serialize_message(message) for message in messages],
             "stream": True,
+            "stream_options": {"include_usage": True},
             "temperature": self.model.temperature,
             "enable_thinking": self.model.enable_thinking,
         }
@@ -130,6 +131,8 @@ class LLMClient(BaseLLMClient):
             "text": delta.get("content", ""),
             "tool_calls": [],
             "finish_reason": choice.get("finish_reason"),
+            "usage": chunk.get("usage"),
+            "request_id": chunk.get("id") or chunk.get("request_id"),
             "raw": chunk,
         }
         for tool_call in delta.get("tool_calls", []) or []:

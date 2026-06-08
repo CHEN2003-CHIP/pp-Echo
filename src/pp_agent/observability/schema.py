@@ -165,6 +165,15 @@ class TraceRunSummary(BaseModel):
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_tokens: int = 0
+    total_cost_usd: Optional[float] = None
+    llm_latency_ms_total: int = 0
+    llm_latency_ms_avg: Optional[int] = None
+    llm_retry_count: int = 0
+    tool_error_count: int = 0
+    tools_used: List[str] = Field(default_factory=list)
+    mcp_tool_calls: int = 0
+    subagent_tool_calls: int = 0
+    shell_tool_calls: int = 0
     risk_level: Literal["low", "medium", "high"] = "low"
     changed_path_count: int = 0
     attributes: Dict[str, Any] = Field(default_factory=dict)

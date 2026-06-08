@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
+from pp_agent.llm.usage import LLMUsageStats, estimate_cost_usd, normalize_usage
 from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.provider import MemoryProvider, NoopMemoryProvider
 from pp_agent.observability.hooks import ObservabilityHooks
@@ -181,7 +182,6 @@ class AgentRuntime:
         self._runtime_hooks = self._compose_runtime_hooks(runtime_hooks)
         self.lifecycle = LifecycleEmitter()
         self._wire_lifecycle()
-        self._attach_runtime_context_to_tool_registry()
         self.memory_provider = memory_provider or NoopMemoryProvider()
         self.auto_index_scheduler = auto_index_scheduler or NoopAutoIndexScheduler()
         self.learning_runtime = learning_runtime
@@ -195,6 +195,7 @@ class AgentRuntime:
         self.observability = observability or NoopObservabilityHooks()
         self._trace_event_starts: dict[str, AgentEvent] = {}
         self.lifecycle.subscribe(self._observe_runtime_event)
+        self._attach_runtime_context_to_tool_registry()
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -593,10 +594,10 @@ class AgentRuntime:
                         raise PermissionError(decision.message or f"Tool '{call.name}' was rejected by runtime policy")
                     if skip_confirmation and self.tool_registry.get_spec(call.name).requires_confirmation:
                         
-                        result = self.tool_registry.execute(call.name, call.arguments)
+                        result = self.tool_registry.execute(call.name, call.arguments, tool_call_id=call.id)
                     else:
 
-                        result = self.tool_registry.execute(call.name, call.arguments)
+                        result = self.tool_registry.execute(call.name, call.arguments, tool_call_id=call.id)
                     self._cancellation_token.raise_if_cancelled()
                     """把工具结果转成 chat message，追加到 state.messages
                         把 plan step 标成 completed
@@ -724,11 +725,18 @@ class AgentRuntime:
         partial_calls: dict[int, dict[str, str]] = {}
         finish_reasons: list[str] = []
         streamed_event_count = 0
+        raw_usage: object | None = None
+        request_id: str | None = None
+        started = time.perf_counter()
         try:
             ## 核心：流式调用大模型（逐块返回响应，非一次性返回）
             for event in self.llm_client.stream_chat(request_decision.messages or messages, tools=request_decision.tools if request_decision.tools is not None else tools):
                 self._cancellation_token.raise_if_cancelled()
                 streamed_event_count += 1
+                if event.get("usage") is not None:
+                    raw_usage = event.get("usage")
+                if event.get("request_id"):
+                    request_id = str(event.get("request_id"))
                 finish_reason = str(event.get("finish_reason") or "").strip()
                 if finish_reason:
                     finish_reasons.append(finish_reason)
@@ -747,17 +755,39 @@ class AgentRuntime:
                         slot["name"] = tool["name"]
                     slot["arguments"] += tool.get("arguments_chunk", "")
         except LLMClientError as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
             list(
                 self._emit(
                     self._event(
                         PROVIDER_ERROR,
                         message=str(exc),
                         is_error=True,
-                        details={"provider": self._provider_name(), "model": self.llm_client.model.model},
+                        details={
+                            "provider": self._provider_name(),
+                            "model": self.llm_client.model.model,
+                            "latency_ms": latency_ms,
+                            "retry_count": 0,
+                            "attempt_index": 1,
+                        },
                     )
                 )
             )
             raise
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        usage = normalize_usage(raw_usage)
+        usage = LLMUsageStats(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            total_tokens=usage.total_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            cost_usd=estimate_cost_usd(self.llm_client.model.model, usage),
+            latency_ms=latency_ms,
+            provider_latency_ms=usage.provider_latency_ms,
+            retry_count=usage.retry_count,
+            attempt_index=usage.attempt_index,
+            request_id=request_id or usage.request_id,
+        )
 
         #解析工具调用参数，构建 ToolCall 对象列表；如果解析失败（比如 JSON 格式错误），就发 ProviderError 事件并报错
         tool_calls = []
@@ -780,6 +810,7 @@ class AgentRuntime:
                 "text_length": len("".join(text_chunks)),
                 "streamed_event_count": streamed_event_count,
                 "finish_reasons": finish_reasons,
+                **usage.as_trace_attributes(),
             },
         )
         # 发射事件，获取生命周期决策
@@ -1320,6 +1351,17 @@ class AgentRuntime:
                     "tool_count": details.get("tool_count"),
                     "finish_reason": ",".join(details.get("finish_reasons") or []),
                     "tool_call_count": details.get("tool_count"),
+                    "input_tokens": details.get("input_tokens"),
+                    "output_tokens": details.get("output_tokens"),
+                    "total_tokens": details.get("total_tokens"),
+                    "cached_input_tokens": details.get("cached_input_tokens"),
+                    "reasoning_tokens": details.get("reasoning_tokens"),
+                    "cost_usd": details.get("cost_usd"),
+                    "latency_ms": details.get("latency_ms"),
+                    "provider_latency_ms": details.get("provider_latency_ms"),
+                    "retry_count": details.get("retry_count", 0),
+                    "attempt_index": details.get("attempt_index", 1),
+                    "request_id": details.get("request_id"),
                 },
                 output={
                     "text_length": details.get("text_length"),
@@ -1337,7 +1379,13 @@ class AgentRuntime:
                 status="error",
                 started_at=start.timestamp if start is not None else event.timestamp,
                 ended_at=event.timestamp,
-                attributes={"provider": details.get("provider"), "model": details.get("model")},
+                attributes={
+                    "provider": details.get("provider"),
+                    "model": details.get("model"),
+                    "latency_ms": details.get("latency_ms"),
+                    "retry_count": details.get("retry_count", 0),
+                    "attempt_index": details.get("attempt_index", 1),
+                },
                 error=event.message or "provider_error",
             )
             return
@@ -1358,6 +1406,7 @@ class AgentRuntime:
                     "permission_domain": details.get("permission_domain"),
                     "tool_origin": details.get("tool_family") or details.get("category"),
                     "is_subagent_tool": event.tool_name in {"spawn_subagent", "orchestrate_agents"},
+                    "source": "runtime_lifecycle_event",
                 },
                 input={"arguments": sanitize_tool_args(event.tool_args or {})},
                 output=output,
@@ -2397,6 +2446,9 @@ class AgentRuntime:
         set_token = getattr(self.tool_registry, "set_cancellation_token", None)
         if callable(set_token):
             set_token(self._cancellation_token)
+        set_observability = getattr(self.tool_registry, "set_observability", None)
+        if callable(set_observability) and hasattr(self, "observability"):
+            set_observability(self.observability)
 
     def _refresh_config_for_turn(self) -> Iterator[AgentEvent]:
         manager = self.config_manager

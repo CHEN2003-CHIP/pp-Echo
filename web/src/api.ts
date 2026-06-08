@@ -213,6 +213,15 @@ export type TraceRunSummary = {
   total_input_tokens: number;
   total_output_tokens: number;
   total_tokens: number;
+  total_cost_usd?: number | null;
+  llm_latency_ms_total?: number;
+  llm_latency_ms_avg?: number | null;
+  llm_retry_count?: number;
+  tool_error_count?: number;
+  tools_used?: string[];
+  mcp_tool_calls?: number;
+  subagent_tool_calls?: number;
+  shell_tool_calls?: number;
   risk_level: "low" | "medium" | "high";
   changed_path_count: number;
   attributes?: Record<string, unknown>;

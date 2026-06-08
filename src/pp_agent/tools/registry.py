@@ -5,10 +5,14 @@ import json
 import logging
 import subprocess
 import threading
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 from pp_agent.domain import ToolCall, ToolSpec
+from pp_agent.observability.hooks import ObservabilityHooks
+from pp_agent.observability.noop import NoopObservabilityHooks
+from pp_agent.observability.redaction import redact_mapping, safe_preview, sanitize_tool_args
 from pp_agent.storage.settings import ToolPolicyConfig
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.file_tools import (
@@ -119,6 +123,64 @@ def _allow_dynamic_registration(profile: Any, *, name: str, tool_family: str | N
     return _allow_tool(profile, name, tool_family=family, category=category)
 
 
+def _tool_trace_attributes(tool_name: str, tool: object, spec: object | None, metadata: object | None) -> dict[str, Any]:
+    """
+    从工具定义、ToolSpec 和 ToolMetadata 中提取适合进入 Trace 的结构化属性。
+
+    该 helper 服务于 ToolRegistry middleware 生成的 tool.call span，用来连接 TraceInspect、
+    summary.py 和后续 artifact/approval/effect 线索。它必须容忍内置工具、MCP 工具、browser 工具、
+    subagent 工具和未来插件工具的字段差异；缺失字段返回 None，不允许因为观测 metadata 不完整而
+    影响工具执行。返回值只包含分类、权限、schema key 等摘要，不保存完整参数、文件内容或敏感信息。
+    """
+
+    _ = tool
+    parameters = getattr(spec, "parameters", None)
+    schema_keys = None
+    if isinstance(parameters, dict):
+        properties = parameters.get("properties")
+        if isinstance(properties, dict):
+            schema_keys = sorted(str(key) for key in properties)
+    tool_family = getattr(metadata, "tool_family", None)
+    category = getattr(metadata, "category", None)
+    permission_domain = getattr(metadata, "permission_domain", None) or getattr(spec, "permission_domain", None)
+    return {
+        "tool_name": tool_name,
+        "tool_origin": tool_family or category,
+        "tool_family": tool_family,
+        "tool_category": category,
+        "requires_confirmation": getattr(metadata, "requires_confirmation", None)
+        if metadata is not None
+        else getattr(spec, "requires_confirmation", None),
+        "permission_domain": permission_domain,
+        "description": safe_preview(getattr(spec, "description", None), 500) if spec is not None else None,
+        "schema_keys": schema_keys,
+        "is_mcp_tool": tool_family == "mcp" or category == "mcp" or "." in tool_name,
+        "is_subagent_tool": tool_name in {"spawn_subagent", "orchestrate_agents"} or tool_family == "subagent",
+        "source": "tool_registry_middleware",
+    }
+
+
+def _tool_trace_output(result: ToolExecutionResult) -> dict[str, Any]:
+    """
+    生成工具执行结果的 trace 输出摘要。
+
+    输出仅保留状态、短 preview、审批/artifact token、changed_paths、exit_code 等审计字段。
+    details 会先经过统一 redaction，再裁剪到 16KB 以内，避免 stdout/stderr、文件内容、token 或
+    私密字段把 trace 文件撑大或泄露到 TraceInspect。
+    """
+
+    details = redact_mapping(dict(result.details or {}))
+    return {
+        "is_error": bool(result.is_error),
+        "content_preview": safe_preview(result.content, 2000),
+        "details": safe_preview(json.dumps(details, ensure_ascii=False, default=str), 16 * 1024),
+        "artifact_token": details.get("artifact_token"),
+        "approval_token": details.get("token") or details.get("approval_token"),
+        "changed_paths": details.get("changed_paths") or details.get("affected_paths"),
+        "exit_code": details.get("exit_code") or details.get("returncode"),
+    }
+
+
 @dataclass
 class ToolRegistration:
     """Register tool metadata and materializers without instantiating the tool."""
@@ -153,6 +215,7 @@ class ToolRegistry:
         policy: Optional[ToolPolicyConfig] = None,
         current_session_id: Optional[str] = None,
         capability_profile: Optional["SubAgentProfile"] = None,
+        observability: ObservabilityHooks | None = None,
     ) -> None:
         """
         初始化工具注册中心
@@ -171,6 +234,7 @@ class ToolRegistry:
         )
         self.current_session_id = current_session_id
         self._runtime_event_emitter: Optional[Callable[[Any], None]] = None
+        self.observability: ObservabilityHooks = observability or NoopObservabilityHooks()
         self._runtime_event_lock = threading.RLock()
         self._cancellation_token: Any = None
         self._instances: dict[str, BaseTool] = {}
@@ -430,6 +494,17 @@ class ToolRegistry:
     def set_cancellation_token(self, token: Any) -> None:
         self._cancellation_token = token
 
+    def set_observability(self, observability: ObservabilityHooks | None) -> None:
+        """
+        为 ToolRegistry 注入可观测性 hook。
+
+        Runtime 创建或刷新 TraceRecorder 后通过该方法把同一套 ObservabilityHooks 传给工具执行层，
+        让统一 execute() 入口能够生成 tool.call middleware span。传入 None 时回落到 Noop，不改变
+        任何工具执行语义。该方法只建立观测关联，不保存工具参数原文或敏感输出。
+        """
+
+        self.observability = observability or NoopObservabilityHooks()
+
     @property
     def cancellation_token(self) -> Any:
         return self._cancellation_token
@@ -454,6 +529,7 @@ class ToolRegistry:
             policy=self.policy.model_copy(deep=True),
             current_session_id=current_session_id,
             capability_profile=self.capability_profile.model_copy(deep=True) if self.capability_profile is not None else None,
+            observability=self.observability,
         )
         cloned._registrations = {
             name: self._registrations[name]
@@ -534,13 +610,14 @@ class ToolRegistry:
         result.tool_name = name
         return result
 
-    def execute(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
+    def execute(self, name: str, arguments: dict[str, Any], *, tool_call_id: str | None = None) -> ToolExecutionResult:
         """
         【核心方法】执行工具
         :param name: 工具名
         :param arguments: 参数字典
         :return: 标准化执行结果
         """
+        trace_tool_call_id = str(tool_call_id or arguments.get("tool_call_id") or uuid.uuid4())
         self.raise_if_cancelled()
         self._ensure_tool_allowed(name)
         registration = self._registrations[name]
@@ -549,12 +626,34 @@ class ToolRegistry:
         decision = self.evaluate_call(name, arguments)
         if decision.action == "deny":
             raise PermissionError(decision.reason)
-        if self._worktree_mode() and self._worktree_tool_supported(name):
-            return self._execute_worktree_tool(name, arguments)
-        result = self._get_tool(name).execute(arguments)
-        self.raise_if_cancelled()
-        result.tool_name = name
-        return result
+        spec = self.get_spec(name)
+        attributes = _tool_trace_attributes(name, None, spec, registration.metadata)
+        attributes["tool_call_id"] = trace_tool_call_id
+        with self.observability.span(
+            "tool.call",
+            "tool",
+            attributes=attributes,
+            input={"arguments": sanitize_tool_args(arguments)},
+        ) as span:
+            try:
+                tool = self._get_tool(name)
+                if self._worktree_mode() and self._worktree_tool_supported(name):
+                    result = self._execute_worktree_tool(name, arguments)
+                else:
+                    result = tool.execute(arguments)
+                self.raise_if_cancelled()
+                result.tool_name = name
+                if not result.tool_call_id:
+                    result.tool_call_id = trace_tool_call_id
+                result.details.setdefault("tool_call_id", trace_tool_call_id)
+                result.details.setdefault("trace_tool_call_id", trace_tool_call_id)
+                span.set_output(_tool_trace_output(result))
+                if result.is_error:
+                    span.set_error(result.content or "tool returned is_error=True", kind="ToolExecutionError")
+                return result
+            except Exception as exc:
+                span.set_error(exc)
+                raise
 
     def error_result(self, call: ToolCall, message: str) -> ToolExecutionResult:
         """
