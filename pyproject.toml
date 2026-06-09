@@ -12,6 +12,7 @@ dependencies = [
   "httpx>=0.27,<0.29",
   "prompt_toolkit>=3.0.43,<4",
   "pydantic>=2.7,<3",
+  "python-multipart>=0.0.9,<1",
   "rank-bm25>=0.2.2,<0.3",
   "rich>=13.7,<14",
   "typer>=0.12,<1",
@@ -29,6 +30,10 @@ web = [
   "fastapi>=0.111,<1",
   "uvicorn[standard]>=0.30,<1",
 ]
+attachments = [
+  "pymupdf>=1.24,<2",
+  "python-docx>=1.1,<2",
+]
 
 [project.scripts]
 pp-agent = "pp_agent.cli.main:main"
@@ -41,3 +46,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--assert=plain"]

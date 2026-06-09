@@ -7,9 +7,10 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from pp_agent.domain import ToolSpec
+from pp_agent.attachments.importer import AttachmentWorkspaceImporter
 from pp_agent.storage.approvals import PendingActionStore, create_approval_grant, classify_pending_action, is_active_pending_action
 from pp_agent.subagents.worktree import PatchArtifact, WorktreeManager
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
@@ -25,6 +26,10 @@ DEFAULT_READ_FILE_MAX_CHARS = 20_000
 
 
 class ReadFileTool(BaseTool):
+    def __init__(self, workspace: Path, policy_evaluator=None, *, current_session_id: Optional[str] = None) -> None:
+        super().__init__(workspace, policy_evaluator)
+        self.current_session_id = current_session_id
+
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec(
@@ -43,10 +48,17 @@ class ReadFileTool(BaseTool):
         )
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
-        path = self.enforce_policy_for_path(PermissionDomain.READ, arguments["path"])
+        raw_path = str(arguments["path"])
         max_chars = max(1, int(arguments.get("max_chars") or DEFAULT_READ_FILE_MAX_CHARS))
         offset = max(0, int(arguments.get("offset") or 0))
-        raw = path.read_bytes()
+        try:
+            path = self.enforce_policy_for_path(PermissionDomain.READ, raw_path)
+            raw = path.read_bytes()
+        except (FileNotFoundError, PermissionError):
+            attachment_result = self._read_matching_attachment(raw_path, max_chars=max_chars, offset=offset)
+            if attachment_result is not None:
+                return attachment_result
+            raise
         text, encoding = _decode_text_bytes(raw)
         content, truncated = _slice_file_preview(text, offset=offset, max_chars=max_chars)
         return ToolExecutionResult(
@@ -63,6 +75,49 @@ class ReadFileTool(BaseTool):
                 "max_chars": max_chars,
             },
         )
+
+    def _read_matching_attachment(self, raw_path: str, *, max_chars: int, offset: int) -> ToolExecutionResult | None:
+        """当模型误把上传附件当 workspace 文件读取时，按同名附件做受限读取兜底。"""
+
+        if not self.current_session_id:
+            return None
+        from pp_agent.attachments.service import AttachmentService
+
+        requested_name = Path(raw_path).name
+        if not requested_name:
+            return None
+        service = AttachmentService(self.workspace)
+        for record in service.list(self.current_session_id):
+            if requested_name not in {record.original_filename, record.stored_filename}:
+                continue
+            payload = service.read_range(self.current_session_id, record.attachment_id, 1, 1_000_000, max_chars=max_chars)
+            text = str(payload.get("text") or "")
+            if offset:
+                text, truncated = _slice_file_preview(text, offset=offset, max_chars=max_chars)
+            else:
+                truncated = bool(payload.get("truncated"))
+            content = (
+                f"[read_file fallback: `{requested_name}` is an uploaded session attachment, not a workspace file. "
+                "Use inspect_attachment/search_attachment/read_attachment_range for follow-up reads.]\n\n"
+                f"{text}"
+            )
+            return ToolExecutionResult(
+                tool_call_id="",
+                tool_name=self.spec.name,
+                content=content,
+                details={
+                    "path": raw_path,
+                    "attachment_fallback": True,
+                    "attachment_id": record.attachment_id,
+                    "filename": record.stored_filename,
+                    "source_ref": f"{record.stored_filename}:L{payload.get('line_start')}-L{payload.get('line_end')}",
+                    "text_length": len(text),
+                    "truncated": truncated,
+                    "offset": offset,
+                    "max_chars": max_chars,
+                },
+            )
+        return None
 
 
 def _decode_text_bytes(raw: bytes) -> tuple[str, str]:
@@ -548,6 +603,24 @@ class ApprovePendingActionTool(BaseTool):
                     "effect": effect,
                 },
             )
+        if action_type == "attachment_import":
+            try:
+                importer = AttachmentWorkspaceImporter(self.workspace)
+                result = importer.complete_import_after_approval(payload.get("details", {}))
+            except Exception as exc:
+                return self._record_execution_failure(store, arguments["token"], effect, exc)
+            return self._consume_success(
+                store,
+                token=arguments["token"],
+                content=f"Attachment imported successfully.\nSaved to: {result['path']}\nToken: {arguments['token']}",
+                effect=effect,
+                details={
+                    **result,
+                    "token": arguments["token"],
+                    "attachment_id": payload.get("details", {}).get("attachment_id"),
+                    "effect": effect,
+                },
+            )
         if action_type in {"run_extension_tool", "run_mcp_tool"}:
             if self.tool_registry is None:
                 raise ValueError("Dynamic approvals require tool registry access.")
@@ -760,6 +833,23 @@ class ApprovePendingActionTool(BaseTool):
             return WorktreeManager(self.workspace).build_effect(
                 artifact.model_copy(update={"status": artifact.status})
             ) | {"effect_id": stored_effect["effect_id"], "created_at": stored_effect["created_at"]}
+        if action_type == "attachment_import":
+            details = payload.get("details", {})
+            attachment_id = str(details.get("attachment_id") or "")
+            session_id = str(details.get("session_id") or "")
+            target_path = str(details.get("target_path") or "")
+            if not attachment_id or not session_id or not target_path:
+                raise ValueError("Approval invalidated: attachment import details are incomplete.")
+            from pp_agent.attachments.service import AttachmentService
+
+            record = AttachmentService(self.workspace)._require_active(session_id, attachment_id)
+            return AttachmentWorkspaceImporter(self.workspace).build_import_effect(
+                record,
+                Path(target_path),
+                overwrite=bool(details.get("overwrite", False)),
+                effect_id=stored_effect["effect_id"],
+                created_at=stored_effect["created_at"],
+            )
         if action_type in {"run_extension_tool", "run_mcp_tool"}:
             if self.tool_registry is None:
                 raise ValueError("Dynamic approvals require tool registry access.")

@@ -13,6 +13,7 @@ from typing import Optional
 from pp_agent.app.extensions_runtime import discover_extension_resource_roots, load_executable_extensions
 from pp_agent.app.resources import load_resource_manifest, manifest_extension_roots, manifest_skill_roots
 from pp_agent.app.skills_runtime import SkillRuntime
+from pp_agent.attachments.context import AttachmentContextHook
 from pp_agent.capabilities import (
     BuiltinToolCapabilityDiscoveryProvider,
     CapabilityCatalog,
@@ -1018,6 +1019,8 @@ def create_runtime_from_record(
         agent.runtime_hooks.add_transform_context_hook("memory_retrieval", "memory", retrieval_hook.transform_context)
     if options.enable_skills:
         agent.runtime_hooks.add_transform_context_hook("skill_runtime", "skill", skill_runtime.transform_context)
+    attachment_hook = AttachmentContextHook(workspace, record.id)
+    agent.runtime_hooks.add_transform_context_hook("attachment_context", "extension", attachment_hook.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
     setattr(agent, "extension_resources", extension_runtime.resources)
@@ -1101,6 +1104,8 @@ def reload_runtime_extensions(
     retrieval_hook = memory_retrieval_hook_for(workspace, session_id=agent.session_id)
     agent.runtime_hooks.add_transform_context_hook("memory_retrieval", "memory", retrieval_hook.transform_context)
     agent.runtime_hooks.add_transform_context_hook("skill_runtime", "skill", skill_runtime.transform_context)
+    attachment_hook = AttachmentContextHook(workspace, agent.session_id)
+    agent.runtime_hooks.add_transform_context_hook("attachment_context", "extension", attachment_hook.transform_context)
     setattr(agent, "extension_registry", extension_runtime.registry)
     setattr(agent, "extension_commands", extension_runtime.commands)
     setattr(agent, "extension_resources", extension_runtime.resources)
@@ -1122,6 +1127,14 @@ def reload_runtime_extensions(
         "git_status",
         "git_diff_worktree",
         "run_shell",
+        "list_attachments",
+        "inspect_attachment",
+        "search_attachment",
+        "read_attachment_chunk",
+        "read_attachment_text",
+        "read_attachment_range",
+        "search_attachment_symbols",
+        "read_attachment_symbol",
     }
     return {
         "extension_count": len(extension_runtime.registry.items),
