@@ -173,6 +173,101 @@ export type RuntimeDoctorReport = {
   findings: Array<Record<string, unknown>>;
 };
 
+export type AttachmentRecord = {
+  attachment_id: string;
+  session_id: string;
+  original_filename: string;
+  stored_filename: string;
+  relative_dir: string;
+  content_type?: string | null;
+  kind: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: number;
+  status: string;
+  text_preview?: string;
+  extracted_text_path?: string | null;
+  chunks_path?: string | null;
+  index_path?: string | null;
+  metadata?: Record<string, unknown>;
+  error?: string | null;
+};
+
+export type AttachmentSearchResult = {
+  chunk_id: string;
+  attachment_id: string;
+  filename: string;
+  score: number;
+  match_type: string;
+  snippet: string;
+  page_start?: number | null;
+  page_end?: number | null;
+  line_start?: number | null;
+  line_end?: number | null;
+  source_ref?: string | null;
+  section_title?: string | null;
+};
+
+export type AttachmentChunkRead = {
+  chunk: Record<string, unknown>;
+  text: string;
+  truncated: boolean;
+};
+
+export type AttachmentRangeRead = {
+  attachment_id: string;
+  filename: string;
+  line_start: number;
+  line_end: number;
+  text: string;
+  truncated: boolean;
+};
+
+export type AttachmentTextRead = {
+  attachment_id: string;
+  filename: string;
+  offset: number;
+  max_chars: number;
+  text_length: number;
+  returned_chars: number;
+  next_offset?: number | null;
+  truncated: boolean;
+  text: string;
+};
+
+export type AttachmentImportPreview = {
+  attachment_id: string;
+  filename: string;
+  target_path: string;
+  would_overwrite: boolean;
+  overwrite: boolean;
+  size_bytes: number;
+  sha256: string;
+  requires_approval: boolean;
+  effect_preview: { kind: string; path: string; digest: string };
+  token?: string;
+  approval_id?: string;
+  staged?: boolean;
+};
+
+export type AttachmentMemoryPreview = {
+  attachment_id: string;
+  filename: string;
+  chunk_count: number;
+  estimated_memory_items: number;
+  source_refs: string[];
+  requires_confirmation: boolean;
+};
+
+export type AttachmentSymbolRead = {
+  symbol: Record<string, unknown>;
+  attachment_id: string;
+  filename: string;
+  source_ref: string;
+  text: string;
+  truncated: boolean;
+};
+
 export type OnboardingCheckStatus = "ok" | "warning" | "error" | "skipped";
 
 export type OnboardingCheck = {
@@ -445,15 +540,18 @@ export type ConfigSnapshot = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = init?.body instanceof FormData ? init?.headers || {} : { "Content-Type": "application/json", ...(init?.headers || {}) };
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
-    ...init
+    ...init,
+    headers
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     const detail = payload.detail;
     if (detail && typeof detail === "object") {
-      throw new Error(JSON.stringify(detail));
+      const message = typeof detail.message === "string" ? detail.message : JSON.stringify(detail);
+      const errorId = typeof detail.error_id === "string" ? ` (${detail.error_id})` : "";
+      throw new Error(`${message}${errorId}`);
     }
     throw new Error(detail || response.statusText);
   }
@@ -525,6 +623,53 @@ export const api = {
   approvals: () => request<ApprovalsSummary>("/api/approvals"),
   runtimeReport: (sessionId?: string) =>
     request<RuntimeDoctorReport>(sessionId ? `/api/runtime/report?session_id=${encodeURIComponent(sessionId)}` : "/api/runtime/report"),
+  uploadAttachment: (sessionId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{ attachment: AttachmentRecord }>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments`, { method: "POST", body });
+  },
+  listAttachments: (sessionId: string) =>
+    request<{ attachments: AttachmentRecord[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments`),
+  inspectAttachment: (sessionId: string, attachmentId: string) =>
+    request<{ attachment: AttachmentRecord; metadata: Record<string, unknown> }>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`),
+  searchAttachment: (sessionId: string, query: string, attachmentId?: string, topK = 5, mode = "auto") =>
+    request<{ results: AttachmentSearchResult[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/search`, {
+      method: "POST",
+      body: JSON.stringify({ query, attachment_id: attachmentId, top_k: topK, mode })
+    }),
+  readAttachmentChunk: (sessionId: string, attachmentId: string, chunkId: string) =>
+    request<AttachmentChunkRead>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/chunks/${encodeURIComponent(chunkId)}`),
+  readAttachmentText: (sessionId: string, attachmentId: string, offset = 0, maxChars = 30000) =>
+    request<AttachmentTextRead>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/text`, {
+      method: "POST",
+      body: JSON.stringify({ offset, max_chars: maxChars })
+    }),
+  readAttachmentRange: (sessionId: string, attachmentId: string, startLine: number, endLine: number) =>
+    request<AttachmentRangeRead>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/range`, {
+      method: "POST",
+      body: JSON.stringify({ start_line: startLine, end_line: endLine })
+    }),
+  deleteAttachment: (sessionId: string, attachmentId: string) =>
+    request<{ deleted: boolean; attachment_id: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" }),
+  previewAttachmentImport: (sessionId: string, attachmentId: string, targetPath: string, overwrite = false) =>
+    request<AttachmentImportPreview>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/import/preview`, {
+      method: "POST",
+      body: JSON.stringify({ target_path: targetPath, overwrite })
+    }),
+  requestAttachmentImport: (sessionId: string, attachmentId: string, targetPath: string, overwrite = false) =>
+    request<AttachmentImportPreview>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/import`, {
+      method: "POST",
+      body: JSON.stringify({ target_path: targetPath, overwrite })
+    }),
+  previewAttachmentMemoryIngest: (sessionId: string, attachmentId: string) =>
+    request<AttachmentMemoryPreview>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/ingest-memory/preview`, { method: "POST" }),
+  ingestAttachmentMemory: (sessionId: string, attachmentId: string, chunkIds: string[], tags: string[], scope = "workspace") =>
+    request<{ memory_items_created: number; source_refs: string[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/ingest-memory`, {
+      method: "POST",
+      body: JSON.stringify({ mode: chunkIds.length ? "selected_chunks" : "all_chunks", chunk_ids: chunkIds, max_chunks: 100, tags, scope })
+    }),
+  readAttachmentSymbol: (sessionId: string, attachmentId: string, symbolId: string) =>
+    request<AttachmentSymbolRead>(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/symbols/${encodeURIComponent(symbolId)}`),
   approvePending: (token: string) => request<ApprovalActionResponse>(`/api/approvals/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectPending: (token: string) => request(`/api/approvals/${encodeURIComponent(token)}/reject`, { method: "POST" }),
   capabilities: () => request<{ capabilities: unknown[] }>("/api/capabilities"),

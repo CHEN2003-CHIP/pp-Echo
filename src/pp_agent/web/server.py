@@ -16,6 +16,7 @@ from pp_agent.cli.commands.approvals import (
 )
 from pp_agent.web.session_manager import WebSessionManager
 from pp_agent.web.workspaces import WebWorkspaceManager
+from pp_agent.server.error_logging import write_server_error_log
 
 
 class PromptRequest(BaseModel):
@@ -52,6 +53,7 @@ def create_app(
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from fastapi.middleware.cors import CORSMiddleware
+        from fastapi.responses import JSONResponse
         from fastapi.staticfiles import StaticFiles
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("Install pp-agent with the 'web' extra to use the web server.") from exc
@@ -77,15 +79,29 @@ def create_app(
     from pp_agent.server.routes.capability_config import mount_capability_config_routes
     from pp_agent.server.routes.onboarding import mount_onboarding_routes
     from pp_agent.server.routes.traces import mount_trace_routes
+    from pp_agent.server.routes.attachments import mount_attachment_routes
 
     mount_config_routes(app, active_workspace, session_manager)
     mount_capability_config_routes(app, active_workspace)
     mount_onboarding_routes(app, active_workspace)
     mount_trace_routes(app, active_workspace)
+    mount_attachment_routes(app, active_workspace)
 
     @app.middleware("http")
     async def no_cache(request, call_next):
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # noqa: BLE001
+            payload = write_server_error_log(active_workspace(), exc, request=request)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": {
+                        "message": "Internal server error. See backend log for traceback.",
+                        **payload,
+                    }
+                },
+            )
         response.headers["Cache-Control"] = "no-store"
         return response
 

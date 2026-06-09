@@ -68,6 +68,7 @@ pp-Echo 想回答一个学习者真正关心的问题：
 - Git-backed checkpoint / safe rewind：代码状态和会话状态都能回退。
 - Memory 检索与上下文注入：让 Agent 不只活在当前一轮对话里。
 - 受控 SubAgent：能分工，但要有工具白名单、轮次限制和产物边界。
+- File Attachments：上传文件按 session 存储、解析、切块、索引，再通过附件工具按需读取，避免把大文件直接塞进 prompt。运行时只注入附件清单和短 preview；Agent 会优先使用 `list_attachments`、`inspect_attachment`、`search_attachment`、`read_attachment_text`、`read_attachment_chunk`、`read_attachment_range` 等工具回答文件问题。导入 workspace 必须走 Approval Gate；写入长期 Memory 必须显式触发；PDF/DOCX/Markdown/code 会尽量保留 page、heading、line 或 symbol source ref。见 [`docs/attachments.md`](docs/attachments.md)。
 
 它仍然是一个 Windows-first 的本地工程项目，但首页不再把重点放在“怎么部署一个工具”，而是放在“怎么读懂并复现一个 Agent 工程系统”。
 
@@ -128,6 +129,12 @@ python -m pip install -e .[web]
 set PYTHONPATH=src
 set PP_AGENT_API_KEY=your_api_key
 python -m pp_agent.cli.main chat
+```
+
+文件上传属于基础 Web 能力，`python-multipart` 已包含在基础依赖中。若要解析 PDF / DOCX，请安装 optional extra：
+
+```powershell
+python -m pip install -e .[web,attachments]
 ```
 
 也可以使用仓库里的脚本入口：

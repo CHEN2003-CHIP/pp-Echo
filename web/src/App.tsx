@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   Monitor,
+  Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -26,13 +27,15 @@ import {
   Sparkles,
   Square,
   Sun,
+  Trash2,
   Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
+import { AttachmentPanel } from "./features/attachments/AttachmentPanel";
 
 type ViewKey =
   | "chat"
@@ -47,6 +50,7 @@ type ViewKey =
   | "memory"
   | "model"
   | "logs"
+  | "attachments"
   | "startupGuide"
   | "traceInspect"
   | "usage"
@@ -131,6 +135,7 @@ const navItems: Array<{
   { view: "memory", label: "记忆", icon: BookOpen, description: "记忆视图" },
   { view: "model", label: "模型", icon: Monitor, description: "模型与环境" },
   { view: "logs", label: "日志", icon: FileText, description: "时间线与日志" },
+  { view: "attachments", label: "附件", icon: Paperclip, description: "上传文件、检索、导入与记忆写入" },
   { view: "traceInspect", label: "TraceInspect", icon: Activity, description: "Agent Trace 审计与回放" },
   { view: "usage", label: "用量", icon: Database, description: "运行统计" },
   { view: "skills", label: "技能", icon: ShieldCheck, description: "技能与规则" },
@@ -141,7 +146,7 @@ const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "对话", views: ["chat", "history", "group", "search"] },
   { title: "执行", views: ["workspace", "tasks", "board", "channels"] },
   { title: "扩展", views: ["plugins", "memory", "model"] },
-  { title: "监控", views: ["logs", "traceInspect", "usage", "skills", "users"] }
+  { title: "监控", views: ["logs", "attachments", "traceInspect", "usage", "skills", "users"] }
 ];
 
 const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
@@ -178,6 +183,8 @@ export function App() {
   const [settingsFocus, setSettingsFocus] = useState("general");
   const [searchQuery, setSearchQuery] = useState("");
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const [attachments, setAttachments] = useState<Record<string, AttachmentRecord[]>>({});
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
 
   const pollers = useRef<Record<string, number>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
@@ -280,6 +287,7 @@ export function App() {
 
     setActiveSessionId(snapshot.session_id);
     setSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
+    refreshAttachments(snapshot.session_id);
     stopPollingExcept(snapshot.session_id);
     if (snapshot.history?.source !== "stored") {
       ensureEventPolling(snapshot.session_id);
@@ -335,6 +343,41 @@ export function App() {
 
   function refreshApprovals() {
     return api.approvals().then(setApprovalSummary).catch(() => undefined);
+  }
+
+  async function refreshAttachments(sessionId: string) {
+    if (!sessionId) return;
+    try {
+      const payload = await api.listAttachments(sessionId);
+      setAttachments((current) => ({ ...current, [sessionId]: payload.attachments }));
+    } catch {
+      setAttachments((current) => ({ ...current, [sessionId]: current[sessionId] || [] }));
+    }
+  }
+
+  async function uploadAttachment(file: File) {
+    if (!activeSessionId || attachmentUploading) return;
+    setAttachmentUploading(true);
+    try {
+      await api.uploadAttachment(activeSessionId, file);
+      await refreshAttachments(activeSessionId);
+      showNotice("Attachment uploaded", "success");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error), "warning");
+    } finally {
+      setAttachmentUploading(false);
+    }
+  }
+
+  async function deleteAttachment(attachmentId: string) {
+    if (!activeSessionId) return;
+    try {
+      await api.deleteAttachment(activeSessionId, attachmentId);
+      await refreshAttachments(activeSessionId);
+      showNotice("Attachment deleted", "success");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error), "warning");
+    }
   }
 
   function openView(view: ViewKey) {
@@ -418,6 +461,7 @@ export function App() {
     setSnapshots({});
     setEvents({});
     setTimeline([]);
+    setAttachments({});
     setPrompt("");
     setWorkspaceStatus(null);
     setApprovalSummary({ count: 0, items: [] });
@@ -781,8 +825,14 @@ export function App() {
               approvalSummary={approvalSummary}
               approvalAction={approvalAction}
               approvalFeedback={approvalFeedback}
+              attachments={activeSessionId ? attachments[activeSessionId] || [] : []}
+              attachmentUploading={attachmentUploading}
               approve={approve}
               reject={reject}
+              refreshAttachments={() => activeSessionId ? refreshAttachments(activeSessionId) : undefined}
+              uploadAttachment={uploadAttachment}
+              deleteAttachment={deleteAttachment}
+              openAttachments={() => setActiveView("attachments")}
               inspectorTab={inspectorTab}
               setInspectorTab={setInspectorTab}
               activeEvents={activeEvents}
@@ -794,6 +844,15 @@ export function App() {
             <TraceInspectPage
               activeSessionId={activeSessionId}
               onBack={() => setActiveView("chat")}
+            />
+          ) : activeView === "attachments" ? (
+            <AttachmentWorkbench
+              activeSessionId={activeSessionId}
+              attachments={activeSessionId ? attachments[activeSessionId] || [] : []}
+              uploading={attachmentUploading}
+              onRefresh={() => activeSessionId ? refreshAttachments(activeSessionId) : undefined}
+              onDelete={deleteAttachment}
+              onUpload={uploadAttachment}
             />
           ) : activeView === "logs" ? (
             <ObservabilityPanel
@@ -1472,8 +1531,14 @@ function ChatWorkspace({
   approvalSummary,
   approvalAction,
   approvalFeedback,
+  attachments,
+  attachmentUploading,
   approve,
   reject,
+  refreshAttachments,
+  uploadAttachment,
+  deleteAttachment,
+  openAttachments,
   inspectorTab,
   setInspectorTab,
   activeEvents,
@@ -1500,8 +1565,14 @@ function ChatWorkspace({
   approvalSummary: ApprovalsSummary;
   approvalAction: { token: string; action: "approve" | "reject" } | null;
   approvalFeedback: string;
+  attachments: AttachmentRecord[];
+  attachmentUploading: boolean;
   approve: () => void;
   reject: () => void;
+  refreshAttachments: () => void;
+  uploadAttachment: (file: File) => void;
+  deleteAttachment: (attachmentId: string) => void;
+  openAttachments: () => void;
   inspectorTab: InspectorTab;
   setInspectorTab: (tab: InspectorTab) => void;
   activeEvents: RuntimeEvent[];
@@ -1511,6 +1582,7 @@ function ChatWorkspace({
 }) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const nearBottomRef = useRef(true);
   const turnMarkers = useMemo(() => buildTurnMarkers(transcript), [transcript]);
   const transcriptTailKey = useMemo(() => {
@@ -1651,6 +1723,34 @@ function ChatWorkspace({
         ) : null}
 
         <footer className="composer">
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="attachment-input"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) uploadAttachment(file);
+              event.currentTarget.value = "";
+            }}
+          />
+          <button
+            className="composer-icon-button"
+            disabled={!activeSessionId || busy || Boolean(activeApproval) || attachmentUploading}
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload attachment"
+            type="button"
+          >
+            <Paperclip size={16} />
+          </button>
+          <button
+            className="composer-icon-button"
+            disabled={!activeSessionId}
+            onClick={openAttachments}
+            title="Open attachments"
+            type="button"
+          >
+            <FileText size={16} />
+          </button>
           <textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
@@ -1667,6 +1767,7 @@ function ChatWorkspace({
             <Plus size={16} />
           </button>
         </footer>
+        <AttachmentStrip attachments={attachments} uploading={attachmentUploading} onDelete={deleteAttachment} />
         <div className="composer-statusbar">
           <span>
             <FolderOpen size={14} />
@@ -1715,6 +1816,89 @@ function ConversationTurnRail({
         </button>
       ))}
     </nav>
+  );
+}
+
+function AttachmentWorkbench({
+  activeSessionId,
+  attachments,
+  uploading,
+  onRefresh,
+  onDelete,
+  onUpload
+}: {
+  activeSessionId: string;
+  attachments: AttachmentRecord[];
+  uploading: boolean;
+  onRefresh: () => void;
+  onDelete: (attachmentId: string) => void;
+  onUpload: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  return (
+    <section className="attachment-workbench">
+      <input
+        ref={inputRef}
+        type="file"
+        className="attachment-input"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onUpload(file);
+          event.currentTarget.value = "";
+        }}
+      />
+      <div className="attachment-workbench-toolbar">
+        <div>
+          <strong>{attachments.length} attachments</strong>
+          <span>{activeSessionId ? shortId(activeSessionId) : "no active session"}</span>
+        </div>
+        <button type="button" onClick={() => inputRef.current?.click()} disabled={!activeSessionId || uploading}>
+          <Paperclip size={15} /> Upload
+        </button>
+        <button type="button" onClick={onRefresh} disabled={!activeSessionId}>
+          <RefreshCw size={15} /> Refresh
+        </button>
+      </div>
+      {activeSessionId ? (
+        <AttachmentPanel sessionId={activeSessionId} attachments={attachments} onRefresh={onRefresh} onDelete={onDelete} />
+      ) : (
+        <div className="empty-state">Create or select a session before uploading attachments.</div>
+      )}
+    </section>
+  );
+}
+
+function AttachmentStrip({
+  attachments,
+  uploading,
+  onDelete
+}: {
+  attachments: AttachmentRecord[];
+  uploading: boolean;
+  onDelete: (attachmentId: string) => void;
+}) {
+  if (!uploading && attachments.length === 0) return null;
+  return (
+    <div className="attachment-strip" aria-live="polite">
+      {uploading ? (
+        <span className="attachment-chip loading">
+          <Paperclip size={14} />
+          Uploading
+        </span>
+      ) : null}
+      {attachments.map((attachment) => (
+        <span className={`attachment-chip ${attachment.status}`} key={attachment.attachment_id} title={attachment.text_preview || attachment.error || attachment.stored_filename}>
+          <Paperclip size={14} />
+          <span className="attachment-chip-main">
+            <strong>{attachment.stored_filename}</strong>
+            <small>{attachment.kind} · {formatBytes(attachment.size_bytes)} · {attachment.status}</small>
+          </span>
+          <button type="button" onClick={() => onDelete(attachment.attachment_id)} title="Delete attachment">
+            <Trash2 size={13} />
+          </button>
+        </span>
+      ))}
+    </div>
   );
 }
 

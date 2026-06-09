@@ -41,6 +41,16 @@ from pp_agent.tools.repo_tools import GitDiffWorktreeTool, GitStatusTool, GrepCo
 from pp_agent.tools.search_tool import SearchTextTool
 from pp_agent.tools.session_tools import ExecuteSafeRewindTool, PreviewSafeRewindTool
 from pp_agent.tools.shell_tool import PowerShellTool
+from pp_agent.attachments.tools import (
+    InspectAttachmentTool,
+    ListAttachmentsTool,
+    ReadAttachmentChunkTool,
+    ReadAttachmentRangeTool,
+    ReadAttachmentTextTool,
+    ReadAttachmentSymbolTool,
+    SearchAttachmentTool,
+    SearchAttachmentSymbolsTool,
+)
 
 
 SpecFactory = Callable[[], ToolSpec]
@@ -54,6 +64,16 @@ if TYPE_CHECKING:
 
 _WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "execute_safe_rewind"}
 _APPROVAL_EXECUTE_TOOLS = {"approve_pending_action", "reject_pending_action"}
+_ATTACHMENT_TOOLS = {
+    "list_attachments",
+    "inspect_attachment",
+    "search_attachment",
+    "read_attachment_chunk",
+    "read_attachment_text",
+    "read_attachment_range",
+    "search_attachment_symbols",
+    "read_attachment_symbol",
+}
 
 
 def _allow_mcp_tool(policy: Any, server_name: str, tool_name: str) -> bool:
@@ -169,16 +189,50 @@ def _tool_trace_output(result: ToolExecutionResult) -> dict[str, Any]:
     私密字段把 trace 文件撑大或泄露到 TraceInspect。
     """
 
-    details = redact_mapping(dict(result.details or {}))
+    details = _attachment_trace_details(result) if result.tool_name in _ATTACHMENT_TOOLS else redact_mapping(dict(result.details or {}))
+    content_preview = _attachment_trace_content_preview(result, details) if result.tool_name in _ATTACHMENT_TOOLS else safe_preview(result.content, 2000)
     return {
         "is_error": bool(result.is_error),
-        "content_preview": safe_preview(result.content, 2000),
+        "content_preview": content_preview,
         "details": safe_preview(json.dumps(details, ensure_ascii=False, default=str), 16 * 1024),
         "artifact_token": details.get("artifact_token"),
         "approval_token": details.get("token") or details.get("approval_token"),
         "changed_paths": details.get("changed_paths") or details.get("affected_paths"),
         "exit_code": details.get("exit_code") or details.get("returncode"),
     }
+
+
+def _attachment_trace_content_preview(result: ToolExecutionResult, details: dict[str, Any]) -> str:
+    """
+    为附件工具生成 Trace 预览，避免 read chunk/range 的完整文本进入 TraceInspect。
+    """
+
+    if result.tool_name == "search_attachment":
+        snippets = [str(item.get("snippet", ""))[:240] for item in details.get("results", []) if isinstance(item, dict)]
+        return safe_preview(json.dumps({"result_count": len(snippets), "snippets": snippets}, ensure_ascii=False), 2000)
+    if result.tool_name in {"read_attachment_chunk", "read_attachment_text", "read_attachment_range", "read_attachment_symbol"}:
+        return safe_preview(json.dumps({key: value for key, value in details.items() if key != "text"}, ensure_ascii=False, default=str), 2000)
+    return safe_preview(json.dumps(details, ensure_ascii=False, default=str), 2000)
+
+
+def _attachment_trace_details(result: ToolExecutionResult) -> dict[str, Any]:
+    """
+    脱敏附件工具 details，保留可审计 metadata/snippet，移除完整 chunk/range 文本。
+    """
+
+    details = dict(result.details or {})
+    if "text" in details:
+        text = str(details.pop("text") or "")
+        details["text_preview"] = safe_preview(text, 240)
+        details["text_length"] = len(text)
+    chunk = details.get("chunk")
+    if isinstance(chunk, dict) and "text" in chunk:
+        chunk = dict(chunk)
+        text = str(chunk.pop("text") or "")
+        chunk["text_preview"] = safe_preview(text, 240)
+        chunk["text_length"] = len(text)
+        details["chunk"] = chunk
+    return redact_mapping(details)
 
 
 @dataclass
@@ -863,7 +917,7 @@ class ToolRegistry:
         【工具分类】文件操作 / 仓库操作 / Shell / 审核操作
         """
         registrations = [
-            self._registration("read_file", self._spec_read_file, lambda: ReadFileTool(self.workspace, self.policy_evaluator)),
+            self._registration("read_file", self._spec_read_file, lambda: ReadFileTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id)),
             self._registration("write_file", self._spec_write_file, lambda: WriteFileTool(self.workspace, self.policy_evaluator)),
             self._registration("edit_file", self._spec_edit_file, lambda: EditFileTool(self.workspace, self.policy_evaluator)),
             self._registration("preview_pending_action", self._spec_preview_pending_action, lambda: PreviewPendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self)),
@@ -875,6 +929,14 @@ class ToolRegistry:
             self._registration("grep_code", self._spec_grep_code, lambda: GrepCodeTool(self.workspace, self.policy_evaluator)),
             self._registration("git_status", self._spec_git_status, lambda: GitStatusTool(self.workspace, self.policy_evaluator)),
             self._registration("git_diff_worktree", self._spec_git_diff_worktree, lambda: GitDiffWorktreeTool(self.workspace, self.policy_evaluator)),
+            self._registration("list_attachments", self._spec_list_attachments, lambda: ListAttachmentsTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
+            self._registration("inspect_attachment", self._spec_inspect_attachment, lambda: InspectAttachmentTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
+            self._registration("search_attachment", self._spec_search_attachment, lambda: SearchAttachmentTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
+            self._registration("read_attachment_chunk", self._spec_read_attachment_chunk, lambda: ReadAttachmentChunkTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
+            self._registration("read_attachment_text", self._spec_read_attachment_text, lambda: ReadAttachmentTextTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
+            self._registration("read_attachment_range", self._spec_read_attachment_range, lambda: ReadAttachmentRangeTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
+            self._registration("search_attachment_symbols", self._spec_search_attachment_symbols, lambda: SearchAttachmentSymbolsTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
+            self._registration("read_attachment_symbol", self._spec_read_attachment_symbol, lambda: ReadAttachmentSymbolTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id, observability=self.observability)),
             self._registration("preview_safe_rewind", self._spec_preview_safe_rewind, lambda: PreviewSafeRewindTool(self.workspace, current_session_id=self.current_session_id)),
             self._registration("execute_safe_rewind", self._spec_execute_safe_rewind, lambda: ExecuteSafeRewindTool(self.workspace, current_session_id=self.current_session_id)),
             self._registration(
@@ -1243,6 +1305,123 @@ class ToolRegistry:
         )
 
     @staticmethod
+    def _spec_list_attachments() -> ToolSpec:
+        return ToolSpec(
+            name="list_attachments",
+            description="List current-session uploaded attachments. Returns metadata and previews only, never full file contents.",
+            parameters={"type": "object", "properties": {"session_id": {"type": "string"}}},
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
+    def _spec_inspect_attachment() -> ToolSpec:
+        return ToolSpec(
+            name="inspect_attachment",
+            description="Inspect one attachment's summary, status, chunk count, code outline, table schema, PDF pages, or JSON structure before reading content.",
+            parameters={"type": "object", "properties": {"session_id": {"type": "string"}, "attachment_id": {"type": "string"}}, "required": ["attachment_id"]},
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
+    def _spec_search_attachment() -> ToolSpec:
+        return ToolSpec(
+            name="search_attachment",
+            description="Search one or all current-session attachments with local keyword retrieval and return relevant chunk ids and snippets.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "query": {"type": "string"},
+                    "attachment_id": {"type": "string"},
+                    "top_k": {"type": "integer"},
+                    "mode": {"type": "string", "enum": ["auto", "keyword", "hybrid"]},
+                },
+                "required": ["query"],
+            },
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
+    def _spec_read_attachment_chunk() -> ToolSpec:
+        return ToolSpec(
+            name="read_attachment_chunk",
+            description="Read a specific attachment chunk by chunk_id after searching or inspecting an attachment.",
+            parameters={"type": "object", "properties": {"session_id": {"type": "string"}, "chunk_id": {"type": "string"}}, "required": ["chunk_id"]},
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
+    def _spec_read_attachment_text() -> ToolSpec:
+        return ToolSpec(
+            name="read_attachment_text",
+            description="Read extracted text from an uploaded attachment by character offset. Use this for broad/full-document PDF, DOCX, Markdown, text, CSV, JSON, or code questions; continue with next_offset until truncated is false.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "attachment_id": {"type": "string"},
+                    "offset": {"type": "integer"},
+                    "max_chars": {"type": "integer"},
+                },
+                "required": ["attachment_id"],
+            },
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
+    def _spec_read_attachment_range() -> ToolSpec:
+        return ToolSpec(
+            name="read_attachment_range",
+            description="Read a specific line range from a text, log, or code attachment. Use this instead of requesting an entire large file.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "attachment_id": {"type": "string"},
+                    "start_line": {"type": "integer"},
+                    "end_line": {"type": "integer"},
+                },
+                "required": ["attachment_id", "start_line", "end_line"],
+            },
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
+    def _spec_search_attachment_symbols() -> ToolSpec:
+        return ToolSpec(
+            name="search_attachment_symbols",
+            description="Search code attachment symbols by name, signature, parent, or docstring preview before reading code.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "query": {"type": "string"},
+                    "attachment_id": {"type": "string"},
+                    "top_k": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
+    def _spec_read_attachment_symbol() -> ToolSpec:
+        return ToolSpec(
+            name="read_attachment_symbol",
+            description="Read a local code symbol by symbol_id. Use after inspect_attachment or search_attachment_symbols.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "attachment_id": {"type": "string"},
+                    "symbol_id": {"type": "string"},
+                },
+                "required": ["attachment_id", "symbol_id"],
+            },
+            permission_domain=PermissionDomain.READ,
+        )
+
+    @staticmethod
     def _spec_run_shell() -> ToolSpec:
         return ToolSpec(
             name="run_shell",
@@ -1314,6 +1493,17 @@ class ToolRegistry:
             return "files"
         if name in {"git_status", "git_diff_worktree", "grep_code", "search_text", "preview_safe_rewind", "execute_safe_rewind"}:
             return "repo"
+        if name in {
+            "list_attachments",
+            "inspect_attachment",
+            "search_attachment",
+            "read_attachment_chunk",
+            "read_attachment_text",
+            "read_attachment_range",
+            "search_attachment_symbols",
+            "read_attachment_symbol",
+        }:
+            return "attachments"
         if name == "run_shell":
             return "shell"
         return "approvals"

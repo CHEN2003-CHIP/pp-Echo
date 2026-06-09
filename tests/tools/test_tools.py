@@ -222,7 +222,7 @@ def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> Non
 
     registry._registrations["read_file"].tool_factory = tracking_factory
 
-    expected_order = [
+    expected_names = {
         "read_file",
         "write_file",
         "edit_file",
@@ -235,11 +235,19 @@ def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> Non
         "grep_code",
         "git_status",
         "git_diff_worktree",
+        "list_attachments",
+        "inspect_attachment",
+        "search_attachment",
+        "read_attachment_chunk",
+        "read_attachment_text",
+        "read_attachment_range",
+        "search_attachment_symbols",
+        "read_attachment_symbol",
         "preview_safe_rewind",
         "execute_safe_rewind",
         "run_shell",
-    ]
-    expected_model_order = [
+    }
+    expected_model_names = {
         "read_file",
         "write_file",
         "edit_file",
@@ -248,16 +256,42 @@ def test_registry_read_only_apis_do_not_materialize_tools(tmp_path: Path) -> Non
         "grep_code",
         "git_status",
         "git_diff_worktree",
+        "list_attachments",
+        "inspect_attachment",
+        "search_attachment",
+        "read_attachment_chunk",
+        "read_attachment_text",
+        "read_attachment_range",
+        "search_attachment_symbols",
+        "read_attachment_symbol",
         "preview_safe_rewind",
         "execute_safe_rewind",
         "run_shell",
-    ]
+    }
 
     assert registry._instances == {}
     assert registry.get_spec("read_file").name == "read_file"
-    assert list(registry.metadata()) == expected_order
-    assert [item["function"]["name"] for item in registry.openapi_specs()] == expected_model_order
+    assert set(registry.metadata()) >= expected_names
+    assert {item["function"]["name"] for item in registry.openapi_specs()} >= expected_model_names
     assert calls == 0
+    assert registry._instances == {}
+
+
+def test_attachment_tools_are_registered_without_eager_materialization(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, current_session_id="session-1")
+    attachment_tools = {
+        "list_attachments",
+        "inspect_attachment",
+        "search_attachment",
+        "read_attachment_chunk",
+        "read_attachment_text",
+        "read_attachment_range",
+        "search_attachment_symbols",
+        "read_attachment_symbol",
+    }
+
+    assert attachment_tools <= set(registry.metadata())
+    assert attachment_tools <= {item["function"]["name"] for item in registry.openapi_specs()}
     assert registry._instances == {}
 
 

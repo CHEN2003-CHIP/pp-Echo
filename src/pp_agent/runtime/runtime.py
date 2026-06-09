@@ -1392,7 +1392,11 @@ class AgentRuntime:
         if event.type == TOOL_END:
             start = self._trace_event_starts.pop(key or "", None)
             output = dict(details)
+            if event.tool_name in {"list_attachments", "inspect_attachment", "search_attachment", "read_attachment_chunk", "read_attachment_text", "read_attachment_range", "search_attachment_symbols", "read_attachment_symbol"}:
+                output = self._attachment_trace_event_output(output)
             output["content_preview"] = safe_preview(event.message, 2000)
+            if event.tool_name in {"read_attachment_chunk", "read_attachment_text", "read_attachment_range", "read_attachment_symbol"}:
+                output["content_preview"] = safe_preview(str(output.get("text_preview") or output.get("summary") or "attachment content read"), 500)
             record_span(
                 "tool.call",
                 "tool",
@@ -1509,6 +1513,27 @@ class AgentRuntime:
         if not isinstance(recall, dict):
             return 0
         return int(recall.get("returned_count") or len(recall.get("hits") or recall.get("snippets") or []))
+
+    @staticmethod
+    def _attachment_trace_event_output(details: dict[str, object]) -> dict[str, object]:
+        """
+        脱敏 runtime lifecycle 生成的附件工具 trace 输出，避免完整 chunk/range 文本落盘。
+        """
+
+        output = dict(details)
+        text = output.pop("text", None)
+        if isinstance(text, str):
+            output["text_preview"] = safe_preview(text, 240)
+            output["text_length"] = len(text)
+        chunk = output.get("chunk")
+        if isinstance(chunk, dict):
+            chunk_copy = dict(chunk)
+            chunk_text = chunk_copy.pop("text", None)
+            if isinstance(chunk_text, str):
+                chunk_copy["text_preview"] = safe_preview(chunk_text, 240)
+                chunk_copy["text_length"] = len(chunk_text)
+            output["chunk"] = chunk_copy
+        return output
 
     @staticmethod
     def _record_memory_span_from_context(event: AgentEvent, record_span) -> None:

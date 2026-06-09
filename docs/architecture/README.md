@@ -64,6 +64,7 @@ pp-Echo 的定位是教学向本地 Agent Runtime：它关注“一个 Claude Co
 | `09-eval-onboarding-doctor.md` | Eval / Onboarding / Doctor | 关注稳定性和易用性的人 | 测试、诊断、CI |
 | `10-storage-and-artifacts.md` | TraceStore / ApprovalRecords / Artifacts | 关注持久化的人 | JSONL、Git、文件系统 |
 | `11-typical-workflow.md` | 端到端任务流程 | 所有人 | 读完 overview 更好 |
+| `12-attachments-and-large-files.md` | Session attachments / Large files / Import / Memory ingest | 想扩展文件分析的人 | ToolRegistry、Approval、Memory、TraceInspect |
 
 ## 和项目其他文档的关系
 
