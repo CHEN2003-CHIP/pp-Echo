@@ -78,6 +78,7 @@ class AttachmentService:
                 self._record_span("attachment.symbol_index", started, record, {"status": "ok", "symbol_count": len(symbols)})
             text_path = directory / "extracted_text.md"
             text_path.write_text(extracted_text, encoding="utf-8")
+
             record.extracted_text_path = f"{record.relative_dir}/extracted_text.md"
             self._record_span("attachment.extract", started, record, {"status": record.status.value, "preview": record.text_preview})
             chunk_started = time.time()
@@ -304,6 +305,7 @@ class AttachmentService:
         return "\n".join(lines)
 
     def _require_active(self, session_id: str, attachment_id: str | None) -> AttachmentRecord:
+        """检查并返回当前 session 的附件记录。"""
         if not attachment_id:
             raise ValueError("attachment_id is required")
         record = self.store.load(session_id, attachment_id)
@@ -312,6 +314,7 @@ class AttachmentService:
         return record
 
     def _extracted_text_path(self, record: AttachmentRecord) -> Path:
+        """提取并返回附件提取文本的路径。"""
         if not record.extracted_text_path:
             raise FileNotFoundError(f"Attachment has no extracted text: {record.attachment_id}")
         path = (self.workspace / record.extracted_text_path).resolve()
