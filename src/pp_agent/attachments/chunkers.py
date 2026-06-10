@@ -148,7 +148,7 @@ def python_outline(text: str) -> list[dict[str, Any]]:
             outline.append({"kind": node.__class__.__name__.replace("Def", "").lower(), "name": node.name, "line": node.lineno, "end_line": getattr(node, "end_lineno", None)})
     return sorted(outline, key=lambda item: int(item.get("line") or 0))
 
-
+#TODO:可以考虑引入其他语言的代码符号识别工具，如 Java、C++、Go 等。"""
 def regex_code_outline(text: str) -> list[dict[str, Any]]:
     """用轻量正则识别非 Python 代码中的类和函数符号。"""
 

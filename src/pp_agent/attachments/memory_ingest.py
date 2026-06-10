@@ -10,7 +10,7 @@ from pp_agent.attachments.retrieval import load_chunks
 from pp_agent.attachments.schema import AttachmentChunk, AttachmentRecord
 from pp_agent.attachments.service import AttachmentService
 
-
+#TODO:目前还未真正接入正常的MEMORY系统，只是临时写入到本地文件中
 class AttachmentMemoryIngestor:
     """
     将附件 chunk 转换为长期记忆条目的服务。

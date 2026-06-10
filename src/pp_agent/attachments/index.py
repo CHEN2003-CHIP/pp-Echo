@@ -20,7 +20,7 @@ def tokenize(text: str) -> list[str]:
             bigrams.append(block)
     return words + bigrams
 
-
+#TODO:第一版不依赖 embedding 或向量数据库
 def build_keyword_index(chunks: list[AttachmentChunk]) -> dict[str, Any]:
     """为 chunk 构建轻量本地关键词索引，第一版不依赖 embedding 或向量数据库。"""
 
