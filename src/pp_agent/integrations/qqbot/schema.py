@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
-SUPPORTED_EVENT_TYPES = {"C2C_MSG_RECEIVE", "GROUP_MSG_RECEIVE"}
+SUPPORTED_EVENT_TYPES = {
+    "C2C_MSG_RECEIVE",
+    "C2C_MESSAGE_CREATE",
+    "GROUP_MSG_RECEIVE",
+    "GROUP_MESSAGE_CREATE",
+    "GROUP_AT_MESSAGE_CREATE",
+}
 
 
 @dataclass(frozen=True)
@@ -30,9 +36,9 @@ def parse_incoming_message(payload: dict[str, Any]) -> QQIncomingMessage | None:
     event_id = str(payload.get("id") or payload.get("s") or data.get("event_id") or "")
     message_id = str(data.get("id") or data.get("msg_id") or data.get("message_id") or "")
     content = str(data.get("content") or "").strip()
-    if event_type == "C2C_MSG_RECEIVE":
-        openid = _first_string(data, "openid", "user_openid", "author_openid")
-        user_openid = _author_user_openid(data) or openid
+    if event_type in {"C2C_MSG_RECEIVE", "C2C_MESSAGE_CREATE"}:
+        user_openid = _author_user_openid(data) or _first_string(data, "openid", "user_openid", "author_openid")
+        openid = _first_string(data, "openid", "user_openid", "author_openid") or user_openid
         if not event_id or not message_id or not openid:
             logger.warning("Ignoring malformed QQ C2C event: missing id/message/openid")
             return None
@@ -78,4 +84,3 @@ def _first_string(data: dict[str, Any], *names: str) -> str | None:
 def _author_user_openid(data: dict[str, Any]) -> str | None:
     author = data.get("author") if isinstance(data.get("author"), dict) else {}
     return _first_string(author, "user_openid", "openid", "id")
-

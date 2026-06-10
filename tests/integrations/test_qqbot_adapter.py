@@ -44,9 +44,14 @@ class FakeHandle:
 class FakeSessionManager:
     def __init__(self, handle: FakeHandle) -> None:
         self.handle = handle
+        self.created = 0
 
     def get_handle(self, session_id: str) -> FakeHandle:
         return self.handle
+
+    def create_session(self) -> dict:
+        self.created += 1
+        return {"session_id": f"session-created-{self.created}"}
 
 
 def _config(**overrides) -> QQBotConfig:
@@ -87,6 +92,10 @@ def _c2c(event_id: str = "event-1") -> dict:
     return {"op": 0, "id": event_id, "t": "C2C_MSG_RECEIVE", "d": {"id": "msg-1", "openid": "user-1", "content": "hello"}}
 
 
+def _c2c_create(event_id: str = "event-c2c-create") -> dict:
+    return {"op": 0, "id": event_id, "t": "C2C_MESSAGE_CREATE", "d": {"id": "msg-c2c", "author": {"user_openid": "user-1"}, "content": "hello"}}
+
+
 def _group(content: str = "/pp hello") -> dict:
     return {"op": 0, "id": "event-g", "t": "GROUP_MSG_RECEIVE", "d": {"id": "msg-g", "group_openid": "group-1", "content": content}}
 
@@ -99,6 +108,23 @@ def test_adapter_handles_c2c_message(tmp_path: Path) -> None:
     assert handle.prompts
     assert client.c2c[0]["openid"] == "user-1"
     assert client.c2c[0]["content"] == "answer"
+
+
+def test_adapter_uses_session_manager_for_new_mapping(tmp_path: Path) -> None:
+    adapter, _client, _handle = _adapter(tmp_path)
+
+    asyncio.run(adapter.handle_payload(_c2c()))
+
+    assert adapter.session_manager.created == 1
+
+
+def test_adapter_handles_c2c_message_create_alias(tmp_path: Path) -> None:
+    adapter, client, handle = _adapter(tmp_path)
+
+    asyncio.run(adapter.handle_payload(_c2c_create()))
+
+    assert handle.prompts
+    assert client.c2c[0]["openid"] == "user-1"
 
 
 def test_adapter_denies_c2c_when_not_allowlisted(tmp_path: Path) -> None:

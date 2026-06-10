@@ -4,8 +4,8 @@ import json
 import logging
 import threading
 import time
-import uuid
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ class QQSessionStore:
         self.path = path
         self._lock = threading.Lock()
 
-    def resolve(self, conversation_key: str, conversation_type: str) -> str:
+    def resolve(self, conversation_key: str, conversation_type: str, *, session_id_factory: Callable[[], str] | None = None) -> str:
         with self._lock:
             data = self._load()
             now = _utc_now()
@@ -25,11 +25,25 @@ class QQSessionStore:
                 item["updated_at"] = now
                 self._save(data)
                 return str(item["session_id"])
-            session_id = str(uuid.uuid4())
+            session_id = session_id_factory() if session_id_factory is not None else _fallback_session_id()
             data[conversation_key] = {
                 "session_id": session_id,
                 "conversation_type": conversation_type,
                 "created_at": now,
+                "updated_at": now,
+            }
+            self._save(data)
+            return session_id
+
+    def replace(self, conversation_key: str, conversation_type: str, session_id: str) -> str:
+        with self._lock:
+            data = self._load()
+            now = _utc_now()
+            existing = data.get(conversation_key) if isinstance(data.get(conversation_key), dict) else {}
+            data[conversation_key] = {
+                "session_id": session_id,
+                "conversation_type": conversation_type,
+                "created_at": existing.get("created_at") or now,
                 "updated_at": now,
             }
             self._save(data)
@@ -60,3 +74,8 @@ class QQSessionStore:
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+
+def _fallback_session_id() -> str:
+    import uuid
+
+    return str(uuid.uuid4())

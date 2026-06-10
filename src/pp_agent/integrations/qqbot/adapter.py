@@ -53,11 +53,23 @@ class QQBotAdapter:
         if not self._allowed(message):
             logger.warning("QQ message denied by allowlist: %s", redact_id(message.conversation_key))
             return
-        session_id = self.session_store.resolve(message.conversation_key, message.conversation_type)
+        session_id = self.session_store.resolve(
+            message.conversation_key,
+            message.conversation_type,
+            session_id_factory=self._create_session_id,
+        )
         try:
             attachment_note = await maybe_ingest_qq_attachments(message.raw, session_id=session_id)
             wrapped_prompt = build_agent_prompt(message, prompt_text, attachment_note=attachment_note)
-            result = await self._run_agent(session_id, wrapped_prompt)
+            try:
+                result = await self._run_agent(session_id, wrapped_prompt)
+            except FileNotFoundError:
+                session_id = self.session_store.replace(
+                    message.conversation_key,
+                    message.conversation_type,
+                    self._create_session_id(),
+                )
+                result = await self._run_agent(session_id, wrapped_prompt)
             reply = approval_reply_if_needed(result) or extract_reply_text(result)
         except Exception as exc:  # noqa: BLE001
             logger.exception("QQ adapter failed while processing event %s", redact_id(message.event_id))
@@ -92,6 +104,17 @@ class QQBotAdapter:
             return snapshot or result
 
         return await asyncio.to_thread(run_and_wait)
+
+    def _create_session_id(self) -> str:
+        creator = getattr(self.session_manager, "create_session", None)
+        if callable(creator):
+            snapshot = creator()
+            session_id = snapshot.get("session_id") or snapshot.get("id") if isinstance(snapshot, dict) else None
+            if session_id:
+                return str(session_id)
+        import uuid
+
+        return str(uuid.uuid4())
 
     async def _send_reply(self, message: QQIncomingMessage, reply: str) -> None:
         if message.conversation_type == "c2c" and message.openid:
@@ -204,4 +227,3 @@ def _events_reply_text(events: Any) -> str | None:
         if isinstance(event, dict) and event.get("type") == "message_delta" and isinstance(event.get("delta"), str):
             chunks.append(event["delta"])
     return "".join(chunks).strip() or None
-
