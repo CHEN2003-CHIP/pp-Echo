@@ -11,7 +11,7 @@ Current preview release target:
 This project is still an alpha learning/research project. It includes approval, trace auditing, and checkpoint/rewind, but it is not a production sandbox.
 
 <p align="center">
-  <img src="docs/assets/logo-echo.svg" alt="pp-Echo logo" width="420" />
+  <img src="docs/assets/pp-Echo.png" alt="pp-Echo logo" width="920" />
 </p>
 
 <p align="center">
@@ -49,11 +49,11 @@ pp-Echo 现在加入了 `Bots` 页面：QQBot 不再只是一个“能跑通 web
 
 <table>
   <tr>
-    <td align="center" width="58%">
-      <img src="docs/assets/PC端与QQBOT聊天图.png" alt="PC 端与 QQBot 聊天截图" height="360"><br>
+    <td align="center" width="68%">
+      <img src="docs/assets/PC端与QQBOT聊天图.png" alt="PC 端与 QQBot 聊天截图" height="360",width="620"><br>
       <sub>PC 端与 QQBot 对话</sub>
     </td>
-    <td align="center" width="42%">
+    <td align="center" width="32%">
       <img src="docs/assets/移动端与QQBOT对话图.jpg" alt="移动端与 QQBot 对话截图" height="360"><br>
       <sub>移动端与 QQBot 对话</sub>
     </td>
