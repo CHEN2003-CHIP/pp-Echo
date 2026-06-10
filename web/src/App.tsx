@@ -36,6 +36,7 @@ import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitiz
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
 import { AttachmentPanel } from "./features/attachments/AttachmentPanel";
+import { BotCenterPage } from "./features/bots/BotCenterPage";
 
 type ViewKey =
   | "chat"
@@ -51,6 +52,7 @@ type ViewKey =
   | "model"
   | "logs"
   | "attachments"
+  | "bots"
   | "startupGuide"
   | "traceInspect"
   | "usage"
@@ -136,6 +138,7 @@ const navItems: Array<{
   { view: "model", label: "模型", icon: Monitor, description: "模型与环境" },
   { view: "logs", label: "日志", icon: FileText, description: "时间线与日志" },
   { view: "attachments", label: "附件", icon: Paperclip, description: "上传文件、检索、导入与记忆写入" },
+  { view: "bots", label: "Bots", icon: Bot, description: "Bot Gateway and external message entry points" },
   { view: "traceInspect", label: "TraceInspect", icon: Activity, description: "Agent Trace 审计与回放" },
   { view: "usage", label: "用量", icon: Database, description: "运行统计" },
   { view: "skills", label: "技能", icon: ShieldCheck, description: "技能与规则" },
@@ -146,7 +149,7 @@ const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "对话", views: ["chat", "history", "group", "search"] },
   { title: "执行", views: ["workspace", "tasks", "board", "channels"] },
   { title: "扩展", views: ["plugins", "memory", "model"] },
-  { title: "监控", views: ["logs", "attachments", "traceInspect", "usage", "skills", "users"] }
+  { title: "监控", views: ["logs", "attachments", "bots", "traceInspect", "usage", "skills", "users"] }
 ];
 
 const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
@@ -854,6 +857,8 @@ export function App() {
               onDelete={deleteAttachment}
               onUpload={uploadAttachment}
             />
+          ) : activeView === "bots" ? (
+            <BotCenterPage />
           ) : activeView === "logs" ? (
             <ObservabilityPanel
               activeSessionId={activeSessionId}

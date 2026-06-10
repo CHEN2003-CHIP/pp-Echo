@@ -1,4 +1,4 @@
-﻿# pp-Echo
+﻿# 🦇pp-Echo：会规划、会审批、会回退的本地 Agent 工程课
 
 ## Release
 
@@ -35,7 +35,32 @@ pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangCha
   <img src="docs/assets/pp-Echo.webp" alt="pp-Echo demo: 可见规划、审批优先执行、Git-backed rewind、分层记忆、受控子 Agent" width="920">
 </p>
 
-## 你应该从哪里开始？
+## 🗞️ 最近更新
+
+### Bot Center / QQBot Gateway
+
+pp-Echo 现在加入了 `Bots` 页面：QQBot 不再只是一个“能跑通 webhook 的实验入口”，而是被纳入统一 Bot Center，可以查看状态、启动/停止、配置公网 URL、追踪事件、消息、run、trace 和日志。默认 `qq-main` 不自动暴露公网，群聊仍使用 `/pp` 触发。
+
+推荐阅读：
+
+- [QQBot 配置和启动教程](docs/integrations/qqbot_setup.md)
+- [Bot Center 设计与安全边界](docs/bot_center.md)
+- [QQ Bot API v2 接入说明](docs/integrations/qqbot.md)
+
+<table>
+  <tr>
+    <td align="center" width="58%">
+      <img src="docs/assets/PC端与QQBOT聊天图.png" alt="PC 端与 QQBot 聊天截图" height="360"><br>
+      <sub>PC 端与 QQBot 对话</sub>
+    </td>
+    <td align="center" width="42%">
+      <img src="docs/assets/移动端与QQBOT对话图.jpg" alt="移动端与 QQBot 对话截图" height="360"><br>
+      <sub>移动端与 QQBot 对话</sub>
+    </td>
+  </tr>
+</table>
+
+## 🆕 你应该从哪里开始？
 
 ### 我是新手，只想先跑起来
 
@@ -53,7 +78,7 @@ pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangCha
 
 优先看 [`docs/source-reading-roadmap.md`](docs/source-reading-roadmap.md) 里的“可以写进简历”，再看 [`docs/interview-guide.md`](docs/interview-guide.md) 做面试表达自查。
 
-## 项目定位
+## 📍 项目定位
 
 pp-Echo 想回答一个学习者真正关心的问题：
 
@@ -80,7 +105,7 @@ pp-Echo 想回答一个学习者真正关心的问题：
 - **适合对标学习**：你可以借它理解 Claude Code / Cursor 背后的本地 Agent 工程骨架，但它不是商业产品替代品。
 - **边界说清楚**：pp-Echo 有策略门和审批流，但不是完整 shell sandbox；SubAgent 是受控 worker，不是无限自治团队。
 
-## 5 分钟快速开始
+## ⏱️ 5 分钟快速开始
 
 推荐先跑教学最小版，不需要 LLM API：
 
@@ -153,6 +178,14 @@ Web UI 默认访问：
 http://127.0.0.1:8765
 ```
 
+QQBot / Bot Center 快速入口：
+
+```text
+Web UI -> Bots -> QQ 主机器人 -> Start
+```
+
+完整教程见 [`docs/integrations/qqbot_setup.md`](docs/integrations/qqbot_setup.md)。
+
 常用诊断命令：
 
 ```powershell
@@ -179,7 +212,7 @@ python -m pp_agent.cli.main memory search "project conventions" --scope workspac
 | Day 6 | Memory 检索与上下文注入 | memory retrieval、learning、recall builder |
 | Day 7 | MCP、Browser 与 SubAgent 扩展 | MCP manager、browser runtime、subagents |
 
-## 核心模块导览
+## 🗺️ 核心模块导览
 
 <p align="center">
   <img src="docs/assets/pp-echo-architecture.png"  width="920">
@@ -199,7 +232,7 @@ python -m pp_agent.cli.main memory search "project conventions" --scope workspac
 | Browser 工具如何受控执行 | `src/pp_agent/browser/*`, `src/pp_agent/web_tools/*` |
 | SubAgent 如何受控分工 | `src/pp_agent/tools/subagent_tool.py`, `src/pp_agent/subagents/*` |
 
-## Tau-style Agent Eval
+## 📈 Tau-style Agent Eval
 
 pp-Echo 现在使用 τ-bench 风格的 Agent Eval：每个 case 都在隔离 workspace 中运行，由脚本用户驱动 agent，多轮交互后根据最终状态、沟通内容、工具轨迹、审批和安全约束评分。默认 `deterministic` 模式不依赖真实 LLM，适合 CI 和重构前后对比。
 
@@ -285,7 +318,7 @@ pp-Echo 的安全设计重点是“可见、可审、可回退”：
 - 它不能保证模型永远按预期规划。
 - 在真实仓库中运行前，应先看 `docs/safety.md` 和 `workflow doctor` 输出。
 
-## 文档导航
+## 🧭 文档导航
 
 - [tutorials/README.md](tutorials/README.md)：7 天读懂 pp-Echo。
 - [mini-pp-echo/README.md](mini-pp-echo/README.md)：从 0 开始的教学最小版。
@@ -298,22 +331,24 @@ pp-Echo 的安全设计重点是“可见、可审、可回退”：
 - [docs/safety.md](docs/safety.md)：安全边界与审批策略。
 - [docs/configuration.md](docs/configuration.md)：配置模型、工具和项目设置。
 - [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)：MCP 集成说明。
+- [docs/bot_center.md](docs/bot_center.md)：Bot Center / Bot Gateway 设计与安全边界。
+- [docs/integrations/qqbot_setup.md](docs/integrations/qqbot_setup.md)：QQBot 配置和启动教程。
 - [docs/integrations/qqbot.md](docs/integrations/qqbot.md)：官方 QQ Bot API v2 接入说明。
 - [docs/multi_agent_demo.md](docs/multi_agent_demo.md)：SubAgent 演示。
 - [docs/release-checklist.md](docs/release-checklist.md)：发布前检查清单。
 - [README_en.md](README_en.md)：英文参考文档。
 
-### QQ Bot Integration
+### QQBot / Bot Center
 
-pp-Echo can be connected to the official QQ Bot API v2 as an external messaging channel. The QQ adapter receives C2C/group messages, maps each QQ conversation to a pp-Echo session, runs the existing Agent Runtime, and replies back to QQ.
+pp-Echo 可以把官方 QQ Bot API v2 接进本地 Agent Runtime：私聊和群聊消息会被映射到 pp-Echo session，进入现有审批、trace、checkpoint 和日志体系，再把回答发回 QQ。
 
-Install with:
+安装 QQBot extra：
 
 ```bash
 pip install -e ".[web,qqbot]"
 ```
 
-See `docs/integrations/qqbot.md`.
+启动 Web 后进入 `Bots -> QQ 主机器人`，点击 `Start`，再在 `Config` 中粘贴 cpolar / cloudflared / frp / VPS 等工具生成的公网 URL。详细步骤见 [`docs/integrations/qqbot_setup.md`](docs/integrations/qqbot_setup.md)。
 
 ## 贡献路线
 
