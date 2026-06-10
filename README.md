@@ -298,9 +298,22 @@ pp-Echo 的安全设计重点是“可见、可审、可回退”：
 - [docs/safety.md](docs/safety.md)：安全边界与审批策略。
 - [docs/configuration.md](docs/configuration.md)：配置模型、工具和项目设置。
 - [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)：MCP 集成说明。
+- [docs/integrations/qqbot.md](docs/integrations/qqbot.md)：官方 QQ Bot API v2 接入说明。
 - [docs/multi_agent_demo.md](docs/multi_agent_demo.md)：SubAgent 演示。
 - [docs/release-checklist.md](docs/release-checklist.md)：发布前检查清单。
 - [README_en.md](README_en.md)：英文参考文档。
+
+### QQ Bot Integration
+
+pp-Echo can be connected to the official QQ Bot API v2 as an external messaging channel. The QQ adapter receives C2C/group messages, maps each QQ conversation to a pp-Echo session, runs the existing Agent Runtime, and replies back to QQ.
+
+Install with:
+
+```bash
+pip install -e ".[web,qqbot]"
+```
+
+See `docs/integrations/qqbot.md`.
 
 ## 贡献路线
 
