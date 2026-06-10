@@ -3402,6 +3402,328 @@ body {
   }
 }
 
+.bot-center {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 22px;
+}
+
+.bot-list-head,
+.bot-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.bot-list-head h2,
+.bot-title h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.bot-list-head p,
+.bot-title p,
+.bot-card-main p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.bot-list-head button,
+.bot-detail-actions button,
+.bot-card-actions button,
+.bot-back,
+.bot-tabs button,
+.bot-form-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.bot-list-head button:hover,
+.bot-detail-actions button:hover,
+.bot-card-actions button:hover,
+.bot-back:hover,
+.bot-tabs button:hover,
+.bot-form-actions button:hover {
+  background: var(--panel-3);
+}
+
+.bot-card-list {
+  display: grid;
+  gap: 12px;
+  max-width: 920px;
+}
+
+.bot-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 96px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.bot-card:hover {
+  background: var(--panel-2);
+}
+
+.bot-avatar {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-3);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.bot-card-main {
+  min-width: 0;
+}
+
+.bot-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bot-card-title h3 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.bot-chip {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.bot-card-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.bot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted-2);
+}
+
+.bot-dot.success { background: var(--success); }
+.bot-dot.warning { background: var(--warning); }
+.bot-dot.danger { background: var(--danger); }
+.bot-dot.muted { background: var(--muted-2); }
+
+.bot-card-actions,
+.bot-detail-actions,
+.bot-form-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bot-detail-page {
+  max-width: 1180px;
+}
+
+.bot-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.bot-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.bot-tabs button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.bot-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.bot-info,
+.bot-security-note,
+.bot-empty,
+.bot-notice {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.bot-info.wide,
+.bot-security-note {
+  grid-column: 1 / -1;
+}
+
+.bot-info span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.bot-info strong {
+  display: block;
+  margin-top: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.bot-event-list {
+  display: grid;
+  gap: 8px;
+}
+
+.bot-event-list details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.bot-event-list summary {
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.bot-event-list summary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bot-event-list pre,
+.bot-logs pre {
+  max-height: 420px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bot-form {
+  display: grid;
+  gap: 14px;
+}
+
+.bot-form label {
+  display: grid;
+  gap: 7px;
+  max-width: 720px;
+}
+
+.bot-form label span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bot-form input {
+  width: 100%;
+  min-height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 11px;
+}
+
+.bot-logs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.bot-logs pre {
+  margin: 0;
+}
+
+.bot-empty,
+.bot-notice {
+  color: var(--muted);
+}
+
+@media (max-width: 860px) {
+  .bot-card,
+  .bot-detail-grid,
+  .bot-logs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bot-card-state,
+  .bot-card-actions {
+    justify-self: start;
+  }
+
+  .bot-detail-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 /* Split-by-mode shell: default has no middle rail; history and board share it. */
 .app-shell {
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);

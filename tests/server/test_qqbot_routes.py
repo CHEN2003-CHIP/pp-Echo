@@ -15,7 +15,7 @@ def _app(tmp_path: Path):
     return create_app(workspace, manager=WebSessionManager(workspace, runtime_factory=_factory))
 
 
-def test_qqbot_webhook_disabled_returns_404(tmp_path: Path, monkeypatch) -> None:
+def test_qqbot_webhook_stopped_is_safely_ignored(tmp_path: Path, monkeypatch) -> None:
     from fastapi.testclient import TestClient
 
     monkeypatch.delenv("PP_ECHO_QQBOT_ENABLED", raising=False)
@@ -23,7 +23,11 @@ def test_qqbot_webhook_disabled_returns_404(tmp_path: Path, monkeypatch) -> None
 
     response = client.post("/api/integrations/qqbot/webhook", json={"op": 0})
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert response.json() == {"op": 12}
+    events = client.get("/api/bots/qq-main/events").json()["events"]
+    assert events[-1]["type"] == "message_ignored"
+    assert events[-1]["metadata"]["reason"] == "bot_stopped"
 
 
 def test_qqbot_webhook_enabled_missing_config_returns_500(tmp_path: Path, monkeypatch) -> None:
@@ -33,6 +37,7 @@ def test_qqbot_webhook_enabled_missing_config_returns_500(tmp_path: Path, monkey
     monkeypatch.delenv("PP_ECHO_QQBOT_APP_ID", raising=False)
     monkeypatch.delenv("PP_ECHO_QQBOT_APP_SECRET", raising=False)
     client = TestClient(_app(tmp_path))
+    client.post("/api/bots/qq-main/start")
 
     response = client.post("/api/integrations/qqbot/webhook", json={"op": 0})
 
@@ -71,6 +76,7 @@ def test_qqbot_event_ack_and_status_are_safe(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setenv("PP_ECHO_QQBOT_APP_SECRET", "secret")
     monkeypatch.setattr(qqbot_routes, "QQBotAdapter", FakeAdapter)
     client = TestClient(_app(tmp_path))
+    client.post("/api/bots/qq-main/start")
 
     response = client.post("/api/integrations/qqbot/webhook", json={"op": 0, "id": "e", "t": "OTHER", "d": {}})
     status = client.get("/api/integrations/qqbot/status")
