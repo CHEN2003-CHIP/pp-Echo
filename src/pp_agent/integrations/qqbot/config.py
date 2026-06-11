@@ -19,6 +19,8 @@ class QQBotConfig:
     allowed_groups: tuple[str, ...]
     reply_max_chars: int
     request_timeout: float
+    run_timeout_seconds: int
+    max_queue_per_conversation: int
     dedupe_ttl_seconds: int
     session_store: str
     dedupe_store: str
@@ -46,6 +48,8 @@ def load_qqbot_config(environ: dict[str, str] | None = None) -> QQBotConfig:
         allowed_groups=_csv(env.get("PP_ECHO_QQBOT_ALLOWED_GROUPS")),
         reply_max_chars=_int(env.get("PP_ECHO_QQBOT_REPLY_MAX_CHARS"), default=1800, minimum=200),
         request_timeout=float(_int(env.get("PP_ECHO_QQBOT_REQUEST_TIMEOUT"), default=10, minimum=1)),
+        run_timeout_seconds=_int(env.get("PP_ECHO_QQBOT_RUN_TIMEOUT_SECONDS"), default=180, minimum=1),
+        max_queue_per_conversation=_int(env.get("PP_ECHO_QQBOT_MAX_QUEUE_PER_CONVERSATION"), default=5, minimum=1),
         dedupe_ttl_seconds=_int(env.get("PP_ECHO_QQBOT_DEDUPE_TTL_SECONDS"), default=600, minimum=1),
         session_store=env.get("PP_ECHO_QQBOT_SESSION_STORE") or ".pp-agent/integrations/qqbot-sessions.json",
         dedupe_store=env.get("PP_ECHO_QQBOT_DEDUPE_STORE") or ".pp-agent/integrations/qqbot-dedupe.json",

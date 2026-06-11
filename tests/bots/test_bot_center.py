@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from pp_agent.bots.events import BotEventStore
 from pp_agent.bots.manager import BotRuntimeManager
@@ -66,6 +67,19 @@ def test_event_store_writes_events_messages_and_status(tmp_path: Path) -> None:
     assert store.read_status("qq", "qq-main")["last_message_at"]
 
 
+def test_event_store_after_id_returns_incremental_events(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = BotEventStore(workspace)
+
+    first = store.publish(BotEvent(bot_id="qq-main", platform="qq", type="one", summary="one"))
+    second = store.publish(BotEvent(bot_id="qq-main", platform="qq", type="two", summary="two"))
+
+    assert int(second.event_id) > int(first.event_id)
+    assert [event["type"] for event in store.list_events("qq", "qq-main", after_id=first.event_id)] == ["two"]
+    assert store.list_events("qq", "qq-main", after_id=second.event_id) == []
+
+
 def test_manager_start_stop_and_public_url(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -75,10 +89,41 @@ def test_manager_start_stop_and_public_url(tmp_path: Path) -> None:
     detail = manager.set_public_url("qq-main", "https://abc.example/")
     stopped = manager.stop_bot("qq-main")
 
-    assert started["status"]["process_state"] == "running"
+    assert started["status"]["desired_state"] == "enabled"
+    assert started["status"]["process_state"] == "not_managed"
     assert detail["webhook_url"] == "https://abc.example/api/integrations/qqbot/webhook"
-    assert stopped["status"]["process_state"] == "stopped"
+    assert stopped["status"]["desired_state"] == "disabled"
+    assert stopped["status"]["process_state"] == "not_managed"
     assert any(event["type"] == "tunnel_url_updated" for event in manager.event_store.list_events("qq", "qq-main"))
+
+
+def test_manager_rejects_non_https_public_url_except_localhost(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manager = BotRuntimeManager(workspace)
+
+    manager.set_public_url("qq-main", "http://localhost:8788")
+    try:
+        manager.set_public_url("qq-main", "http://example.com")
+    except ValueError as exc:
+        assert "https" in str(exc)
+    else:
+        raise AssertionError("non-local http public_url should be rejected")
+
+
+def test_trace_store_writes_json_and_recovers_corrupted_trace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manager = BotRuntimeManager(workspace)
+
+    path = manager.record_trace("qq-main", {"trace_id": "trace-1", "run_id": "run-1", "conversation_id": "c1", "session_id": "s1", "message_id": "m1"})
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    path.with_name("bad.json").write_text("{bad", encoding="utf-8")
+    traces = manager.event_store.list_traces("qq", "qq-main")
+
+    assert payload["trace_id"] == "trace-1"
+    assert payload["events"] == []
+    assert any(trace.get("corrupted") for trace in traces)
 
 
 def test_bot_api_lists_controls_and_sets_url(tmp_path: Path) -> None:
@@ -96,6 +141,25 @@ def test_bot_api_lists_controls_and_sets_url(tmp_path: Path) -> None:
 
     assert listed.status_code == 200
     assert listed.json()["bots"][0]["id"] == "qq-main"
-    assert started.json()["status"]["process_state"] == "running"
+    assert started.json()["status"]["desired_state"] == "enabled"
+    assert started.json()["status"]["process_state"] == "not_managed"
     assert public_url.json()["webhook_url"] == "https://bot.example/api/integrations/qqbot/webhook"
-    assert stopped.json()["status"]["process_state"] == "stopped"
+    assert stopped.json()["status"]["desired_state"] == "disabled"
+
+
+def test_bot_api_health_and_events_cursor(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_app(workspace, manager=WebSessionManager(workspace, runtime_factory=_factory))
+    client = TestClient(app)
+
+    first = client.post("/api/bots/qq-main/start").json()["events"][-1]["event_id"]
+    client.post("/api/bots/qq-main/stop")
+    events = client.get(f"/api/bots/qq-main/events?after_id={first}").json()["events"]
+    health = client.get("/api/bots/qq-main/health")
+
+    assert health.status_code == 200
+    assert health.json()["effective_status"]["bot_id"] == "qq-main"
+    assert [event["type"] for event in events] == ["bot_stopped"]

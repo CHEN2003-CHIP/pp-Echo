@@ -142,3 +142,52 @@ Bot stopped ignored the message: click `Start` in Bot Center. Stopped bots ackno
 - Keep the `/pp` group trigger.
 - Require approval for risky tools.
 - Keep secrets out of config files, frontend payloads, and logs.
+
+## Stable Bot Semantics
+
+Bot Center `Start` and `Stop` are logical controls:
+
+- `Start` sets `desired_state=enabled` and allows new webhook messages to enter the adapter.
+- `Stop` sets `desired_state=disabled`; new webhook messages are acknowledged but recorded as `message_ignored`.
+- `enabled=true` does not mean a process is running.
+- This version does not supervise the QQ-only proxy process.
+- This version does not supervise cpolar, cloudflared, frp, ngrok, or other tunnel processes.
+- Read readiness from Bot Center health plus doctor/report output.
+
+`GET /api/bots/{bot_id}/health` returns `effective_status`:
+
+- `desired_state`: `enabled` or `disabled`.
+- `process_state`: usually `not_managed` for QQ proxy/tunnel lifecycle.
+- `agent_state`: `idle`, `receiving`, `running_agent`, `waiting_approval`, or `error`.
+- `ingress_state`: `local_only`, `public_configured`, `public_reachable`, `public_unreachable`, or `unknown`.
+- `qq_state`: `not_configured`, `configured`, `token_ok`, `token_error`, or `unknown`.
+- `still_running_count`: known in-flight background tasks.
+- `queued_count`: known queued messages.
+
+Events have monotonic `event_id` values. The UI and API can poll incrementally with:
+
+```text
+GET /api/bots/{bot_id}/events?after_id=123&limit=100
+```
+
+Bot traces are stored as standard JSON in `traces/YYYY-MM-DD/*.json`. If a trace file is corrupted, list APIs return `corrupted=true` for that file instead of crashing.
+
+Public URL validation is strict: production URLs must use `https://`. `http://localhost` and `http://127.0.0.1` are allowed only for local development. `file://`, `javascript://`, `ftp://`, and malformed URLs are rejected.
+
+Common status troubleshooting:
+
+- QQ verification failed: check `PP_ECHO_QQBOT_APP_SECRET` and the configured webhook URL.
+- `public_configured` but not reachable: run a status check through the public tunnel and confirm the tunnel points to the QQ-only proxy.
+- `token_error`: check QQ AppID/AppSecret and platform permissions.
+- `waiting_approval`: approve or reject the pending action in the local Web UI.
+- `run_timed_out`: inspect the trace and adjust `PP_ECHO_QQBOT_RUN_TIMEOUT_SECONDS` only if the work is expected to be slow.
+- Stopped but still running: `Stop` blocks new messages by default; `POST /api/bots/{bot_id}/stop?force=true` attempts to cancel known in-flight tasks.
+
+Current capability boundary:
+
+- Text-only C2C and group messages.
+- Group chat requires `/pp` by default.
+- No image understanding.
+- No automatic QQ file import.
+- No QQ-side approval buttons.
+- Approval remains in the local Web UI.

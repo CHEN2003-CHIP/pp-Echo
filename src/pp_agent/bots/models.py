@@ -31,8 +31,11 @@ class BotStatus(BaseModel):
     name: str
     enabled: bool
     configured: bool = False
-    process_state: Literal["stopped", "starting", "running", "stopping", "crashed"] = "stopped"
-    ingress_state: Literal["local_only", "tunnel_starting", "public_reachable", "public_error", "unknown"] = "local_only"
+    desired_state: Literal["enabled", "disabled"] = "disabled"
+    process_state: Literal["not_managed", "starting", "running", "stopping", "stopped", "error", "crashed"] = "not_managed"
+    agent_state: Literal["idle", "receiving", "running_agent", "waiting_approval", "error"] = "idle"
+    ingress_state: Literal["local_only", "public_configured", "public_reachable", "public_unreachable", "tunnel_starting", "public_error", "unknown"] = "local_only"
+    qq_state: Literal["not_configured", "configured", "token_ok", "token_error", "unknown"] = "unknown"
     bot_state: Literal["idle", "receiving", "running_agent", "replying", "waiting_approval", "error"] = "idle"
     local_url: Optional[str] = None
     public_url: Optional[str] = None
@@ -45,6 +48,11 @@ class BotStatus(BaseModel):
     last_message_at: Optional[datetime] = None
     last_reply_at: Optional[datetime] = None
     last_error: Optional[str] = None
+    last_run_at: Optional[datetime] = None
+    warnings: List[str] = Field(default_factory=list)
+    still_running_count: int = 0
+    queued_count: int = 0
+    effective_policy: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BotEvent(BaseModel):

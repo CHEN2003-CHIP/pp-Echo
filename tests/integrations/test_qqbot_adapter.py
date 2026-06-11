@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
+from pp_agent.bots.manager import BotRuntimeManager
 from pp_agent.integrations.qqbot.adapter import QQBotAdapter, extract_reply_text, truncate_reply
 from pp_agent.integrations.qqbot.config import QQBotConfig
 from pp_agent.integrations.qqbot.dedupe import QQEventDedupeStore
@@ -25,14 +27,17 @@ class FakeClient:
 
 
 class FakeHandle:
-    def __init__(self, reply: str = "answer", *, fail: bool = False) -> None:
+    def __init__(self, reply: str = "answer", *, fail: bool = False, delay: float = 0.0) -> None:
         self.reply = reply
         self.fail = fail
+        self.delay = delay
         self.prompts: list[str] = []
         self._worker = SimpleNamespace(join=lambda timeout=None: None)
 
     def prompt(self, text: str) -> dict:
         self.prompts.append(text)
+        if self.delay:
+            time.sleep(self.delay)
         if self.fail:
             raise RuntimeError("boom")
         return {"queued": False}
@@ -67,6 +72,8 @@ def _config(**overrides) -> QQBotConfig:
         allowed_groups=(),
         reply_max_chars=1800,
         request_timeout=10.0,
+        run_timeout_seconds=180,
+        max_queue_per_conversation=5,
         dedupe_ttl_seconds=600,
         session_store="sessions.json",
         dedupe_store="dedupe.json",
@@ -86,6 +93,12 @@ def _adapter(tmp_path: Path, *, config: QQBotConfig | None = None, handle: FakeH
         dedupe_store=QQEventDedupeStore(tmp_path / "dedupe.json"),
     )
     return adapter, client, adapter.session_manager.handle
+
+
+def _managed_adapter(tmp_path: Path, *, config: QQBotConfig | None = None, handle: FakeHandle | None = None):
+    adapter, client, fake_handle = _adapter(tmp_path, config=config, handle=handle)
+    adapter.bot_manager = BotRuntimeManager(tmp_path)
+    return adapter, client, fake_handle
 
 
 def _c2c(event_id: str = "event-1") -> dict:
@@ -162,6 +175,38 @@ def test_adapter_sends_short_error_on_agent_failure(tmp_path: Path) -> None:
 
     assert "RuntimeError" in client.c2c[0]["content"]
     assert "TraceInspect" in client.c2c[0]["content"]
+
+
+def test_adapter_times_out_run_and_records_event(tmp_path: Path) -> None:
+    adapter, client, _handle = _managed_adapter(tmp_path, config=_config(run_timeout_seconds=1), handle=FakeHandle(delay=2.0))
+
+    asyncio.run(adapter.handle_payload(_c2c()))
+
+    events = adapter.bot_manager.event_store.list_events("qq", "qq-main")
+    runs = adapter.bot_manager.event_store.list_runs("qq", "qq-main")
+    traces = adapter.bot_manager.event_store.list_traces("qq", "qq-main")
+    assert client.c2c[0]["content"].startswith("这次处理超时了")
+    assert any(event["type"] == "run_timed_out" for event in events)
+    assert runs[0]["status"] == "timed_out"
+    assert traces[0]["status"] == "timed_out"
+
+
+def test_adapter_rejects_when_conversation_queue_is_full(tmp_path: Path) -> None:
+    adapter, client, _handle = _managed_adapter(tmp_path, config=_config(max_queue_per_conversation=1))
+    key = "qq:c2c:user-1"
+    lock = adapter._conversation_locks[key]
+    adapter._conversation_queued[key] = 1
+
+    async def run_locked() -> None:
+        async with lock:
+            await adapter.handle_payload(_c2c("event-queue-full"))
+
+    asyncio.run(run_locked())
+
+    events = adapter.bot_manager.event_store.list_events("qq", "qq-main")
+    assert client.c2c[0]["content"] == "当前会话正在处理上一条消息，请稍后再试。"
+    assert events[-1]["type"] == "message_rejected"
+    adapter._conversation_queued.pop(key, None)
 
 
 def test_adapter_ignores_unsupported_and_malformed_events(tmp_path: Path) -> None:

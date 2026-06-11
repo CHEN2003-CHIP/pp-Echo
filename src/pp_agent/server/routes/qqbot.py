@@ -75,7 +75,17 @@ def mount_qqbot_routes(app, active_workspace: Callable[[], Path], session_manage
             # Bot Center owns logical enablement; env PP_ECHO_QQBOT_ENABLED is no longer required.
             config = type(config)(**{**config.__dict__, "enabled": True})
         if op == 13 and not config.app_secret:
-            raise HTTPException(status_code=500, detail="QQ Bot AppSecret is not configured.")
+            manager.event_store.publish(
+                BotEvent(
+                    bot_id=bot_config.id,
+                    platform=bot_config.platform,
+                    type="webhook_verify_failed",
+                    level="error",
+                    summary="QQ webhook verification failed because AppSecret is not configured.",
+                    metadata={"reason": "missing_app_secret"},
+                )
+            )
+            raise HTTPException(status_code=400, detail="QQ Bot AppSecret is not configured.")
         if op == 13:
             data = payload.get("d") if isinstance(payload.get("d"), dict) else {}
             result = sign_callback_validation(
@@ -101,19 +111,44 @@ def mount_qqbot_routes(app, active_workspace: Callable[[], Path], session_manage
                 bot_manager=manager,
                 bot_id=BOT_ID,
             )
-            _safe_create_task(adapter.handle_payload(payload))
+            _safe_create_task(adapter.handle_payload(payload), manager=manager, bot_id=BOT_ID)
             return {"op": 12}
         return {"op": 12}
 
 
-def _safe_create_task(coro) -> asyncio.Task:
+def _safe_create_task(coro, *, manager: BotRuntimeManager | None = None, bot_id: str = BOT_ID) -> asyncio.Task:
     async def runner() -> None:
         try:
             await coro
+        except asyncio.CancelledError:
+            if manager is not None:
+                manager.event_store.publish(
+                    BotEvent(
+                        bot_id=bot_id,
+                        platform="qq",
+                        type="run_cancelled",
+                        level="warning",
+                        summary="QQ Bot background task was cancelled.",
+                    )
+                )
+            raise
         except Exception:  # noqa: BLE001
             logger.exception("Unhandled QQ Bot background task error.")
+            if manager is not None:
+                manager.event_store.publish(
+                    BotEvent(
+                        bot_id=bot_id,
+                        platform="qq",
+                        type="background_task_failed",
+                        level="error",
+                        summary="Unhandled QQ Bot background task error.",
+                    )
+                )
 
-    return asyncio.create_task(runner())
+    task = asyncio.create_task(runner())
+    if manager is not None:
+        manager.register_task(bot_id, task)
+    return task
 
 
 def _bot_manager(app, workspace: Path) -> BotRuntimeManager:

@@ -3527,6 +3527,22 @@ body {
   font-size: 11px;
 }
 
+.bot-mini-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.bot-mini-status span {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 6px;
+}
+
 .bot-card-state {
   display: inline-flex;
   align-items: center;

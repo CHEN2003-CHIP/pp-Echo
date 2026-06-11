@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from pydantic import BaseModel
 
@@ -34,18 +34,25 @@ def mount_bot_routes(app, active_workspace: Callable[[], Path]) -> None:
         # Polling remains the stable first implementation; this endpoint keeps the API surface reserved.
         return {"events": [], "streaming": False}
 
-    @app.get("/api/bots/{bot_id}")
-    def bot_detail(bot_id: str) -> dict:
+    @app.get("/api/bots/{bot_id}/health")
+    def bot_health(bot_id: str) -> dict:
         try:
-            return manager().get_detail(bot_id)
+            return {"effective_status": manager().effective_status(bot_id)}
         except KeyError as exc:
             raise HTTPException(status_code=404, detail={"message": f"Unknown bot: {bot_id}"}) from exc
 
     @app.get("/api/bots/{bot_id}/events")
-    def bot_events(bot_id: str, limit: int = 100) -> dict:
+    def bot_events(bot_id: str, limit: int = 100, after_id: Optional[str] = None) -> dict:
         try:
             config = manager().registry.get_config(bot_id)
-            return {"events": manager().event_store.list_events(config.platform, config.id, limit=limit)}
+            return {"events": manager().event_store.list_events(config.platform, config.id, limit=limit, after_id=after_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail={"message": f"Unknown bot: {bot_id}"}) from exc
+
+    @app.get("/api/bots/{bot_id}")
+    def bot_detail(bot_id: str) -> dict:
+        try:
+            return manager().get_detail(bot_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail={"message": f"Unknown bot: {bot_id}"}) from exc
 
@@ -81,9 +88,9 @@ def mount_bot_routes(app, active_workspace: Callable[[], Path]) -> None:
             raise HTTPException(status_code=404, detail={"message": f"Unknown bot: {bot_id}"}) from exc
 
     @app.post("/api/bots/{bot_id}/stop")
-    def stop_bot(bot_id: str) -> dict:
+    def stop_bot(bot_id: str, force: bool = False) -> dict:
         try:
-            return manager().stop_bot(bot_id)
+            return manager().stop_bot(bot_id, force=force)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail={"message": f"Unknown bot: {bot_id}"}) from exc
 

@@ -12,6 +12,8 @@ pp-Echo can connect to the official QQ Bot API v2 as an external messaging chann
 - Stable QQ conversation to pp-Echo session mapping.
 - Event dedupe with a local TTL store.
 - User and group allowlists.
+- Per-conversation serialization so one QQ conversation does not run multiple messages through the same session concurrently.
+- Run timeout and observable `run_timed_out` events.
 
 ## Not Yet Supported
 
@@ -60,6 +62,8 @@ PP_ECHO_QQBOT_ALLOWED_USERS=
 PP_ECHO_QQBOT_ALLOWED_GROUPS=
 PP_ECHO_QQBOT_REPLY_MAX_CHARS=1800
 PP_ECHO_QQBOT_REQUEST_TIMEOUT=10
+PP_ECHO_QQBOT_RUN_TIMEOUT_SECONDS=180
+PP_ECHO_QQBOT_MAX_QUEUE_PER_CONVERSATION=5
 PP_ECHO_QQBOT_DEDUPE_TTL_SECONDS=600
 PP_ECHO_QQBOT_SESSION_STORE=.pp-agent/integrations/qqbot-sessions.json
 PP_ECHO_QQBOT_DEDUPE_STORE=.pp-agent/integrations/qqbot-dedupe.json
@@ -98,9 +102,11 @@ C2C messages do not require `/pp` by default. If `PP_ECHO_QQBOT_ALLOW_ALL_C2C=fa
 - Group messages only trigger on `/pp` by default.
 - Group and C2C allowlists are available.
 - QQ does not bypass pp-Echo Approval Gate.
+- Dangerous approvals are still completed in the local Web UI, not inside QQ.
 - QQ messages are not automatically written to long-term memory.
 - QQ attachments are not automatically imported into the workspace.
 - AppSecret and access tokens are not returned by status APIs or included in prompts.
+- AppSecret and access tokens are redacted from bot status, events, traces, and logs.
 
 ## Troubleshooting
 
@@ -109,4 +115,27 @@ C2C messages do not require `/pp` by default. If `PP_ECHO_QQBOT_ALLOW_ALL_C2C=fa
 - Group has no response: ensure the message starts with `/pp` and the group is allowlisted if `PP_ECHO_QQBOT_ALLOWED_GROUPS` is set.
 - Send message failed: check access token permissions, QQ platform rate limits, and event subscriptions.
 - Local webhook unreachable: use public HTTPS tunneling and QQ platform allowlists.
+- Waiting approval: open the local Web UI and approve or reject the pending action.
+- Run timed out: inspect the Bot Center trace and adjust `PP_ECHO_QQBOT_RUN_TIMEOUT_SECONDS` only if needed.
+- Queue full: the same QQ conversation already has too many pending messages; retry after the current run completes.
+- Stopped but still running: `Stop` blocks new messages; `POST /api/bots/{bot_id}/stop?force=true` attempts to cancel known in-flight tasks.
+
+## Bot Center Status Semantics
+
+`enabled` is the desired logical state, not a process supervisor state. pp-Echo currently does not manage the QQ-only proxy process or cpolar/cloudflared. Bot Center health reports `process_state=not_managed` unless a future supervisor owns those processes.
+
+Use `GET /api/bots/qq-main/health` for the effective status fields:
+
+- `desired_state`
+- `process_state`
+- `agent_state`
+- `ingress_state`
+- `qq_state`
+- `last_message_at`
+- `last_run_at`
+- `last_reply_at`
+- `last_error`
+- `warnings`
+
+The current adapter is intentionally text-only: no image understanding, no automatic QQ file import, and no QQ-side approval buttons.
 

@@ -546,14 +546,50 @@ export type BotSummary = {
   name: string;
   enabled: boolean;
   description?: string | null;
+  desired_state?: string;
   process_state: string;
+  agent_state?: string;
   bot_state: string;
   ingress_state: string;
+  qq_state?: string;
   configured: boolean;
   last_event_at?: string | null;
   last_message_at?: string | null;
   last_error?: string | null;
   status_text: string;
+  still_running_count?: number;
+  queued_count?: number;
+};
+
+export type BotStatusDetail = {
+  bot_id: string;
+  type: string;
+  platform: string;
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+  desired_state?: string;
+  process_state: string;
+  agent_state?: string;
+  ingress_state: string;
+  qq_state?: string;
+  bot_state: string;
+  local_url?: string | null;
+  public_url?: string | null;
+  webhook_url?: string | null;
+  bot_path: string;
+  pid?: number | null;
+  started_at?: string | null;
+  last_heartbeat_at?: string | null;
+  last_event_at?: string | null;
+  last_message_at?: string | null;
+  last_reply_at?: string | null;
+  last_error?: string | null;
+  last_run_at?: string | null;
+  warnings?: string[];
+  still_running_count?: number;
+  queued_count?: number;
+  effective_policy?: Record<string, unknown>;
 };
 
 export type BotDetail = {
@@ -569,28 +605,8 @@ export type BotDetail = {
     routing?: Record<string, unknown>;
     security?: Record<string, unknown>;
   };
-  status: {
-    bot_id: string;
-    type: string;
-    platform: string;
-    name: string;
-    enabled: boolean;
-    configured: boolean;
-    process_state: string;
-    ingress_state: string;
-    bot_state: string;
-    local_url?: string | null;
-    public_url?: string | null;
-    webhook_url?: string | null;
-    bot_path: string;
-    pid?: number | null;
-    started_at?: string | null;
-    last_heartbeat_at?: string | null;
-    last_event_at?: string | null;
-    last_message_at?: string | null;
-    last_reply_at?: string | null;
-    last_error?: string | null;
-  };
+  status: BotStatusDetail;
+  effective_status?: BotStatusDetail;
   webhook_url: string;
   paths: Record<string, string>;
   events: Array<Record<string, unknown>>;
@@ -628,8 +644,14 @@ export const api = {
   workspaces: () => request<WorkspacesState>("/api/workspaces"),
   bots: () => request<{ bots: BotSummary[] }>("/api/bots"),
   botDetail: (botId: string) => request<BotDetail>(`/api/bots/${encodeURIComponent(botId)}`),
+  botHealth: (botId: string) => request<{ effective_status: BotStatusDetail }>(`/api/bots/${encodeURIComponent(botId)}/health`),
+  botEvents: (botId: string, afterId?: string, limit = 100) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (afterId) query.set("after_id", afterId);
+    return request<{ events: Array<Record<string, unknown>> }>(`/api/bots/${encodeURIComponent(botId)}/events?${query.toString()}`);
+  },
   startBot: (botId: string) => request<BotDetail>(`/api/bots/${encodeURIComponent(botId)}/start`, { method: "POST" }),
-  stopBot: (botId: string) => request<BotDetail>(`/api/bots/${encodeURIComponent(botId)}/stop`, { method: "POST" }),
+  stopBot: (botId: string, force = false) => request<BotDetail>(`/api/bots/${encodeURIComponent(botId)}/stop${force ? "?force=true" : ""}`, { method: "POST" }),
   setBotPublicUrl: (botId: string, publicUrl: string) =>
     request<BotDetail>(`/api/bots/${encodeURIComponent(botId)}/public-url`, {
       method: "POST",

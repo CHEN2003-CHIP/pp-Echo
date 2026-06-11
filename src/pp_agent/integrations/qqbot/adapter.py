@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,10 +20,15 @@ from pp_agent.integrations.qqbot.session_store import QQSessionStore
 logger = logging.getLogger(__name__)
 APPROVAL_REPLY = "This action needs approval in the local pp-Echo Web UI."
 ERROR_REPLY_PREFIX = "pp-Echo failed while processing this QQ message"
+TIMEOUT_REPLY = "这次处理超时了，请稍后重试。你也可以在本地 Web UI 查看 trace。"
+QUEUE_FULL_REPLY = "当前会话正在处理上一条消息，请稍后再试。"
 TRUNCATION_SUFFIX = "\n\n...内容较长，已截断。Open pp-Echo Web UI for the full result."
 
 
 class QQBotAdapter:
+    _conversation_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+    _conversation_queued: dict[str, int] = defaultdict(int)
+
     def __init__(
         self,
         *,
@@ -81,6 +87,27 @@ class QQBotAdapter:
             )
             return
 
+        lock = self._conversation_locks[message.conversation_key]
+        if lock.locked() and self._conversation_queued[message.conversation_key] >= self.config.max_queue_per_conversation:
+            self._event(
+                "message_rejected",
+                "QQ message rejected because the conversation queue is full.",
+                level="warning",
+                message_id=message.message_id,
+                metadata={"reason": "queue_full", "conversation_id": redact_id(message.conversation_key)},
+            )
+            await self._send_reply(message, QUEUE_FULL_REPLY)
+            return
+        self._conversation_queued[message.conversation_key] += 1
+        try:
+            async with lock:
+                self._conversation_queued[message.conversation_key] = max(0, self._conversation_queued[message.conversation_key] - 1)
+                await self._handle_message(message, payload, prompt_text, source)
+        finally:
+            if not lock.locked() and self._conversation_queued[message.conversation_key] <= 0:
+                self._conversation_queued.pop(message.conversation_key, None)
+
+    async def _handle_message(self, message: QQIncomingMessage, payload: dict[str, Any], prompt_text: str, source: BotSource) -> None:
         normalized = NormalizedBotMessage(source=source, text=prompt_text, raw=payload)
         self._record_message(normalized)
         self._event(
@@ -122,7 +149,7 @@ class QQBotAdapter:
                 metadata={"source": source.model_dump(mode="json", exclude_none=True)},
             )
             try:
-                result = await self._run_agent(session_id, wrapped_prompt)
+                result = await asyncio.wait_for(self._run_agent(session_id, wrapped_prompt), timeout=self.config.run_timeout_seconds)
             except FileNotFoundError:
                 session_id = self.session_store.replace(
                     message.conversation_key,
@@ -130,19 +157,33 @@ class QQBotAdapter:
                     self._create_session_id(),
                 )
                 run_info["session_id"] = session_id
-                result = await self._run_agent(session_id, wrapped_prompt)
+                result = await asyncio.wait_for(self._run_agent(session_id, wrapped_prompt), timeout=self.config.run_timeout_seconds)
             needs_approval = approval_reply_if_needed(result) is not None
             reply = approval_reply_if_needed(result) or extract_reply_text(result)
             run_info.update({"status": "waiting_approval" if needs_approval else "completed", "finished_at": utc_now().isoformat()})
             self._record_run(run_info)
+            self._record_trace(run_info, message=message, status=run_info["status"], events=["message_received", "agent_run_started", "agent_run_completed"])
             if needs_approval:
                 self._event("approval_required", "Agent run is waiting for approval.", session_id=session_id, run_id=run_id, metadata={"source": source.model_dump(mode="json", exclude_none=True)})
             self._event("agent_run_completed", "Agent run completed.", session_id=session_id, run_id=run_id, metadata={"source": source.model_dump(mode="json", exclude_none=True)})
+        except asyncio.TimeoutError:
+            reply = TIMEOUT_REPLY
+            run_info.update({"status": "timed_out", "finished_at": utc_now().isoformat(), "error": {"type": "TimeoutError", "timeout_seconds": self.config.run_timeout_seconds}})
+            self._record_run(run_info)
+            self._record_trace(run_info, message=message, status="timed_out", error=run_info["error"], events=["message_received", "agent_run_started", "run_timed_out"])
+            self._event("run_timed_out", "QQ Agent run timed out.", level="error", session_id=session_id, run_id=run_id, message_id=message.message_id, metadata={"timeout_seconds": self.config.run_timeout_seconds, "source": source.model_dump(mode="json", exclude_none=True)})
+        except asyncio.CancelledError:
+            run_info.update({"status": "cancelled", "finished_at": utc_now().isoformat(), "error": {"type": "CancelledError"}})
+            self._record_run(run_info)
+            self._record_trace(run_info, message=message, status="cancelled", error=run_info["error"], events=["message_received", "agent_run_started", "run_cancelled"])
+            self._event("run_cancelled", "QQ Agent run was cancelled.", level="warning", session_id=session_id, run_id=run_id, message_id=message.message_id)
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("QQ adapter failed while processing event %s", redact_id(message.event_id))
             reply = f"{ERROR_REPLY_PREFIX}: {type(exc).__name__}. See local logs or TraceInspect."
             run_info.update({"status": "error", "finished_at": utc_now().isoformat(), "error": type(exc).__name__})
             self._record_run(run_info)
+            self._record_trace(run_info, message=message, status="failed", error={"type": type(exc).__name__}, events=["message_received", "agent_run_started", "error"])
             self._event("error", f"QQ adapter failed: {type(exc).__name__}", level="error", session_id=session_id, run_id=run_id, metadata={"source": source.model_dump(mode="json", exclude_none=True)})
 
         try:
@@ -244,6 +285,39 @@ class QQBotAdapter:
     def _record_run(self, run_info: dict[str, Any]) -> None:
         if self.bot_manager is not None:
             self.bot_manager.record_run(self.bot_id, run_info)
+
+    def _record_trace(
+        self,
+        run_info: dict[str, Any],
+        *,
+        message: QQIncomingMessage,
+        status: str,
+        events: list[str],
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        if self.bot_manager is None:
+            return
+        trace_id = run_info.get("trace_id") or f"trace_{uuid4().hex}"
+        run_info["trace_id"] = trace_id
+        self.bot_manager.record_trace(
+            self.bot_id,
+            {
+                "trace_id": trace_id,
+                "run_id": run_info.get("run_id"),
+                "bot_id": self.bot_id,
+                "channel": "qq",
+                "conversation_id": message.conversation_key,
+                "session_id": run_info.get("session_id"),
+                "message_id": message.message_id,
+                "started_at": run_info.get("started_at"),
+                "finished_at": run_info.get("finished_at"),
+                "status": status,
+                "events": [{"type": item} for item in events],
+                "tool_calls": [],
+                "approval": None,
+                "error": error,
+            },
+        )
 
 
 def is_group_triggered(text: str, trigger: str) -> bool:

@@ -32,6 +32,18 @@ export function BotCenterPage() {
     loadDetail(selectedId).catch((error) => setNotice(errorMessage(error)));
   }, [selectedId]);
 
+  useEffect(() => {
+    if (!selectedId || !detail) return;
+    const lastEventId = String(detail.events.length ? detail.events[detail.events.length - 1]?.event_id || "" : "");
+    const timer = window.setInterval(() => {
+      api.botEvents(selectedId, lastEventId).then((payload) => {
+        if (!payload.events.length) return;
+        setDetail((current) => current ? { ...current, events: [...current.events, ...payload.events] } : current);
+      }).catch((error) => setNotice(errorMessage(error)));
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [selectedId, detail?.events]);
+
   const selectedBot = useMemo(() => bots.find((item) => item.id === selectedId), [bots, selectedId]);
 
   async function refresh() {
@@ -174,10 +186,16 @@ export function BotCenterPage() {
                 <span className="bot-chip">{bot.type}</span>
               </div>
               <p>{bot.status_text}</p>
+              <div className="bot-mini-status">
+                <span>{bot.desired_state || (bot.enabled ? "enabled" : "disabled")}</span>
+                <span>Agent: {bot.agent_state || bot.bot_state}</span>
+                <span>Ingress: {bot.ingress_state}</span>
+                <span>QQ: {bot.qq_state || (bot.configured ? "configured" : "not_configured")}</span>
+              </div>
             </div>
             <div className="bot-card-state">
               <span className={`bot-dot ${stateTone(bot)}`} />
-              <strong>{bot.process_state}</strong>
+              <strong>{bot.agent_state || bot.bot_state}</strong>
             </div>
             <div className="bot-card-actions" onClick={(event) => event.stopPropagation()}>
               <button onClick={() => action(bot.id, "start")} disabled={busy === `start:${bot.id}`}>
@@ -203,8 +221,11 @@ function Overview({ detail }: { detail: BotDetail }) {
       <Info label="Platform" value={s.platform} />
       <Info label="Type" value={s.type} />
       <Info label="Process State" value={s.process_state} />
+      <Info label="Desired State" value={s.desired_state || (s.enabled ? "enabled" : "disabled")} />
+      <Info label="Agent State" value={s.agent_state || s.bot_state} />
       <Info label="Bot State" value={s.bot_state} />
       <Info label="Ingress State" value={s.ingress_state} />
+      <Info label="QQ State" value={s.qq_state || (s.configured ? "configured" : "not_configured")} />
       <Info label="Local URL" value={s.local_url || ""} />
       <Info label="Public URL" value={s.public_url || ""} />
       <Info label="Webhook URL" value={s.webhook_url || detail.webhook_url || ""} />
@@ -213,6 +234,9 @@ function Overview({ detail }: { detail: BotDetail }) {
       <Info label="Last Heartbeat" value={s.last_heartbeat_at || ""} />
       <Info label="Last Message" value={s.last_message_at || ""} />
       <Info label="Last Reply" value={s.last_reply_at || ""} />
+      <Info label="Last Run" value={s.last_run_at || ""} />
+      <Info label="In-flight Runs" value={String(s.still_running_count || 0)} />
+      <Info label="Queued" value={String(s.queued_count || 0)} />
       <Info label="Last Error" value={s.last_error || ""} />
       <Info label="Bot Path" value={s.bot_path} wide />
     </div>
