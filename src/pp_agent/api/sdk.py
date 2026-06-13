@@ -5,7 +5,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Optional
 
-from pp_agent.runtime.control_plane import build_runtime_doctor_report
+from pp_agent.runtime.control_plane import apply_runtime_maintenance, build_runtime_doctor_report
 from pp_agent.runtime import AgentEvent, AgentRuntime, SessionHost
 
 Subscriber = Callable[[AgentEvent], None]
@@ -264,6 +264,22 @@ def runtime_doctor_report(
         session_store=bootstrap.session_store_for(workspace),
         pending_store=bootstrap.pending_action_store_for(workspace),
         session_id=session_id,
+    )
+
+
+def runtime_maintenance(
+    workspace: Path,
+    *,
+    session_id: Optional[str] = None,
+    apply: bool = False,
+) -> dict:
+    bootstrap = import_module("pp_agent.app.bootstrap")
+    return apply_runtime_maintenance(
+        workspace,
+        session_store=bootstrap.session_store_for(workspace),
+        pending_store=bootstrap.pending_action_store_for(workspace),
+        session_id=session_id,
+        apply=apply,
     )
 
 

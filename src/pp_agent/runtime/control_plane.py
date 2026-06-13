@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import shutil
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -183,6 +186,15 @@ def build_runtime_doctor_report(
                     }
                 )
 
+    remediation = build_runtime_maintenance_preview(
+        workspace,
+        session_store=session_store,
+        pending_store=pending_store,
+        session_id=session_id,
+    )
+    storage_status = build_storage_health_summary(workspace, session_store=session_store)
+    retention_status = build_retention_summary(workspace, session_store=session_store, pending_store=pending_store)
+
     session_summaries: list[dict[str, Any]] = []
     for entry in sessions:
         if session_id is not None and entry.id != session_id:
@@ -221,11 +233,256 @@ def build_runtime_doctor_report(
         "sessions": session_summaries,
         "pending_artifacts": patch_artifacts,
         "findings": findings,
+        "remediation": remediation,
+        "storage": storage_status,
+        "retention": retention_status,
+        "trace_store": retention_status["traces"],
+    }
+
+
+def build_storage_health_summary(
+    workspace: Path,
+    *,
+    session_store: SessionStore,
+) -> dict[str, Any]:
+    session_files = sorted(session_store.root.glob("*.jsonl"))
+    corrupted: list[dict[str, Any]] = []
+    missing_snapshot: list[str] = []
+    for path in session_files:
+        has_snapshot = False
+        try:
+            for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    item = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    corrupted.append({"path": str(path), "line": line_number, "error": str(exc)})
+                    continue
+                if item.get("type") == "session_snapshot":
+                    has_snapshot = True
+        except OSError as exc:
+            corrupted.append({"path": str(path), "line": None, "error": str(exc)})
+            continue
+        if not has_snapshot:
+            missing_snapshot.append(str(path))
+    return {
+        "workspace": str(workspace.resolve()),
+        "session_store": str(session_store.root),
+        "session_file_count": len(session_files),
+        "corrupted_jsonl_count": len(corrupted),
+        "missing_snapshot_count": len(missing_snapshot),
+        "corrupted_jsonl": corrupted[:20],
+        "missing_snapshot_files": missing_snapshot[:20],
+        "status": "ok" if not corrupted and not missing_snapshot else "warning",
+    }
+
+
+def build_retention_summary(
+    workspace: Path,
+    *,
+    session_store: SessionStore,
+    pending_store: PendingActionStore,
+) -> dict[str, Any]:
+    agent_dir = workspace.resolve() / ".pp-agent"
+    artifacts = _combined_directory_summary(
+        "artifacts",
+        [agent_dir / "artifacts", agent_dir / "patch-artifacts"],
+    )
+    return {
+        "sessions": _directory_summary("sessions", session_store.root),
+        "traces": _directory_summary("traces", agent_dir / "traces"),
+        "pending_actions": _directory_summary("pending_actions", pending_store.root),
+        "artifacts": artifacts,
+    }
+
+
+def build_runtime_maintenance_preview(
+    workspace: Path,
+    *,
+    session_store: SessionStore,
+    pending_store: PendingActionStore,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    workspace = workspace.resolve()
+    sessions = session_store.tree()
+    session_ids = {entry.id for entry in sessions}
+    actions: list[dict[str, Any]] = []
+
+    for item in pending_store.list():
+        token = str(item.get("token") or "").strip()
+        action_type = str(item.get("action_type") or "").strip()
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        item_session_id = str(item.get("session_id") or details.get("session_id") or "").strip()
+        if session_id is not None and item_session_id and item_session_id != session_id:
+            continue
+        lifecycle_state = str((item.get("lifecycle") or {}).get("state") or "").strip()
+
+        if action_type in {"planner_approval", "apply_patch_artifact"} and item_session_id and item_session_id not in session_ids:
+            actions.append(
+                _maintenance_action(
+                    "remove_pending_action",
+                    token=token,
+                    reason="orphaned_pending_token",
+                    safe=True,
+                    explanation="Pending action references a session that no longer exists.",
+                )
+            )
+            continue
+
+        if action_type == "apply_patch_artifact":
+            target_path = str(item.get("target_path") or "").strip()
+            if not item_session_id:
+                actions.append(
+                    _maintenance_action(
+                        "remove_pending_action",
+                        token=token,
+                        reason="missing_session_id",
+                        safe=True,
+                        explanation="Patch artifact approval is not tied to a session.",
+                    )
+                )
+                continue
+            if target_path and not Path(target_path).exists():
+                actions.append(
+                    _maintenance_action(
+                        "remove_pending_action",
+                        token=token,
+                        reason="missing_artifact_file",
+                        safe=True,
+                        explanation="Patch artifact approval points at a file that no longer exists.",
+                        affected_paths=[target_path],
+                    )
+                )
+                continue
+            if lifecycle_state in {"expired", "quarantined"}:
+                actions.append(
+                    _maintenance_action(
+                        "remove_pending_action",
+                        token=token,
+                        reason=lifecycle_state,
+                        safe=True,
+                        explanation=f"Patch artifact approval is already {lifecycle_state}.",
+                        affected_paths=[target_path] if target_path else [],
+                    )
+                )
+
+    return {
+        "workspace": str(workspace),
+        "mode": "preview",
+        "action_count": len(actions),
+        "safe_action_count": len([action for action in actions if action.get("safe_to_apply")]),
+        "actions": actions,
+    }
+
+
+def apply_runtime_maintenance(
+    workspace: Path,
+    *,
+    session_store: SessionStore,
+    pending_store: PendingActionStore,
+    session_id: str | None = None,
+    apply: bool = False,
+) -> dict[str, Any]:
+    preview = build_runtime_maintenance_preview(
+        workspace,
+        session_store=session_store,
+        pending_store=pending_store,
+        session_id=session_id,
+    )
+    if not apply:
+        return {**preview, "mode": "dry-run", "applied_count": 0, "applied": []}
+
+    applied: list[dict[str, Any]] = []
+    backup_root = pending_store.root / "maintenance-backups" / str(int(time.time()))
+    for action in preview["actions"]:
+        if action.get("operation") != "remove_pending_action" or not action.get("safe_to_apply"):
+            continue
+        token = str(action.get("token") or "").strip()
+        source = pending_store.root / f"{token}.json"
+        if not source.exists():
+            applied.append({**action, "status": "skipped", "detail": "token file no longer exists"})
+            continue
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_root / source.name
+        shutil.copy2(source, backup_path)
+        pending_store.remove(token)
+        applied.append({**action, "status": "applied", "backup_path": str(backup_path)})
+
+    return {
+        **preview,
+        "mode": "apply",
+        "applied_count": len([item for item in applied if item.get("status") == "applied"]),
+        "applied": applied,
+    }
+
+
+def _maintenance_action(
+    operation: str,
+    *,
+    token: str,
+    reason: str,
+    safe: bool,
+    explanation: str,
+    affected_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "operation": operation,
+        "token": token,
+        "reason": reason,
+        "safe_to_apply": bool(safe),
+        "explanation": explanation,
+        "affected_paths": affected_paths or [],
+    }
+
+
+def _directory_summary(label: str, root: Path) -> dict[str, Any]:
+    root = root.resolve()
+    files: list[Path] = []
+    total_size = 0
+    latest_mtime: float | None = None
+    if root.exists():
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append(path)
+            total_size += int(stat.st_size)
+            latest_mtime = max(latest_mtime or 0.0, float(stat.st_mtime))
+    return {
+        "label": label,
+        "path": str(root),
+        "exists": root.exists(),
+        "file_count": len(files),
+        "size_bytes": total_size,
+        "latest_mtime": latest_mtime,
+    }
+
+
+def _combined_directory_summary(label: str, roots: list[Path]) -> dict[str, Any]:
+    summaries = [_directory_summary(root.name, root) for root in roots]
+    latest_values = [item["latest_mtime"] for item in summaries if item.get("latest_mtime") is not None]
+    return {
+        "label": label,
+        "paths": [item["path"] for item in summaries],
+        "exists": any(item["exists"] for item in summaries),
+        "file_count": sum(int(item["file_count"]) for item in summaries),
+        "size_bytes": sum(int(item["size_bytes"]) for item in summaries),
+        "latest_mtime": max(latest_values) if latest_values else None,
+        "directories": summaries,
     }
 
 
 __all__ = [
+    "apply_runtime_maintenance",
     "build_runtime_doctor_report",
+    "build_runtime_maintenance_preview",
+    "build_retention_summary",
+    "build_storage_health_summary",
     "list_pending_patch_artifacts",
     "summarize_runtime_control",
 ]

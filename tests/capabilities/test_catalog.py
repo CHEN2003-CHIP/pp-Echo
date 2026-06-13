@@ -126,10 +126,11 @@ def test_capability_catalog_list_and_get_are_stable(tmp_path: Path, monkeypatch:
         "grep_code",
         "git_status",
         "git_diff_worktree",
-        "preview_safe_rewind",
-        "execute_safe_rewind",
-        "run_shell",
+        "list_attachments",
+        "inspect_attachment",
+        "search_attachment",
     ]
+    assert builtin_names[20:23] == ["preview_safe_rewind", "execute_safe_rewind", "run_shell"]
     assert "memory_search" in builtin_names
     assert "memory_get" in builtin_names
     assert catalog.get("builtin_tool", "run_shell").source == "builtin:run_shell"

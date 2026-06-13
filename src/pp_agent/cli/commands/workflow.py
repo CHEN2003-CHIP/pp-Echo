@@ -67,7 +67,34 @@ def workflow_doctor_main(
     *,
     session_id: Optional[str] = None,
     json_mode: bool = False,
+    fix: bool = False,
+    dry_run: bool = True,
+    apply: bool = False,
 ) -> None:
+    if fix:
+        payload = sdk.runtime_maintenance(workspace, session_id=session_id, apply=apply)
+        if json_mode:
+            console.print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+        lines = [
+            "== Runtime Maintenance ==",
+            f"workspace  {payload['workspace']}",
+            f"mode       {payload['mode']}",
+            f"actions    {payload['action_count']}",
+            f"safe       {payload['safe_action_count']}",
+            f"applied    {payload.get('applied_count', 0)}",
+        ]
+        for action in payload.get("actions", [])[:10]:
+            lines.append(
+                f"- {action.get('operation')} token={str(action.get('token') or '')[:8]} "
+                f"reason={action.get('reason')} safe={action.get('safe_to_apply')}"
+            )
+        if dry_run and not apply:
+            lines.append("")
+            lines.append("Dry-run only. Re-run with --fix --apply to modify pending action state.")
+        console.print("\n".join(lines))
+        return
+
     report = sdk.runtime_doctor_report(workspace, session_id=session_id)
     if json_mode:
         console.print(json.dumps(report, ensure_ascii=False, indent=2))

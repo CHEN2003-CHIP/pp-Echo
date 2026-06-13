@@ -253,11 +253,14 @@ if app:
     def workflow_doctor(
         session_id: Optional[str] = typer.Option(None, "--session"),
         json_mode: bool = typer.Option(False, "--json"),
+        fix: bool = typer.Option(False, "--fix"),
+        dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run"),
+        apply: bool = typer.Option(False, "--apply"),
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
     ) -> None:
         from pp_agent.cli.commands.workflow import workflow_doctor_main
 
-        workflow_doctor_main(workspace, session_id=session_id, json_mode=json_mode)
+        workflow_doctor_main(workspace, session_id=session_id, json_mode=json_mode, fix=fix, dry_run=dry_run, apply=apply)
 
 
     @config_app.command("show")
@@ -589,6 +592,9 @@ def main() -> None:
     workflow_doctor_parser = workflow_subparsers.add_parser("doctor")
     workflow_doctor_parser.add_argument("--session", default=None)
     workflow_doctor_parser.add_argument("--json", action="store_true")
+    workflow_doctor_parser.add_argument("--fix", action="store_true")
+    workflow_doctor_parser.add_argument("--dry-run", action="store_true", default=True)
+    workflow_doctor_parser.add_argument("--apply", action="store_true")
     workflow_doctor_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     config_parser = subparsers.add_parser("config")
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
@@ -778,6 +784,9 @@ def main() -> None:
             Path(args.workspace),
             session_id=args.session,
             json_mode=args.json,
+            fix=args.fix,
+            dry_run=args.dry_run,
+            apply=args.apply,
         )
     elif command == "config" and args.config_command == "show":
         from pp_agent.cli.commands.config import config_show_main

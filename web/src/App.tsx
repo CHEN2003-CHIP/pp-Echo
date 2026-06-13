@@ -73,8 +73,24 @@ type TranscriptItem = {
     title: string;
     summary: string;
     detail: string;
+    durationLabel?: string;
+    entries?: ActivityEntry[];
+    startedAt?: number;
+    endedAt?: number;
+    running?: boolean;
     tone?: "running" | "success" | "warning" | "error";
   };
+};
+
+type ActivityEntry = {
+  id: string;
+  kind: "tool" | "command" | "planner" | "subagent" | "checkpoint" | "approval" | "event";
+  label: string;
+  detail: string;
+  timestamp?: number;
+  durationLabel?: string;
+  tone?: "running" | "success" | "warning" | "error";
+  attachments?: RichAttachment[];
 };
 
 type TurnMarker = {
@@ -1910,15 +1926,36 @@ function AttachmentStrip({
 function ToolActivityBlock({ item }: { item: TranscriptItem }) {
   const activity = item.activity;
   if (!activity) return null;
+  const entries = activity.entries || [];
+  const commandCount = entries.filter((entry) => entry.kind === "command").length;
   return (
     <details className={`tool-activity ${activity.tone || "success"}`}>
       <summary>
         <span className="tool-activity-status">{activity.title}</span>
-        <span>{activity.summary}</span>
         <ChevronRight size={14} />
       </summary>
-      <pre>{activity.detail}</pre>
-      <RichMessageAttachments attachments={item.body.attachments} />
+      <div className="tool-activity-detail">
+        {activity.summary ? <p className="tool-activity-summary">{activity.summary}</p> : null}
+        {commandCount > 0 ? <p className="tool-activity-command-count">已运行 {commandCount} 条命令</p> : null}
+        {entries.length > 0 ? (
+          <ol className="tool-activity-steps">
+            {entries.map((entry) => (
+              <li className={`tool-activity-step ${entry.tone || "success"}`} key={entry.id}>
+                <div className="tool-activity-step-head">
+                  <span>{entry.label}</span>
+                  {entry.durationLabel ? <small>{entry.durationLabel}</small> : null}
+                  {entry.tone === "running" ? <small>运行中</small> : null}
+                </div>
+                {entry.detail ? <pre>{entry.detail}</pre> : null}
+                {entry.attachments?.length ? <RichMessageAttachments attachments={entry.attachments} /> : null}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <pre>{activity.detail}</pre>
+        )}
+      </div>
+      {entries.length === 0 ? <RichMessageAttachments attachments={item.body.attachments} /> : null}
     </details>
   );
 }
@@ -3031,10 +3068,22 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     .filter(Boolean);
 
   const runtime: TranscriptItem[] = [];
-  const activitySignatures = new Set<string>();
+  const activityGroups: RuntimeEvent[][] = [];
+  let activeActivityGroup: RuntimeEvent[] = [];
   let streamBuffer = "";
   let streamIndex = 0;
   let streamTimestamp = 0;
+
+  const flushActivityGroup = () => {
+    const group = activeActivityGroup;
+    activeActivityGroup = [];
+    if (group.some(isActivityEvent)) activityGroups.push(group);
+  };
+
+  const appendActivityEvent = (event: RuntimeEvent) => {
+    if (activeActivityGroup.length === 0) activeActivityGroup.push(event);
+    else activeActivityGroup.push(event);
+  };
 
   const flushStream = () => {
     const text = streamBuffer.trim();
@@ -3056,52 +3105,60 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     }
     if (event.type === "local_user_prompt") {
       flushStream();
+      flushActivityGroup();
+      activeActivityGroup.push(event);
       const text = (event.message || "").trim();
       if (text && !committedUsers.has(normalizeText(text))) {
         runtime.push({ id: `local-user:${runtime.length}`, role: "user", body: { text, attachments: [] }, timestamp: event.timestamp });
       }
       continue;
     }
-    if (event.type === "approval_result") {
+    if (event.type === "turn_start" || event.type === "agent_start") {
       flushStream();
-      const text = (event.message || "").trim() || formatApprovalEvent(event);
-      runtime.push({
-        id: `approval:${runtime.length}`,
-        role: "assistant",
-        body: { text, attachments: [] },
-        timestamp: event.timestamp
-      });
+      flushActivityGroup();
+      activeActivityGroup.push(event);
       continue;
     }
-    if (event.type === "turn_end" || event.type === "agent_end" || event.type === "agent_start") {
+    if (event.type === "approval_result") {
       flushStream();
+      appendActivityEvent(event);
+      continue;
+    }
+    if (event.type === "turn_end" || event.type === "agent_end") {
+      flushStream();
+      appendActivityEvent(event);
+      flushActivityGroup();
       continue;
     }
     if (event.is_error && event.message) {
       flushStream();
-      runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: formatErrorEvent(event), attachments: [] }, timestamp: event.timestamp });
+      if (isActivityEvent(event)) {
+        appendActivityEvent(event);
+      } else {
+        runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: formatErrorEvent(event), attachments: [] }, timestamp: event.timestamp });
+      }
       continue;
     }
-    if (event.type.includes("tool")) {
+    if (isActivityEvent(event)) {
       flushStream();
-      if (event.type === "tool_end" || event.type === "tool_result") {
-        const activity = formatToolActivity(event);
-        const signature = normalizeText(`${activity.title} ${activity.summary} ${activity.detail}`);
-        if (activitySignatures.has(signature)) continue;
-        activitySignatures.add(signature);
-        runtime.push({
-          id: `activity-tool:${runtime.length}`,
-          role: "activity",
-          body: { text: activity.detail, attachments: toolResultAttachments(event.details || {}) },
-          timestamp: event.timestamp,
-          activity
-        });
-      }
+      appendActivityEvent(event);
       continue;
     }
   }
 
   flushStream();
+  flushActivityGroup();
+  activityGroups.forEach((group, index) => {
+    const activity = formatActivityGroup(group, index);
+    if (!activity) return;
+    runtime.push({
+      id: `activity-turn:${index}:${activity.startedAt || activity.endedAt || runtime.length}`,
+      role: "activity",
+      body: { text: activity.detail, attachments: activity.entries?.flatMap((entry) => entry.attachments || []) || [] },
+      timestamp: activity.endedAt || activity.startedAt,
+      activity
+    });
+  });
   const items = [...stored, ...runtime].sort((left, right) => {
     const leftTime = left.timestamp || 0;
     const rightTime = right.timestamp || 0;
@@ -3213,6 +3270,253 @@ function formatErrorEvent(event: RuntimeEvent) {
   return lines.join("\n");
 }
 
+function isActivityEvent(event: RuntimeEvent) {
+  return (
+    event.type.includes("tool") ||
+    event.type.includes("planner") ||
+    event.type.includes("checkpoint") ||
+    event.type.includes("subagent") ||
+    event.type === "approval_result" ||
+    event.type === "cancel_requested"
+  );
+}
+
+function formatActivityGroup(events: RuntimeEvent[], index: number): NonNullable<TranscriptItem["activity"]> | null {
+  const activityEvents = events.filter(isActivityEvent);
+  if (activityEvents.length === 0) return null;
+  const startedAt = firstTimestamp(events) ?? firstTimestamp(activityEvents);
+  const endedAt = latestTerminalTimestamp(events) ?? lastTimestamp(activityEvents);
+  const hasError = activityEvents.some((event) => event.type === "tool_error" || event.is_error);
+  const entries = buildActivityEntries(activityEvents);
+  if (entries.length === 0) return null;
+  const hasTerminal = events.some((event) => event.type === "turn_end" || event.type === "agent_end");
+  const running = !hasError && !hasTerminal && entries.some((entry) => entry.tone === "running");
+  const effectiveEnd = running ? Math.max(Date.now() / 1000, startedAt || lastTimestamp(activityEvents) || 0) : endedAt;
+  const durationLabel = startedAt && effectiveEnd ? formatDuration(Math.max(0, (effectiveEnd - startedAt) * 1000)) : "";
+  const commandCount = entries.filter((entry) => entry.kind === "command").length;
+  const toolCount = entries.filter((entry) => entry.kind === "tool").length;
+  const title = `${hasError ? "处理失败" : running ? "处理中" : "已处理"}${durationLabel ? ` ${durationLabel}` : ""}`;
+  const summaryParts = [
+    commandCount ? `已运行 ${commandCount} 条命令` : "",
+    toolCount ? `已调用 ${toolCount} 个工具` : "",
+    entries.length && !commandCount && !toolCount ? `${entries.length} 个步骤` : ""
+  ].filter(Boolean);
+  const detail = entries.map((entry) => activityEntryDetail(entry)).filter(Boolean).join("\n\n");
+  return {
+    title,
+    summary: summaryParts.join(" · ") || `已处理 ${entries.length} 个步骤`,
+    detail,
+    durationLabel,
+    entries,
+    startedAt,
+    endedAt: running ? undefined : endedAt,
+    running,
+    tone: hasError ? "error" : running ? "running" : "success"
+  };
+}
+
+function buildActivityEntries(events: RuntimeEvent[]): ActivityEntry[] {
+  const entries: ActivityEntry[] = [];
+  const toolStarts = new Map<string, RuntimeEvent>();
+  const seenToolEnds = new Set<string>();
+  const plannerSummary = groupPlannerDetailLines(events);
+
+  events.forEach((event, index) => {
+    if (event.type === "tool_start") {
+      const key = toolEventKey(event) || `tool:${event.tool_name || "tool"}:${event.timestamp || index}`;
+      toolStarts.set(key, event);
+      return;
+    }
+    if (event.type === "tool_end" || event.type === "tool_result" || event.type === "tool_error") {
+      const key = toolEventKey(event) || `tool:${event.tool_name || "tool"}:${event.timestamp || index}`;
+      const start = toolStarts.get(key);
+      seenToolEnds.add(key);
+      entries.push(formatToolEntry(event, start, key));
+      return;
+    }
+    if (event.type === "approval_result") {
+      entries.push({
+        id: `approval:${event.timestamp || index}`,
+        kind: "approval",
+        label: "审批结果",
+        detail: formatApprovalEvent(event),
+        timestamp: event.timestamp,
+        tone: event.is_error ? "error" : "success"
+      });
+      return;
+    }
+    if (event.type.includes("planner")) {
+      entries.push(formatPlannerEntry(event, index, plannerSummary));
+      return;
+    }
+    if (event.type.includes("subagent")) {
+      entries.push(formatRuntimeEntry(event, "subagent", index));
+      return;
+    }
+    if (event.type.includes("checkpoint")) {
+      entries.push(formatRuntimeEntry(event, "checkpoint", index));
+      return;
+    }
+    if (event.type === "cancel_requested") {
+      entries.push(formatRuntimeEntry(event, "event", index));
+    }
+  });
+
+  toolStarts.forEach((event, key) => {
+    if (seenToolEnds.has(key)) return;
+    entries.push(formatRunningToolEntry(event, key));
+  });
+
+  return entries.sort((left, right) => (left.timestamp || 0) - (right.timestamp || 0));
+}
+
+function formatToolEntry(event: RuntimeEvent, start: RuntimeEvent | undefined, key: string): ActivityEntry {
+  const details = event.details || {};
+  const startDetails = start?.details || {};
+  const toolName = event.tool_name || start?.tool_name || "tool";
+  const command = details.command ?? startDetails.command;
+  const path = details.path ?? startDetails.path;
+  const returncode = details.returncode;
+  const isCommand = toolName === "run_shell" || typeof command === "string";
+  const durationLabel = start?.timestamp && event.timestamp ? formatDuration(Math.max(0, (event.timestamp - start.timestamp) * 1000)) : "";
+  const bits: string[] = [];
+  if (typeof command === "string" && command.trim()) bits.push(`Command: ${command.trim()}`);
+  if (typeof path === "string" && path.trim()) bits.push(`Path: ${path.trim()}`);
+  if (typeof returncode === "number") bits.push(`Exit: ${returncode}`);
+  if (event.message && event.message.trim()) bits.push(truncateMultiline(event.message.trim(), 1200));
+  return {
+    id: `tool:${key}:${event.timestamp || ""}`,
+    kind: isCommand ? "command" : "tool",
+    label: toolName,
+    detail: bits.join("\n") || formatToolEvent(event),
+    timestamp: start?.timestamp || event.timestamp,
+    durationLabel,
+    tone: event.type === "tool_error" || event.is_error ? "error" : "success",
+    attachments: toolResultAttachments(details)
+  };
+}
+
+function formatRunningToolEntry(event: RuntimeEvent, key: string): ActivityEntry {
+  const details = event.details || {};
+  const toolName = event.tool_name || "tool";
+  const command = details.command;
+  const path = details.path;
+  const bits = ["运行中"];
+  if (typeof command === "string" && command.trim()) bits.push(`Command: ${command.trim()}`);
+  if (typeof path === "string" && path.trim()) bits.push(`Path: ${path.trim()}`);
+  return {
+    id: `tool:${key}:running`,
+    kind: toolName === "run_shell" || typeof command === "string" ? "command" : "tool",
+    label: toolName,
+    detail: bits.join("\n"),
+    timestamp: event.timestamp,
+    tone: "running"
+  };
+}
+
+function groupPlannerDetailLines(events: RuntimeEvent[]) {
+  const plannerEnd = [...events].reverse().find((event) => event.type === "planner_end");
+  const plannerSteps = events.filter((event) => event.type === "planner_step" && event.plan_step);
+  const details = plannerEnd?.details || {};
+  const lines: string[] = [];
+  const planSteps = Array.isArray(details.plan_steps) ? details.plan_steps : plannerSteps.map((event) => event.plan_step);
+  const summary = stringList(details.summary);
+  const files = stringList(details.files_touched_guess);
+  const shell = stringList(details.shell_commands_guess);
+  const tools = stringList(details.tools);
+  const highRisk = stringList(details.high_risk_tools);
+  const stepCount = typeof details.step_count === "number" ? details.step_count : typeof details.count === "number" ? details.count : planSteps.length || summary.length;
+  if (stepCount) lines.push(`计划包含 ${stepCount} 个步骤。`);
+  summary.slice(0, 4).forEach((item) => lines.push(`- ${item}`));
+  if (files.length > 0) lines.push(`预计处理文件：${files.slice(0, 5).join(", ")}`);
+  if (shell.length > 0) lines.push(`准备运行命令：${shell.slice(0, 3).join(" | ")}`);
+  if (tools.length > 0) lines.push(`准备调用工具：${tools.slice(0, 5).join(", ")}`);
+  if (highRisk.length > 0) lines.push(`需要确认：${highRisk.slice(0, 5).join(", ")}`);
+  return lines;
+}
+
+function plannerStatusLabel(status: string) {
+  if (status === "in_progress") return "进行中";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "pending") return "等待中";
+  return status;
+}
+
+function formatPlannerEntry(event: RuntimeEvent, index: number, plannerSummary: string[]): ActivityEntry {
+  if (event.type === "planner_start") {
+    return {
+      id: `planner:${event.timestamp || index}:start`,
+      kind: "planner",
+      label: "planner_start",
+      detail: plannerSummary.length > 0 ? `正在整理执行计划：\n${plannerSummary.join("\n")}` : "正在确认下一步要调用的工具和执行顺序。",
+      timestamp: event.timestamp,
+      tone: "running"
+    };
+  }
+  if (event.type === "planner_step" && event.plan_step) {
+    const lines = [`步骤：${event.plan_step.title}`];
+    if (event.plan_step.tool_name) lines.push(`工具：${event.plan_step.tool_name}`);
+    if (event.plan_step.status) lines.push(`状态：${plannerStatusLabel(event.plan_step.status)}`);
+    return {
+      id: `planner:${event.timestamp || index}:step:${event.plan_step.title}`,
+      kind: "planner",
+      label: event.plan_step.title,
+      detail: lines.join("\n"),
+      timestamp: event.timestamp,
+      tone: event.plan_step.status === "failed" ? "error" : event.plan_step.status === "in_progress" ? "running" : "success"
+    };
+  }
+  if (event.type === "planner_end") {
+    return {
+      id: `planner:${event.timestamp || index}:end`,
+      kind: "planner",
+      label: "planner_end",
+      detail: plannerSummary.length > 0 ? plannerSummary.join("\n") : "执行计划已整理完成，准备进入工具调用。",
+      timestamp: event.timestamp,
+      tone: event.details?.requires_approval ? "warning" : "success"
+    };
+  }
+  return formatRuntimeEntry(event, "planner", index);
+}
+
+function formatRuntimeEntry(event: RuntimeEvent, kind: ActivityEntry["kind"], index: number): ActivityEntry {
+  const label = event.plan_step?.title || event.tool_name || eventLabel(event);
+  const detail = event.message || summarizeEvent(event) || event.type;
+  return {
+    id: `${kind}:${event.timestamp || index}:${label}`,
+    kind,
+    label,
+    detail,
+    timestamp: event.timestamp,
+    tone: event.is_error ? "error" : event.type.includes("start") || event.type.includes("progress") ? "running" : "success"
+  };
+}
+
+function activityEntryDetail(entry: ActivityEntry) {
+  const meta = [entry.durationLabel, entry.tone === "running" ? "运行中" : ""].filter(Boolean).join(" · ");
+  return `${entry.label}${meta ? ` (${meta})` : ""}\n${entry.detail}`.trim();
+}
+
+function firstTimestamp(events: RuntimeEvent[]) {
+  return events.find((event) => typeof event.timestamp === "number")?.timestamp;
+}
+
+function lastTimestamp(events: RuntimeEvent[]) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (typeof events[index].timestamp === "number") return events[index].timestamp;
+  }
+  return undefined;
+}
+
+function latestTerminalTimestamp(events: RuntimeEvent[]) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if ((event.type === "turn_end" || event.type === "agent_end") && typeof event.timestamp === "number") return event.timestamp;
+  }
+  return undefined;
+}
+
 function formatToolEvent(event: RuntimeEvent) {
   const details = event.details || {};
   const toolName = event.tool_name || "工具";
@@ -3233,27 +3537,6 @@ function formatToolEvent(event: RuntimeEvent) {
     lines.push(output);
   }
   return lines.join("\n").trim();
-}
-
-function formatToolActivity(event: RuntimeEvent): NonNullable<TranscriptItem["activity"]> {
-  const details = event.details || {};
-  const toolName = event.tool_name || "工具";
-  const status = toolActivityStatus(details, event.is_error);
-  const pieces: string[] = [toolName];
-  const command = details.command;
-  const path = details.path;
-  const token = details.token || details.approval_token;
-  const returncode = details.returncode;
-  if (typeof command === "string" && command.trim()) pieces.push(truncate(command, 64));
-  else if (typeof path === "string" && path.trim()) pieces.push(truncate(path, 64));
-  if (typeof returncode === "number") pieces.push(`exit ${returncode}`);
-  if (typeof token === "string" && token.trim()) pieces.push(`token ${String(token).slice(0, 8)}`);
-  return {
-    title: status.label,
-    summary: pieces.join(" - "),
-    detail: formatToolEvent(event),
-    tone: status.tone,
-  };
 }
 
 function toolResultAttachments(details: Record<string, unknown>): RichAttachment[] {
@@ -3301,14 +3584,6 @@ function firstStringValue(...values: unknown[]) {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return undefined;
-}
-
-function toolActivityStatus(details: Record<string, unknown>, isError?: boolean): { label: string; tone: NonNullable<TranscriptItem["activity"]>["tone"] } {
-  if (isError) return { label: "执行失败", tone: "error" };
-  if (details.approval_unavailable === true) return { label: "已阻止", tone: "warning" };
-  if (details.staged === true) return { label: "等待确认", tone: "warning" };
-  if (details.persisted === true) return { label: "已完成", tone: "success" };
-  return { label: "已处理", tone: "success" };
 }
 
 function formatApprovalEvent(event: RuntimeEvent) {
@@ -3502,6 +3777,11 @@ function formatDuration(elapsedMs: number) {
 
 function truncate(value: string, limit: number) {
   const clean = normalizeText(value);
+  return clean.length <= limit ? clean : `${clean.slice(0, limit - 1)}...`;
+}
+
+function truncateMultiline(value: string, limit: number) {
+  const clean = value.trim();
   return clean.length <= limit ? clean : `${clean.slice(0, limit - 1)}...`;
 }
 
