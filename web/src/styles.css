@@ -470,26 +470,21 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
   min-width: 0;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
+  padding: 4px 0 8px;
 }
 .tool-activity summary {
-  min-height: 28px;
+  min-height: 30px;
   display: flex;
   align-items: center;
   gap: 8px;
   list-style: none;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.3;
   overflow: hidden;
 }
 .tool-activity summary::-webkit-details-marker {
   display: none;
-}
-.tool-activity summary span:nth-child(2) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .tool-activity summary svg {
   flex: 0 0 auto;
@@ -501,23 +496,83 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
 .tool-activity-status {
   flex: 0 0 auto;
   color: var(--muted);
-  font-weight: 700;
+  font-weight: 500;
 }
 .tool-activity.success .tool-activity-status { color: var(--success); }
 .tool-activity.warning .tool-activity-status { color: var(--warning); }
 .tool-activity.error .tool-activity-status { color: var(--danger); }
-.tool-activity pre {
-  max-height: 320px;
-  margin: 6px 0 10px;
-  padding: 10px 12px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-2);
+.tool-activity.running .tool-activity-status { color: var(--warning); }
+.tool-activity-detail {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+.tool-activity-summary,
+.tool-activity-command-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.tool-activity-command-count {
   color: var(--text);
+}
+.tool-activity-steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+}
+.tool-activity-step {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+  color: var(--text);
+}
+.tool-activity-step::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.tool-activity-step.success::before { background: var(--success); }
+.tool-activity-step.warning::before,
+.tool-activity-step.running::before { background: var(--warning); }
+.tool-activity-step.error::before { background: var(--danger); }
+.tool-activity-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+}
+.tool-activity-step-head span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+.tool-activity-step-head small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tool-activity pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
