@@ -6,13 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / 'src' / 'pp_agent'
 ALLOWED = {
-    'cli': {'cli', 'runtime', 'domain', 'storage', 'app', 'api', 'config', 'evaluation', 'learning', 'memory', 'skills', 'tools', 'tui', 'web', 'web_tools'},
-    'runtime': {'runtime', 'domain', 'llm', 'tools', 'storage', 'config', 'memory', 'subagents'},
+    'cli': {'cli', 'runtime', 'domain', 'storage', 'app', 'api', 'config', 'evaluation', 'learning', 'memory', 'skills', 'tools', 'tui', 'web', 'web_tools', 'onboarding'},
+    'runtime': {'runtime', 'domain', 'llm', 'tools', 'storage', 'config', 'memory', 'subagents', 'observability'},
     'storage': {'storage', 'domain', 'llm', 'learning', 'memory'},
     'llm': {'llm', 'domain'},
     'domain': {'domain'},
-    'tools': {'tools', 'domain', 'storage', 'api', 'runtime', 'subagents'},
-    'app': {'app', 'runtime', 'storage', 'llm', 'tools', 'domain', 'prompts', 'skills', 'extensions', 'capabilities', 'mcp', 'web_tools', 'config', 'learning', 'memory', 'subagents', 'browser'},
+    'tools': {'tools', 'domain', 'storage', 'api', 'runtime', 'subagents', 'attachments', 'observability'},
+    'app': {'app', 'runtime', 'storage', 'llm', 'tools', 'domain', 'prompts', 'skills', 'extensions', 'capabilities', 'mcp', 'web_tools', 'config', 'learning', 'memory', 'subagents', 'browser', 'attachments', 'observability'},
     'api': {'api', 'runtime', 'storage', 'domain'},
     'config': {'config', 'storage', 'session'},
     'evaluation': {'evaluation', 'api', 'domain', 'llm', 'memory', 'runtime'},

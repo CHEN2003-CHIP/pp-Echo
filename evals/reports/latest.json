@@ -1,6 +1,6 @@
 {
-  "commit_hash": "ac5f582",
-  "date": "2026-06-08T06:28:46.514908+00:00",
+  "commit_hash": "4502258",
+  "date": "2026-06-13T13:27:30.083020+00:00",
   "provider": "scripted",
   "model": "ScriptedAgent",
   "mode": "deterministic",
@@ -20,7 +20,7 @@
   "tool_success_rate": 1.0,
   "average_tool_calls": 1.72,
   "average_turns": 1.0,
-  "average_duration": 0.00119418,
+  "average_duration": 0.00119529,
   "category_summary": {
     "file_edit": {
       "total": 15,
@@ -110,7 +110,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001461,
+      "duration_seconds": 0.001272,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -165,7 +165,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000909,
+      "duration_seconds": 0.000843,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -214,7 +214,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001506,
+      "duration_seconds": 0.001278,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -262,7 +262,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000629,
+      "duration_seconds": 0.000542,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -306,7 +306,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001781,
+      "duration_seconds": 0.001543,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -386,7 +386,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000595,
+      "duration_seconds": 0.000528,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -430,7 +430,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000922,
+      "duration_seconds": 0.000895,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -479,7 +479,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001375,
+      "duration_seconds": 0.001246,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -534,7 +534,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000907,
+      "duration_seconds": 0.00087,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -583,7 +583,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001504,
+      "duration_seconds": 0.001365,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -631,7 +631,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000542,
+      "duration_seconds": 0.000515,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -675,7 +675,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001803,
+      "duration_seconds": 0.001549,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -755,7 +755,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000832,
+      "duration_seconds": 0.000559,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -799,7 +799,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000938,
+      "duration_seconds": 0.000896,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -848,7 +848,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001447,
+      "duration_seconds": 0.001359,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -903,7 +903,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000966,
+      "duration_seconds": 0.000843,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -952,7 +952,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001458,
+      "duration_seconds": 0.001587,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -1000,7 +1000,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000609,
+      "duration_seconds": 0.00053,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -1044,7 +1044,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001893,
+      "duration_seconds": 0.001924,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -1124,7 +1124,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000541,
+      "duration_seconds": 0.000525,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -1168,7 +1168,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000894,
+      "duration_seconds": 0.000853,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -1217,7 +1217,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001387,
+      "duration_seconds": 0.001251,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -1272,7 +1272,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000904,
+      "duration_seconds": 0.000852,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -1321,7 +1321,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001718,
+      "duration_seconds": 0.001563,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -1369,7 +1369,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000561,
+      "duration_seconds": 0.000522,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -1413,7 +1413,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.00188,
+      "duration_seconds": 0.001752,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -1493,7 +1493,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000614,
+      "duration_seconds": 0.000514,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -1537,7 +1537,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000925,
+      "duration_seconds": 0.000869,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -1586,7 +1586,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001361,
+      "duration_seconds": 0.001394,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -1641,7 +1641,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000905,
+      "duration_seconds": 0.000851,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -1690,7 +1690,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001519,
+      "duration_seconds": 0.001578,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -1738,7 +1738,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000561,
+      "duration_seconds": 0.000537,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -1782,7 +1782,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001558,
+      "duration_seconds": 0.00179,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -1862,7 +1862,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000559,
+      "duration_seconds": 0.000531,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -1906,7 +1906,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000922,
+      "duration_seconds": 0.000884,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -1955,7 +1955,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.00133,
+      "duration_seconds": 0.001246,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -2010,7 +2010,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.00089,
+      "duration_seconds": 0.001287,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -2059,7 +2059,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001564,
+      "duration_seconds": 0.001664,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -2107,7 +2107,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000569,
+      "duration_seconds": 0.000557,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -2151,7 +2151,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001828,
+      "duration_seconds": 0.001745,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -2231,7 +2231,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000569,
+      "duration_seconds": 0.00059,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -2275,7 +2275,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001015,
+      "duration_seconds": 0.001008,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -2324,7 +2324,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001318,
+      "duration_seconds": 0.002072,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -2379,7 +2379,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000876,
+      "duration_seconds": 0.000947,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -2428,7 +2428,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001873,
+      "duration_seconds": 0.001727,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -2476,7 +2476,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000573,
+      "duration_seconds": 0.000547,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -2520,7 +2520,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001577,
+      "duration_seconds": 0.001843,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -2600,7 +2600,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000542,
+      "duration_seconds": 0.00057,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -2644,7 +2644,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000926,
+      "duration_seconds": 0.000878,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -2693,7 +2693,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001315,
+      "duration_seconds": 0.001302,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -2748,7 +2748,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000911,
+      "duration_seconds": 0.000869,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -2797,7 +2797,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001797,
+      "duration_seconds": 0.001495,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -2845,7 +2845,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.00057,
+      "duration_seconds": 0.000546,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -2889,7 +2889,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.002023,
+      "duration_seconds": 0.001549,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -2969,7 +2969,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000557,
+      "duration_seconds": 0.000534,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -3013,7 +3013,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000864,
+      "duration_seconds": 0.000849,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -3062,7 +3062,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001537,
+      "duration_seconds": 0.001361,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -3117,7 +3117,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000906,
+      "duration_seconds": 0.00088,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -3166,7 +3166,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001484,
+      "duration_seconds": 0.00138,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -3214,7 +3214,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.00058,
+      "duration_seconds": 0.000527,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -3258,7 +3258,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.00173,
+      "duration_seconds": 0.001581,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -3338,7 +3338,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000535,
+      "duration_seconds": 0.000625,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -3382,7 +3382,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000892,
+      "duration_seconds": 0.000855,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -3431,7 +3431,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.00145,
+      "duration_seconds": 0.0013,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -3486,7 +3486,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000885,
+      "duration_seconds": 0.000879,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -3535,7 +3535,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001788,
+      "duration_seconds": 0.00144,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -3583,7 +3583,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000579,
+      "duration_seconds": 0.000562,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -3627,7 +3627,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001803,
+      "duration_seconds": 0.001712,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -3707,7 +3707,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000624,
+      "duration_seconds": 0.000534,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -3751,7 +3751,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001065,
+      "duration_seconds": 0.000851,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -3800,7 +3800,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001418,
+      "duration_seconds": 0.002437,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -3855,7 +3855,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000964,
+      "duration_seconds": 0.001205,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -3904,7 +3904,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001513,
+      "duration_seconds": 0.002231,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -3952,7 +3952,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001009,
+      "duration_seconds": 0.000727,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -3996,7 +3996,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.002807,
+      "duration_seconds": 0.002123,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -4076,7 +4076,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000685,
+      "duration_seconds": 0.001084,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -4120,7 +4120,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001859,
+      "duration_seconds": 0.001139,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -4169,7 +4169,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001433,
+      "duration_seconds": 0.001572,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -4224,7 +4224,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000877,
+      "duration_seconds": 0.001749,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -4273,7 +4273,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001656,
+      "duration_seconds": 0.001693,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -4321,7 +4321,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000536,
+      "duration_seconds": 0.001222,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -4365,7 +4365,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.002521,
+      "duration_seconds": 0.002025,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -4445,7 +4445,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000566,
+      "duration_seconds": 0.000763,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -4489,7 +4489,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001154,
+      "duration_seconds": 0.001443,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -4538,7 +4538,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001532,
+      "duration_seconds": 0.001862,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -4593,7 +4593,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000917,
+      "duration_seconds": 0.001193,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -4642,7 +4642,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.002548,
+      "duration_seconds": 0.00204,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -4690,7 +4690,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001023,
+      "duration_seconds": 0.00086,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -4734,7 +4734,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.002015,
+      "duration_seconds": 0.002741,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -4814,7 +4814,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001001,
+      "duration_seconds": 0.000512,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -4858,7 +4858,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001213,
+      "duration_seconds": 0.000911,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -4907,7 +4907,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001515,
+      "duration_seconds": 0.001523,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -4962,7 +4962,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000975,
+      "duration_seconds": 0.001279,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -5011,7 +5011,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.002081,
+      "duration_seconds": 0.002247,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('approved.txt').read_text(encoding='utf-8').strip()\"",
@@ -5059,7 +5059,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000567,
+      "duration_seconds": 0.000789,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'SECRET' in Path('.env').read_text(encoding='utf-8')\"",
@@ -5103,7 +5103,7 @@
       "tool_call_count": 3,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.002299,
+      "duration_seconds": 0.002277,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -5183,7 +5183,7 @@
       "tool_call_count": 1,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000604,
+      "duration_seconds": 0.000723,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert 'Prefer small explicit functions' in Path('MEMORY.md').read_text(encoding='utf-8')\"",
@@ -5227,7 +5227,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001623,
+      "duration_seconds": 0.001292,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",
@@ -5276,7 +5276,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.001351,
+      "duration_seconds": 0.0018,
       "verification_results": [
         {
           "command": "python -m py_compile app.py",
@@ -5331,7 +5331,7 @@
       "tool_call_count": 2,
       "tool_success_rate": 1.0,
       "turn_count": 1,
-      "duration_seconds": 0.000925,
+      "duration_seconds": 0.001345,
       "verification_results": [
         {
           "command": "python -c \"from pathlib import Path; assert Path('app.py').exists()\"",

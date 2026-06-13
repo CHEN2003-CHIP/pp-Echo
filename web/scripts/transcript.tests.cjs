@@ -7,7 +7,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const tempRoot = fs.mkdtempSync(path.join(projectRoot, ".transcript-tests-"));
 fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ type: "commonjs" }), "utf8");
 
-for (const sourcePath of ["src/api.ts", "src/rich-text.tsx", "src/App.tsx"]) {
+for (const sourcePath of sourceFiles(path.join(projectRoot, "src"))) {
   compileSource(sourcePath);
 }
 
@@ -221,4 +221,20 @@ function compileSource(sourcePath) {
     fileName: absoluteSourcePath,
   });
   fs.writeFileSync(outputPath, result.outputText, "utf8");
+}
+
+function sourceFiles(root) {
+  const files = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const absolute = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...sourceFiles(absolute));
+      continue;
+    }
+    if (!entry.isFile() || !/\.(ts|tsx)$/.test(entry.name)) {
+      continue;
+    }
+    files.push(path.relative(projectRoot, absolute).replace(/\\/g, "/"));
+  }
+  return files;
 }

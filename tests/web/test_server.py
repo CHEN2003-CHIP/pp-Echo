@@ -524,6 +524,9 @@ def test_runtime_doctor_report_flags_missing_patch_artifact_file(tmp_path: Path)
     assert report["summary"]["pending_artifact_count"] == 1
     assert report["findings"][0]["kind"] == "missing_artifact_file"
     assert report["findings"][0]["token"] == payload["token"]
+    assert report["storage"]["status"] == "ok"
+    assert "sessions" in report["retention"]
+    assert "size_bytes" in report["trace_store"]
 
 
 def test_runtime_doctor_report_flags_orphaned_planner_token(tmp_path: Path) -> None:
@@ -545,6 +548,49 @@ def test_runtime_doctor_report_flags_orphaned_planner_token(tmp_path: Path) -> N
         finding["kind"] == "orphaned_pending_token" and finding["token"] == payload["token"]
         for finding in report["findings"]
     )
+    assert any(
+        action["reason"] == "orphaned_pending_token" and action["token"] == payload["token"]
+        for action in report["remediation"]["actions"]
+    )
+
+
+def test_web_api_runtime_maintenance_preview_and_apply_orphaned_token(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = server_module.bootstrap.pending_action_store_for(workspace)
+    orphaned = store.stage(action_type="planner_approval", details={"session_id": "missing-session"})
+    active = store.stage(action_type="planner_approval", details={"summary": ["active"]})
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    preview = client.get("/api/runtime/maintenance/preview")
+    applied = client.post("/api/runtime/maintenance/apply")
+
+    assert preview.status_code == 200
+    assert preview.json()["mode"] == "dry-run"
+    assert preview.json()["action_count"] == 1
+    assert preview.json()["actions"][0]["token"] == orphaned["token"]
+    assert applied.status_code == 200
+    assert applied.json()["applied_count"] == 1
+    assert not (store.root / f"{orphaned['token']}.json").exists()
+    assert (store.root / f"{active['token']}.json").exists()
+    assert list((store.root / "maintenance-backups").rglob(f"{orphaned['token']}.json"))
+
+
+def test_runtime_doctor_report_surfaces_corrupted_session_jsonl(tmp_path: Path) -> None:
+    session_store = SessionStore(tmp_path / "sessions")
+    pending_store = PendingActionStore(tmp_path / "pending")
+    (session_store.root / "broken.jsonl").write_text("{not json}\n", encoding="utf-8")
+
+    report = build_runtime_doctor_report(
+        tmp_path,
+        session_store=session_store,
+        pending_store=pending_store,
+    )
+
+    assert report["storage"]["status"] == "warning"
+    assert report["storage"]["corrupted_jsonl_count"] == 1
 
 
 def test_web_api_workspace_open_requires_confirmation_then_switches(tmp_path: Path) -> None:

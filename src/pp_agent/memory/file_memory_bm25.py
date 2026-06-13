@@ -95,21 +95,38 @@ class FileMemoryBM25Index:
         scored = [
             (chunk, raw)
             for chunk, raw in zip(self.chunks, raw_scores)
-            if raw > 0.0
+            if not math.isclose(raw, 0.0)
         ]
         if not scored:
+            scored = self._lexical_fallback(query_tokens)
+        if not scored:
             return []
-        normalized = _normalize_scores([raw for _chunk, raw in scored])
+        score_basis = _score_basis([raw for _chunk, raw in scored])
+        normalized = _normalize_scores(score_basis)
         hits = [
             BM25Hit(chunk_id=chunk.chunk_id, score=score, raw_score=raw)
             for (chunk, raw), score in zip(scored, normalized)
         ]
-        return sorted(hits, key=lambda item: (-item.score, -item.raw_score, item.chunk_id))[:limit]
+        return sorted(hits, key=lambda item: (-item.score, -abs(item.raw_score), item.chunk_id))[:limit]
 
     @staticmethod
     def _document_text(chunk: FileMemoryChunk) -> str:
         heading = " ".join(chunk.heading_path)
         return f"{chunk.path}\n{heading}\n{chunk.text}"
+
+    def _lexical_fallback(self, query_tokens: list[str]) -> list[tuple[FileMemoryChunk, float]]:
+        query_set = set(query_tokens)
+        scored: list[tuple[FileMemoryChunk, float]] = []
+        for chunk, tokens in zip(self.chunks, self._tokens):
+            if not tokens:
+                continue
+            token_counts = Counter(tokens)
+            overlap = sum(token_counts.get(token, 0) for token in query_set)
+            if overlap <= 0:
+                continue
+            coverage = len(query_set.intersection(token_counts)) / max(1, len(query_set))
+            scored.append((chunk, float(overlap) + coverage))
+        return scored
 
 
 def tokenize_file_memory_text(text: str) -> list[str]:
@@ -143,5 +160,11 @@ def _normalize_scores(raw_scores: list[float]) -> list[float]:
     minimum = min(raw_scores)
     maximum = max(raw_scores)
     if math.isclose(minimum, maximum):
-        return [1.0 if score > 0 else 0.0 for score in raw_scores]
+        return [1.0 if not math.isclose(score, 0.0) else 0.0 for score in raw_scores]
     return [(score - minimum) / (maximum - minimum) for score in raw_scores]
+
+
+def _score_basis(raw_scores: list[float]) -> list[float]:
+    if any(score > 0.0 for score in raw_scores):
+        return raw_scores
+    return [abs(score) for score in raw_scores]

@@ -31,14 +31,14 @@ CHECKED_LAYERS = {
     "web_tools",
 }
 ALLOWED = {
-    "cli": {"cli", "app", "runtime", "storage", "domain", "api", "config", "evaluation", "learning", "memory", "skills", "tools", "tui", "web", "web_tools"},
-    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp", "web_tools", "config", "learning", "memory", "prompts", "skills", "subagents", "browser"},
-    "runtime": {"runtime", "storage", "llm", "tools", "domain", "config", "memory", "subagents"},
+    "cli": {"cli", "app", "runtime", "storage", "domain", "api", "config", "evaluation", "learning", "memory", "skills", "tools", "tui", "web", "web_tools", "onboarding"},
+    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp", "web_tools", "config", "learning", "memory", "prompts", "skills", "subagents", "browser", "attachments", "observability"},
+    "runtime": {"runtime", "storage", "llm", "tools", "domain", "config", "memory", "subagents", "observability"},
     "llm": {"llm", "domain"},
     "storage": {"storage", "domain", "llm", "learning", "memory"},
     "domain": {"domain"},
     "extensions": {"extensions", "runtime", "domain"},
-    "tools": {"tools", "storage", "domain", "api", "runtime", "subagents"},
+    "tools": {"tools", "storage", "domain", "api", "runtime", "subagents", "attachments", "observability"},
     "capabilities": {"capabilities", "skills", "tools", "domain"},
     "mcp": {"mcp"},
     "web_tools": {"web_tools", "domain", "runtime", "storage", "tools"},

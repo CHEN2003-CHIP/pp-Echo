@@ -278,6 +278,14 @@ def create_app(
     def runtime_report(session_id: Optional[str] = None) -> dict:
         return sdk.runtime_doctor_report(active_workspace(), session_id=session_id)
 
+    @app.get("/api/runtime/maintenance/preview")
+    def runtime_maintenance_preview(session_id: Optional[str] = None) -> dict:
+        return sdk.runtime_maintenance(active_workspace(), session_id=session_id, apply=False)
+
+    @app.post("/api/runtime/maintenance/apply")
+    def runtime_maintenance_apply(session_id: Optional[str] = None) -> dict:
+        return sdk.runtime_maintenance(active_workspace(), session_id=session_id, apply=True)
+
     @app.post("/api/approvals/{token}/approve")
     def approve_pending_action(token: str) -> dict:
         try:
