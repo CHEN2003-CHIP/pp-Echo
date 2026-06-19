@@ -3,7 +3,7 @@ import { Activity, Bot, Code2, Filter, ShieldCheck, Sparkles } from "lucide-reac
 import type { ActivityItem, ActivityPhase } from "./activity-types";
 import { StatusIcon } from "./ActivityCard";
 
-type FilterKey = "all" | "reasoning" | "tool" | "approval" | "subagent" | "system";
+type FilterKey = "all" | "analysis" | "tool" | "approval" | "subagent" | "system";
 
 export function ActivityTimeline({
   items,
@@ -47,7 +47,7 @@ export function ActivityTimeline({
 
 const filters: Array<{ id: FilterKey; label: string; icon: typeof Activity }> = [
   { id: "all", label: "All", icon: Filter },
-  { id: "reasoning", label: "Thinking", icon: Sparkles },
+  { id: "analysis", label: "Progress", icon: Sparkles },
   { id: "tool", label: "Tools", icon: Code2 },
   { id: "approval", label: "Approvals", icon: ShieldCheck },
   { id: "subagent", label: "Subagents", icon: Bot },
@@ -57,5 +57,6 @@ const filters: Array<{ id: FilterKey; label: string; icon: typeof Activity }> = 
 function matchesFilter(phase: ActivityPhase, filter: FilterKey) {
   if (filter === "all") return true;
   if (filter === "system") return ["system", "queue", "memory", "checkpoint", "artifact", "event"].includes(phase);
+  if (filter === "analysis") return ["preparing", "analyzing", "finalizing"].includes(phase);
   return phase === filter;
 }

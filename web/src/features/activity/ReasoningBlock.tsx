@@ -1,1 +1,1 @@
-export { ReasoningBlock } from "./ActivityCard";
+export { ProgressBlock as ReasoningBlock, ProgressBlock } from "./ActivityCard";

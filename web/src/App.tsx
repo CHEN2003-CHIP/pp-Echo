@@ -37,6 +37,8 @@ import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
 import { AttachmentPanel } from "./features/attachments/AttachmentPanel";
 import { BotCenterPage } from "./features/bots/BotCenterPage";
+import { ResourceCenterPage } from "./features/resources/ResourceCenterPage";
+import { SettingsCenter } from "./features/settings/SettingsCenter";
 import { ActivityCard } from "./features/activity/ActivityCard";
 import { ActivityDetailsPanel } from "./features/activity/ActivityDetailsPanel";
 import { buildActivityRuns } from "./features/activity/activity-normalizer";
@@ -56,6 +58,7 @@ type ViewKey =
   | "model"
   | "logs"
   | "attachments"
+  | "resources"
   | "bots"
   | "startupGuide"
   | "traceInspect"
@@ -148,6 +151,7 @@ const navItems: Array<{
   { view: "model", label: "模型", icon: Monitor, description: "模型与环境" },
   { view: "logs", label: "日志", icon: FileText, description: "时间线与日志" },
   { view: "attachments", label: "附件", icon: Paperclip, description: "上传文件、检索、导入与记忆写入" },
+  { view: "resources", label: "Resources", icon: Boxes, description: "Resource Center for tools, bots, memory, and integrations" },
   { view: "bots", label: "Bots", icon: Bot, description: "Bot Gateway and external message entry points" },
   { view: "traceInspect", label: "TraceInspect", icon: Activity, description: "Agent Trace 审计与回放" },
   { view: "usage", label: "用量", icon: Database, description: "运行统计" },
@@ -159,7 +163,7 @@ const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "对话", views: ["chat", "history", "group", "search"] },
   { title: "执行", views: ["workspace", "tasks", "board", "channels"] },
   { title: "扩展", views: ["plugins", "memory", "model"] },
-  { title: "监控", views: ["logs", "attachments", "bots", "traceInspect", "usage", "skills", "users"] }
+  { title: "监控", views: ["logs", "resources", "attachments", "bots", "traceInspect", "usage", "skills", "users"] }
 ];
 
 const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
@@ -924,6 +928,15 @@ export function App() {
               onDelete={deleteAttachment}
               onUpload={uploadAttachment}
             />
+          ) : activeView === "resources" ? (
+            <ResourceCenterPage
+              activeSessionId={activeSessionId}
+              workspaceStatus={workspaceStatus}
+              attachments={activeSessionId ? attachments[activeSessionId] || [] : []}
+              onOpenBots={() => setActiveView("bots")}
+              onOpenCapabilities={(kind) => setActiveView(kind === "mcp" ? "channels" : kind === "skills" ? "skills" : "plugins")}
+              onOpenAttachments={() => setActiveView("attachments")}
+            />
           ) : activeView === "bots" ? (
             <BotCenterPage />
           ) : activeView === "logs" ? (
@@ -941,6 +954,16 @@ export function App() {
             />
           ) : activeView === "memory" ? (
             <MemoryWorkbench />
+          ) : activeView === "users" ? (
+            <SettingsCenter
+              sessionId={activeSessionId}
+              initialCategory={settingsFocus}
+              onOpenResources={() => setActiveView("resources")}
+              onSaved={() => {
+                refreshAll().catch(() => undefined);
+                if (activeSessionId) refreshSessionState(activeSessionId).catch(() => undefined);
+              }}
+            />
           ) : (
             <ComingSoonPanel title={viewLabel} onComingSoon={handleComingSoon} onReload={refreshAll} />
           )}
@@ -3206,8 +3229,8 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     if (leftTime !== rightTime) return leftTime - rightTime;
     return 0;
   });
-  if (shouldShowThinking(items, events)) {
-    items.push({ id: "thinking", role: "assistant", body: { text: "Thinking", attachments: [] }, streaming: true });
+  if (shouldShowProgressPlaceholder(items, events)) {
+    items.push({ id: "progress-placeholder", role: "assistant", body: { text: "Analyzing the request", attachments: [] }, streaming: true });
   }
   return items;
 }
@@ -3229,7 +3252,7 @@ function combineActivityItemsForTranscript(items: ActivityItem[], events: Runtim
   const errorCount = items.reduce((total, item) => total + item.errorCount, 0);
   return {
     id: `turn-activity:${startedAt || items[0].id}`,
-    phase: items.some((item) => item.phase === "reasoning") ? "reasoning" : items.some((item) => item.phase === "planning") ? "planning" : "tool",
+    phase: items.some((item) => item.phase === "preparing" || item.phase === "analyzing" || item.phase === "finalizing") ? "analyzing" : items.some((item) => item.phase === "planning") ? "planning" : "tool",
     status,
     tone: status,
     title: `${status === "error" ? "Failed" : running ? "Running" : "Done"} · ${items.length} activities${durationLabel ? ` · ${durationLabel}` : ""}`,
@@ -3277,7 +3300,7 @@ export function buildTurnMarkers(transcript: TranscriptItem[]): TurnMarker[] {
       };
       return;
     }
-    if (!current || item.id === "thinking") return;
+    if (!current || item.id === "progress-placeholder") return;
     if (item.role === "assistant") {
       assistantParts.push(item.body.text);
     } else if (item.role === "activity" && item.activity) {
@@ -3356,6 +3379,10 @@ function isActivityEvent(event: RuntimeEvent) {
   return (
     event.type.includes("tool") ||
     event.type.includes("planner") ||
+    event.type.startsWith("reasoning_") ||
+    event.type === "before_provider_request" ||
+    event.type === "provider_response" ||
+    event.type === "provider_error" ||
     event.type.includes("checkpoint") ||
     event.type.includes("subagent") ||
     event.type === "approval_result" ||
@@ -3765,11 +3792,11 @@ function runtimeEventKey(event: RuntimeEvent) {
   ].join("\u001f");
 }
 
-function shouldShowThinking(items: TranscriptItem[], events: RuntimeEvent[]) {
+function shouldShowProgressPlaceholder(items: TranscriptItem[], events: RuntimeEvent[]) {
   if (!isTurnInFlight(events)) return false;
   const latestUserIndex = findLastIndex(items, (item) => item.role === "user");
   if (latestUserIndex < 0) return true;
-  return !items.slice(latestUserIndex + 1).some((item) => item.role === "assistant" && item.body.text.trim() && item.id !== "thinking");
+  return !items.slice(latestUserIndex + 1).some((item) => item.role === "assistant" && item.body.text.trim() && item.id !== "progress-placeholder");
 }
 
 export function runtimeIsBusy(snapshot: SessionSnapshot | undefined, events: RuntimeEvent[]) {

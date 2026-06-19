@@ -17,7 +17,7 @@ export function ActivityCard({ item }: { item: ActivityItem }) {
         <ChevronRight className="activity-chevron" size={15} />
       </summary>
       <div className="activity-card-body">
-        {item.phase === "reasoning" ? <ReasoningBlock item={item} /> : null}
+        {isProgressPhase(item.phase) ? <ProgressBlock item={item} /> : null}
         {item.entries.length > 0 ? (
           <ol className="activity-step-list">
             {item.entries.map((entry) => (
@@ -43,12 +43,12 @@ export function ActivityCard({ item }: { item: ActivityItem }) {
   );
 }
 
-export function ReasoningBlock({ item }: { item: ActivityItem }) {
+export function ProgressBlock({ item }: { item: ActivityItem }) {
   return (
-    <section className={`reasoning-block ${item.running ? "live" : ""}`}>
-      <div className="reasoning-pulse"><Sparkles size={14} /></div>
+    <section className={`progress-block ${item.running ? "live" : ""}`}>
+      <div className="progress-pulse"><Sparkles size={14} /></div>
       <div>
-        <strong>{item.running ? "Thinking through the next step" : "Reasoning summary"}</strong>
+        <strong>{item.running ? "Analyzing the next step" : "Progress summary"}</strong>
         <p>{item.summary || "Public progress from the runtime."}</p>
       </div>
     </section>
@@ -56,7 +56,7 @@ export function ReasoningBlock({ item }: { item: ActivityItem }) {
 }
 
 function phaseIcon(phase: ActivityPhase) {
-  if (phase === "reasoning") return Sparkles;
+  if (isProgressPhase(phase)) return Sparkles;
   if (phase === "planning") return Layers3;
   if (phase === "tool") return Code2;
   if (phase === "approval") return ShieldCheck;
@@ -66,6 +66,10 @@ function phaseIcon(phase: ActivityPhase) {
   if (phase === "queue") return Clock3;
   if (phase === "memory") return CircleDashed;
   return PlayCircle;
+}
+
+function isProgressPhase(phase: ActivityPhase) {
+  return phase === "preparing" || phase === "analyzing" || phase === "finalizing";
 }
 
 function statusCopy(status: ActivityStatus) {

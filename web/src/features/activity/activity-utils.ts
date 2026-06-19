@@ -28,7 +28,7 @@ export function eventActivityId(event: RuntimeEvent, index = 0) {
   const callId = firstString(details.tool_call_id);
   if (event.type.startsWith("tool_")) return `${runId}:tool:${callId || event.tool_name || index}`;
   if (event.type.startsWith("planner_")) return `${runId}:planner:${firstString(details.token) || event.turn_id || "turnless"}`;
-  if (event.type.startsWith("reasoning_") || event.type === "before_provider_request" || event.type === "provider_response" || event.type === "provider_error") return `${runId}:reasoning:${event.turn_id ?? index}`;
+  if (event.type.startsWith("reasoning_") || event.type === "before_provider_request" || event.type === "provider_response" || event.type === "provider_error") return `${runId}:analysis:${event.turn_id ?? index}`;
   if (event.type.startsWith("subagent_")) return `${runId}:subagent:${firstString(details.child_session_id, details.session_id, details.spec_name) || event.turn_id || "turnless"}`;
   if (event.type.startsWith("checkpoint_") || event.type.startsWith("session_safe_rewind")) return `${runId}:checkpoint:${firstString(details.checkpoint_id, details.id, details.token) || event.turn_id || "turnless"}`;
   if (event.type === "approval_result" || event.type.includes("approval")) return `${runId}:approval:${firstString(details.token, details.approval_token) || event.turn_id || "turnless"}`;
@@ -52,7 +52,9 @@ export function eventPhase(event: RuntimeEvent): ActivityPhase {
   const activity = details.activity && typeof details.activity === "object" ? details.activity as Record<string, unknown> : {};
   const phase = firstString(activity.phase);
   if (isActivityPhase(phase)) return phase;
-  if (event.type.startsWith("reasoning_") || event.type === "before_provider_request" || event.type === "provider_response" || event.type === "provider_error") return "reasoning";
+  if (event.type === "before_provider_request" || event.type === "reasoning_start") return "preparing";
+  if (event.type === "provider_response" || event.type === "reasoning_end") return "finalizing";
+  if (event.type.startsWith("reasoning_") || event.type === "provider_error") return "analyzing";
   if (event.type.startsWith("planner_")) return event.type.includes("gate") ? "approval" : "planning";
   if (event.type.startsWith("tool_")) return "tool";
   if (event.type === "approval_result" || event.type.includes("approval")) return "approval";
@@ -66,13 +68,16 @@ export function eventPhase(event: RuntimeEvent): ActivityPhase {
 
 export function phaseLabel(phase: ActivityPhase) {
   const labels: Record<ActivityPhase, string> = {
-    reasoning: "Thinking",
+    preparing: "Preparing",
+    analyzing: "Analyzing",
     planning: "Planning",
     tool: "Tool call",
     approval: "Approval",
     artifact: "Artifact",
     checkpoint: "Checkpoint",
     subagent: "Subagent",
+    message: "Message",
+    finalizing: "Finalizing",
     queue: "Queue",
     memory: "Memory",
     system: "System",
@@ -115,6 +120,27 @@ export function truncateText(value: string, limit: number) {
   return clean.length <= limit ? clean : `${clean.slice(0, Math.max(0, limit - 1))}...`;
 }
 
+const SENSITIVE_KEY_RE = /(chain[_-]?of[_-]?thought|(^|[_-])cot($|[_-])|reasoning|scratchpad|hidden|system[_-]?prompt|developer[_-]?prompt|internal[_-]?prompt|deliberation|private)/i;
+
+export function safeRawEvent(value: unknown, fieldLimit = 1200, totalLimit = 4000): string {
+  const safe = redactValue(value, fieldLimit, new WeakSet<object>());
+  const text = JSON.stringify(safe, null, 2);
+  return text.length <= totalLimit ? text : `${text.slice(0, Math.max(0, totalLimit - 1))}...`;
+}
+
+function redactValue(value: unknown, fieldLimit: number, seen: WeakSet<object>): unknown {
+  if (typeof value === "string") return value.length <= fieldLimit ? value : `${value.slice(0, Math.max(0, fieldLimit - 1))}...`;
+  if (typeof value !== "object" || value === null) return value;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  if (Array.isArray(value)) return value.slice(0, 80).map((item) => redactValue(item, fieldLimit, seen));
+  const output: Record<string, unknown> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+    output[key] = SENSITIVE_KEY_RE.test(key) ? "[redacted]" : redactValue(item, fieldLimit, seen);
+  });
+  return output;
+}
+
 export function firstString(...values: unknown[]) {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -131,5 +157,5 @@ export function firstNumber(...values: unknown[]) {
 }
 
 function isActivityPhase(value: string): value is ActivityPhase {
-  return ["reasoning", "planning", "tool", "approval", "artifact", "checkpoint", "subagent", "queue", "memory", "system", "event"].includes(value);
+  return ["preparing", "analyzing", "planning", "tool", "approval", "artifact", "checkpoint", "subagent", "message", "finalizing", "queue", "memory", "system", "event"].includes(value);
 }

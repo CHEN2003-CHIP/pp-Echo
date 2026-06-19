@@ -12,21 +12,24 @@ for (const sourcePath of sourceFiles(path.join(projectRoot, "src"))) {
 }
 
 const normalizer = require(path.join(tempRoot, "src/features/activity/activity-normalizer.js"));
+const utils = require(path.join(tempRoot, "src/features/activity/activity-utils.js"));
 const tests = [];
 
 function test(name, fn) {
   tests.push({ name, fn });
 }
 
-test("merges public reasoning progress into one running activity", () => {
+test("merges public progress into one running activity", () => {
   const items = normalizer.buildActivityRuns([
     { type: "reasoning_start", timestamp: 1, run_id: "run-1", turn_id: 1, details: { summary: "Preparing context" } },
     { type: "reasoning_delta", timestamp: 2, run_id: "run-1", turn_id: 1, delta: "Receiving public assistant output.", details: { summary: "Streaming" } },
   ]);
   assert.equal(items.length, 1);
-  assert.equal(items[0].phase, "reasoning");
+  assert.equal(items[0].phase, "preparing");
   assert.equal(items[0].status, "running");
   assert.equal(items[0].entries.length, 2);
+  assert.ok(!JSON.stringify(items[0]).includes("Thinking"));
+  assert.ok(!JSON.stringify(items[0]).includes("Reasoning"));
 });
 
 test("pairs tool start and end by activity id fallback", () => {
@@ -83,6 +86,21 @@ test("deduplicates explicit event ids", () => {
   ]);
   assert.equal(items.length, 1);
   assert.equal(items[0].eventCount, 1);
+});
+
+test("safe raw event redacts private fields and trims long payloads", () => {
+  const raw = utils.safeRawEvent({
+    type: "reasoning_summary",
+    details: {
+      reasoning: "private",
+      system_prompt: "do not show",
+      nested: { scratchpad: "hidden", output: "x".repeat(2000) }
+    }
+  });
+  assert.ok(raw.includes("[redacted]"));
+  assert.ok(!raw.includes("do not show"));
+  assert.ok(!raw.includes("hidden"));
+  assert.ok(raw.length <= 4000);
 });
 
 let failures = 0;

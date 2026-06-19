@@ -1,7 +1,7 @@
 import type { ApprovalsSummary, RuntimeEvent, SessionSnapshot } from "../../api";
 import { sanitizeMediaUrl, type RichAttachment } from "../../rich-text";
 import type { ActivityItem, ActivityRunSummary, ActivityStatus, ActivityStep } from "./activity-types";
-import { eventActivityId, eventEndedAt, eventPhase, eventStableKey, eventStartedAt, eventStatus, firstNumber, firstString, formatDurationMs, phaseLabel, statusLabel, truncateText } from "./activity-utils";
+import { eventActivityId, eventEndedAt, eventPhase, eventStableKey, eventStartedAt, eventStatus, firstNumber, firstString, formatDurationMs, phaseLabel, safeRawEvent, statusLabel, truncateText } from "./activity-utils";
 
 export function buildActivityRuns(events: RuntimeEvent[] = [], snapshot?: SessionSnapshot, approvals?: ApprovalsSummary): ActivityItem[] {
   const unique: RuntimeEvent[] = [];
@@ -152,12 +152,13 @@ function buildStep(event: RuntimeEvent, index: number, fallbackStartedAt?: numbe
     status,
     tone: status,
     attachments: toolResultAttachments(event.details || {}),
-    rawType: event.type
+    rawType: event.type,
+    safeRaw: safeRawEvent(event)
   };
 }
 
 function stepKind(event: RuntimeEvent): ActivityStep["kind"] {
-  if (event.type.startsWith("reasoning_") || event.type === "before_provider_request" || event.type === "provider_response" || event.type === "provider_error") return "reasoning";
+  if (event.type.startsWith("reasoning_") || event.type === "before_provider_request" || event.type === "provider_response" || event.type === "provider_error") return "progress";
   if (event.type.startsWith("planner_")) return "planner";
   if (event.type.startsWith("subagent_")) return "subagent";
   if (event.type.startsWith("checkpoint_") || event.type.startsWith("session_safe_rewind")) return "checkpoint";
@@ -177,11 +178,11 @@ function stepLabel(event: RuntimeEvent) {
   const specName = event.details?.spec_name;
   if (typeof specName === "string" && specName.trim()) return specName;
   if (event.type === "before_provider_request") return "Preparing model request";
-  if (event.type === "provider_response") return "Model response";
-  if (event.type === "reasoning_start") return "Thinking";
-  if (event.type === "reasoning_delta") return "Progress";
-  if (event.type === "reasoning_summary") return "Summary";
-  if (event.type === "reasoning_end") return "Done thinking";
+  if (event.type === "provider_response") return "Response received";
+  if (event.type === "reasoning_start") return "Preparing context";
+  if (event.type === "reasoning_delta") return "Progress update";
+  if (event.type === "reasoning_summary") return "Public summary";
+  if (event.type === "reasoning_end") return "Ready to respond";
   return event.type.replace(/_/g, " ");
 }
 
@@ -216,7 +217,9 @@ function stepDetail(event: RuntimeEvent) {
 function activityTitle(phase: ActivityItem["phase"], status: ActivityStatus, first: RuntimeEvent, last: RuntimeEvent, durationLabel: string) {
   const subject = first.tool_name || first.plan_step?.title || stringDetail(first, "spec_name") || phaseLabel(phase);
   const suffix = durationLabel ? ` · ${durationLabel}` : "";
-  if (phase === "reasoning") return `${status === "running" ? "Thinking" : "Thought process"}${suffix}`;
+  if (phase === "preparing") return `${status === "running" ? "Preparing context" : "Context prepared"}${suffix}`;
+  if (phase === "analyzing") return `${status === "running" ? "Analyzing request" : "Analysis summary"}${suffix}`;
+  if (phase === "finalizing") return `${status === "running" ? "Finalizing response" : "Response finalized"}${suffix}`;
   if (phase === "planning") return `${status === "running" ? "Planning" : "Plan ready"}${suffix}`;
   if (phase === "tool") return `${statusLabel(status)} · ${subject}${suffix}`;
   if (phase === "approval") return `${status === "pending" ? "Waiting for approval" : "Approval updated"}${suffix}`;
@@ -232,7 +235,7 @@ function activitySummary(phase: ActivityItem["phase"], events: RuntimeEvent[], e
     const output = terminal?.message ? truncateText(terminal.message, 140) : "";
     return output ? `${tool}: ${output}` : `${tool} ${entries.some((entry) => entry.status === "running") ? "is running" : "completed"}`;
   }
-  if (phase === "reasoning") {
+  if (phase === "preparing" || phase === "analyzing" || phase === "finalizing") {
     const summary = [...events].reverse().map((event) => firstString(event.details?.summary, event.message)).find(Boolean);
     return summary || "Public progress from the agent runtime.";
   }

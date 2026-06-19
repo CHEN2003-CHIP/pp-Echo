@@ -1,13 +1,16 @@
 import type { RichAttachment } from "../../rich-text";
 
 export type ActivityPhase =
-  | "reasoning"
+  | "preparing"
+  | "analyzing"
   | "planning"
   | "tool"
   | "approval"
   | "artifact"
   | "checkpoint"
   | "subagent"
+  | "message"
+  | "finalizing"
   | "queue"
   | "memory"
   | "system"
@@ -17,7 +20,7 @@ export type ActivityStatus = "pending" | "running" | "success" | "warning" | "er
 
 export type ActivityStep = {
   id: string;
-  kind: "reasoning" | "tool" | "command" | "planner" | "subagent" | "checkpoint" | "approval" | "artifact" | "memory" | "system" | "event";
+  kind: "progress" | "tool" | "command" | "planner" | "subagent" | "checkpoint" | "approval" | "artifact" | "memory" | "system" | "message" | "event";
   label: string;
   detail: string;
   timestamp?: number;
@@ -28,6 +31,7 @@ export type ActivityStep = {
   tone?: ActivityStatus;
   attachments?: RichAttachment[];
   rawType?: string;
+  safeRaw?: string;
 };
 
 export type ActivityItem = {
