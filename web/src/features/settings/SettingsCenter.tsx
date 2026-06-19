@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Brain, Database, Eye, EyeOff, KeyRound, RefreshCw, RotateCcw, Save, Search, Settings, ShieldCheck, SlidersHorizontal, Wrench } from "lucide-react";
+import { Bot, Brain, Copy, Database, Eye, EyeOff, KeyRound, RefreshCw, RotateCcw, Save, Search, Settings, ShieldCheck, SlidersHorizontal, Wrench } from "lucide-react";
 import { api, type ConfigField, type ConfigSnapshot } from "../../api";
 
 type SettingsCategory = "general" | "providers" | "tools" | "agent" | "resources" | "memory" | "security" | "advanced";
@@ -38,6 +38,7 @@ export function SettingsCenter({
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     load().catch((err) => setError(errorMessage(err)));
@@ -49,45 +50,70 @@ export function SettingsCenter({
 
   useEffect(() => {
     if (!snapshot) return;
-    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope, profileDraft), null, 2));
+    setDrafts(buildDrafts(snapshot, scope, profileDraft));
+    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope), null, 2));
+    setFieldErrors({});
   }, [snapshot, scope, profileDraft]);
 
   async function load() {
     const payload = await api.config(sessionId || undefined);
     setSnapshot(payload);
     setProfileDraft(payload.active_profile || payload.profiles[0] || "default");
-    setDrafts(buildDrafts(payload));
-    setJsonDraft(JSON.stringify(payload.settings, null, 2));
     setError("");
     setNotice("");
   }
 
   async function applyChanges() {
     if (!snapshot) return;
-    const dirty = fields.filter((field) => fieldDirty(snapshot, drafts, field, scope, profileDraft));
+    const dirty = fields.filter((field) => fieldDirty(snapshot, drafts, field, scope));
     if (!dirty.length) return;
     if (scope === "session" && !sessionId) {
       setError("Open a session before applying session overrides.");
       return;
     }
+    const nextFieldErrors: Record<string, string> = {};
     setSaving(true);
     setError("");
+    setNotice("");
     try {
       let updated = snapshot;
       let baseHash = snapshot.config_hash;
+      let pendingNextTurn = false;
       for (const field of dirty) {
-        const value = parseDraft(drafts[field.path], field.type);
-        if (scope === "session" && sessionId) updated = await api.sessionConfigSet(sessionId, field.path, value);
-        else if (scope === "profile") updated = await api.configProfileSet(profileDraft || "default", field.path, value, baseHash, sessionId || undefined);
-        else updated = await api.configSet(field.path, value, baseHash);
+        if (scope === "session" && !field.session_override) {
+          nextFieldErrors[field.path] = "This setting does not support session override.";
+          continue;
+        }
+        let value: unknown;
+        try {
+          value = parseDraft(drafts[field.path], field.type);
+        } catch (err) {
+          nextFieldErrors[field.path] = errorMessage(err);
+          continue;
+        }
+        if (scope === "session" && sessionId && field.path === "model.model") {
+          const response = await api.setSessionModel(sessionId, String(value));
+          updated = response;
+          pendingNextTurn = Boolean(response.pending_next_turn);
+        } else if (scope === "session" && sessionId) {
+          updated = await api.sessionConfigSet(sessionId, field.path, value);
+        } else if (scope === "profile") {
+          updated = await api.configProfileSet(profileDraft || "default", field.path, value, baseHash, sessionId || undefined);
+        } else {
+          updated = await api.configSet(field.path, value, baseHash);
+        }
         baseHash = updated.config_hash;
       }
-      setSnapshot(updated);
-      setDrafts(buildDrafts(updated));
-      setNotice("Settings saved.");
-      onSaved?.();
+      setFieldErrors(nextFieldErrors);
+      if (Object.keys(nextFieldErrors).length) {
+        setError("Some settings need attention before they can be applied.");
+      } else {
+        setSnapshot(updated);
+        setNotice(pendingNextTurn ? "Settings saved. Model changes apply on the next turn." : "Settings saved.");
+        onSaved?.();
+      }
     } catch (err) {
-      setError(errorMessage(err));
+      setError(formatConfigError(err));
     } finally {
       setSaving(false);
     }
@@ -101,11 +127,10 @@ export function SettingsCenter({
       const parsed = JSON.parse(jsonDraft || "{}");
       const updated = await api.configPatch(parsed, snapshot.config_hash);
       setSnapshot(updated);
-      setDrafts(buildDrafts(updated));
       setNotice("JSON patch saved.");
       onSaved?.();
     } catch (err) {
-      setError(errorMessage(err));
+      setError(formatConfigError(err));
     } finally {
       setSaving(false);
     }
@@ -113,15 +138,16 @@ export function SettingsCenter({
 
   function revert() {
     if (!snapshot) return;
-    setDrafts(buildDrafts(snapshot));
-    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope, profileDraft), null, 2));
+    setDrafts(buildDrafts(snapshot, scope, profileDraft));
+    setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope), null, 2));
+    setFieldErrors({});
     setError("");
     setNotice("");
   }
 
   const fields = snapshot?.schema.fields || [];
   const visibleFields = useMemo(() => fields.filter((field) => categoryMatches(field, category) && matchesSettingSearch(field, query)), [fields, category, query]);
-  const dirtyCount = snapshot ? fields.filter((field) => fieldDirty(snapshot, drafts, field, scope, profileDraft)).length : 0;
+  const dirtyCount = snapshot ? fields.filter((field) => fieldDirty(snapshot, drafts, field, scope)).length : 0;
   const selectedCategory = categories.find((item) => item.id === category) || categories[0];
   const CategoryIcon = selectedCategory.icon;
 
@@ -130,8 +156,8 @@ export function SettingsCenter({
       <aside className="settings-center-nav">
         <div className="settings-center-title">
           <small>SETTINGS</small>
-          <h2>Settings Center</h2>
-          <p>{snapshot ? `${snapshot.reload_policy} reload / ${snapshot.active_profile || "no profile"}` : "Loading configuration"}</p>
+          <h2>Hot Config</h2>
+          <p>{snapshot ? `${effectLabel(snapshot.reload_policy)} / ${snapshot.active_profile || "default"}` : "Loading configuration"}</p>
         </div>
         <div className="settings-scope-card">
           <span>Scope</span>
@@ -153,7 +179,7 @@ export function SettingsCenter({
       <main className="settings-center-main">
         <header className="settings-center-header">
           <div>
-            <small>SETTINGS</small>
+            <small>HOT CONFIG</small>
             <h2>Manage models, permissions, memory, web access, and Agent behavior.</h2>
           </div>
           <div className="settings-center-actions">
@@ -172,18 +198,18 @@ export function SettingsCenter({
         <div className="settings-health-strip">
           <div><span>Fields</span><strong>{visibleFields.length}</strong></div>
           <div><span>Pending</span><strong>{dirtyCount}</strong></div>
-          <div><span>Profile</span><strong>{snapshot?.active_profile || "default"}</strong></div>
-          <div><span>Reload</span><strong>{snapshot?.reload_policy || "unknown"}</strong></div>
+          <div><span>Scope</span><strong>{scope}</strong></div>
+          <div><span>Effect</span><strong>{effectLabel(snapshot?.reload_policy || "hot")}</strong></div>
         </div>
+        {snapshot?.pending_effects?.length ? <div className="settings-pending">{snapshot.pending_effects.slice(0, 8).map((item) => <span key={item}>{item}</span>)}</div> : null}
         {error ? <div className="settings-error">{error}</div> : null}
         {notice ? <div className="settings-success">{notice}</div> : null}
-        {snapshot?.pending_effects?.length ? <div className="settings-pending">{snapshot.pending_effects.slice(0, 6).map((item) => <span key={item}>{item}</span>)}</div> : null}
 
         {category === "advanced" ? (
           <section className="settings-json-editor product">
             <div>
               <strong>Advanced JSON</strong>
-              <span>Project-level patch editor. Sensitive values are still handled by the existing config API.</span>
+              <span>Project-level patch editor. Prefer cards above for hot config changes.</span>
             </div>
             <textarea value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} />
             <button onClick={applyJson} disabled={saving} type="button"><Save size={14} /> Apply JSON</button>
@@ -198,30 +224,47 @@ export function SettingsCenter({
               </div>
             </div>
             <div className="settings-field-grid">
-            {visibleFields.map((field) => {
-              const dirty = snapshot ? fieldDirty(snapshot, drafts, field, scope, profileDraft) : false;
-              const secret = isSecretField(field);
-              return (
-                <article className={settingCardClass(field, dirty)} key={field.path}>
-                  <div>
-                    <strong>{fieldLabel(field.path)}</strong>
-                    <span>{field.description || "No description."}</span>
-                    <em>{field.reload_policy} / {snapshot?.source_map[field.path] || "default"}</em>
-                  </div>
-                  <div className="setting-card-control">
-                    {renderInput(field, drafts[field.path] || "", (value) => setDrafts((current) => ({ ...current, [field.path]: value })), Boolean(revealed[field.path]))}
-                    {secret ? (
-                      <button onClick={() => setRevealed((current) => ({ ...current, [field.path]: !current[field.path] }))} type="button">
-                        {revealed[field.path] ? <EyeOff size={14} /> : <Eye size={14} />}
-                        {revealed[field.path] ? "Hide" : "Show"}
-                      </button>
-                    ) : null}
-                    <small>{dirty ? "Changed" : "Synced"}</small>
-                  </div>
-                </article>
-              );
-            })}
-            {snapshot && !visibleFields.length ? <div className="settings-empty">No settings match this category or search.</div> : null}
+              {visibleFields.map((field) => {
+                const dirty = snapshot ? fieldDirty(snapshot, drafts, field, scope) : false;
+                const secret = isSecretField(field);
+                const disabled = scope === "session" && !field.session_override;
+                return (
+                  <article className={settingCardClass(field, dirty, disabled)} key={field.path}>
+                    <div className="setting-card-copy">
+                      <strong>{fieldLabel(field.path)}</strong>
+                      <span>{field.description || "No description."}</span>
+                      <code>{field.path}</code>
+                      <div className="setting-card-meta">
+                        <em>{effectLabel(field.reload_policy)}</em>
+                        <em>{snapshot?.source_map[field.path] || "default"}</em>
+                        <em>{dirty ? "Changed" : "Synced"}</em>
+                        {field.session_override ? <em>Session</em> : null}
+                      </div>
+                    </div>
+                    <div className="setting-card-control">
+                      {renderInput(field, drafts[field.path] || "", (value) => {
+                        setDrafts((current) => ({ ...current, [field.path]: value }));
+                        setFieldErrors((current) => ({ ...current, [field.path]: "" }));
+                      }, Boolean(revealed[field.path]), disabled)}
+                      <div className="setting-card-actions">
+                        {secret ? (
+                          <button onClick={() => setRevealed((current) => ({ ...current, [field.path]: !current[field.path] }))} type="button">
+                            {revealed[field.path] ? <EyeOff size={14} /> : <Eye size={14} />}
+                            {revealed[field.path] ? "Hide" : "Show"}
+                          </button>
+                        ) : null}
+                        {secret ? (
+                          <button onClick={() => navigator.clipboard.writeText(drafts[field.path] || "")} type="button">
+                            <Copy size={14} /> Copy
+                          </button>
+                        ) : null}
+                      </div>
+                      {disabled ? <small>Session override is not supported for this field.</small> : <small>{fieldErrors[field.path] || (dirty ? "Ready to apply" : "Synced")}</small>}
+                    </div>
+                  </article>
+                );
+              })}
+              {snapshot && !visibleFields.length ? <div className="settings-empty">No settings match this category or search.</div> : null}
             </div>
           </section>
         )}
@@ -256,24 +299,41 @@ function categoryMatches(field: ConfigField, category: SettingsCategory) {
   return false;
 }
 
-function renderInput(field: ConfigField, value: string, onChange: (value: string) => void, revealed = false) {
+function renderInput(field: ConfigField, value: string, onChange: (value: string) => void, revealed = false, disabled = false) {
   if (field.type === "boolean") {
     return (
-      <div className="setting-switch">
-        <button className={value !== "true" ? "active" : ""} onClick={() => onChange("false")} type="button">Off</button>
-        <button className={value === "true" ? "active" : ""} onClick={() => onChange("true")} type="button">On</button>
+      <div className="setting-switch" aria-disabled={disabled}>
+        <button className={value !== "true" ? "active" : ""} onClick={() => onChange("false")} disabled={disabled} type="button">Off</button>
+        <button className={value === "true" ? "active" : ""} onClick={() => onChange("true")} disabled={disabled} type="button">On</button>
       </div>
     );
   }
-  if (field.type === "array" || field.type === "object" || field.type.includes("null")) {
-    return <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} />;
+  if (field.options?.length) {
+    return (
+      <select value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
+        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    );
   }
-  return <input type={isSecretField(field) && !revealed ? "password" : field.type === "number" || field.type.startsWith("integer") ? "number" : "text"} value={value} onChange={(event) => onChange(event.target.value)} />;
+  if (field.type === "array" || field.type === "object" || field.type.includes("null")) {
+    return <textarea value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} rows={3} />;
+  }
+  return (
+    <input
+      type={isSecretField(field) && !revealed ? "password" : field.type === "number" || field.type.startsWith("integer") ? "number" : "text"}
+      min={field.minimum ?? undefined}
+      max={field.maximum ?? undefined}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
 }
 
-function settingCardClass(field: ConfigField, dirty: boolean) {
+function settingCardClass(field: ConfigField, dirty: boolean, disabled: boolean) {
   const classes = ["settings-product-field"];
   if (dirty) classes.push("dirty");
+  if (disabled) classes.push("disabled");
   if (field.type === "array" || field.type === "object" || field.type.includes("null")) classes.push("wide");
   if (isDangerField(field)) classes.push("danger");
   return classes.join(" ");
@@ -302,22 +362,23 @@ function isDangerField(field: ConfigField) {
   return /(shell|delete|reset|danger|unrestricted|approval|write|filesystem)/i.test(field.path);
 }
 
-function buildDrafts(snapshot: ConfigSnapshot) {
+function buildDrafts(snapshot: ConfigSnapshot, scope: SettingsScope, _profile: string) {
+  const source = readScopeConfig(snapshot, scope);
   const drafts: Record<string, string> = {};
   snapshot.schema.fields.forEach((field) => {
-    drafts[field.path] = stringify(readPath(readScopeConfig(snapshot, "project", snapshot.active_profile || ""), field.path));
+    drafts[field.path] = stringify(readPath(source, field.path));
   });
   return drafts;
 }
 
-function readScopeConfig(snapshot: ConfigSnapshot, scope: SettingsScope, profile: string) {
+function readScopeConfig(snapshot: ConfigSnapshot, scope: SettingsScope) {
   if (scope === "profile") return snapshot.profile_config || {};
   if (scope === "session") return snapshot.session_config || {};
-  return snapshot.settings;
+  return snapshot.project_config || snapshot.settings;
 }
 
-function fieldDirty(snapshot: ConfigSnapshot, drafts: Record<string, string>, field: ConfigField, _scope: SettingsScope, _profile: string) {
-  return stringify(readPath(snapshot.settings, field.path)) !== (drafts[field.path] || "");
+function fieldDirty(snapshot: ConfigSnapshot, drafts: Record<string, string>, field: ConfigField, scope: SettingsScope) {
+  return stringify(readPath(readScopeConfig(snapshot, scope), field.path)) !== (drafts[field.path] || "");
 }
 
 function readPath(source: Record<string, unknown>, path: string): unknown {
@@ -328,7 +389,7 @@ function stringify(value: unknown) {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   if (typeof value === "boolean" || typeof value === "number") return String(value);
-  return JSON.stringify(value);
+  return JSON.stringify(value, null, 2);
 }
 
 function parseDraft(value: string | undefined, type: string): unknown {
@@ -339,6 +400,21 @@ function parseDraft(value: string | undefined, type: string): unknown {
   if (type === "array") return text ? JSON.parse(text) : [];
   if (type === "object" || type.includes("null")) return text ? JSON.parse(text) : type.includes("null") ? null : {};
   return value || "";
+}
+
+function effectLabel(value: string) {
+  if (value === "next_turn") return "Next turn";
+  if (value === "rebuild_runtime") return "Rebuild runtime";
+  if (value === "restart_required") return "Restart required";
+  return "Hot";
+}
+
+function formatConfigError(error: unknown) {
+  const message = errorMessage(error);
+  if (message.includes("Config was changed by another writer") || message.includes("expected_hash")) {
+    return "Config changed somewhere else. Reload to merge before applying again.";
+  }
+  return message;
 }
 
 function errorMessage(error: unknown) {

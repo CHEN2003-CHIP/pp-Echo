@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Copy, Globe2, Play, RefreshCw, Search, Square, TestTube2, X } from "lucide-react";
+import { Bot, ChevronRight, Copy, Globe2, Play, RefreshCw, Search, Square, TestTube2, X } from "lucide-react";
 import { api, BotDetail, BotSummary } from "../../api";
 
 type DetailTab = "overview" | "events" | "sessions" | "trace" | "config" | "security" | "logs";
@@ -73,6 +73,16 @@ export function BotCenterPage() {
     setPublicUrl(payload.status.public_url || "");
   }
 
+  function openDetail(botId: string) {
+    setSelectedId(botId);
+    setTab("overview");
+  }
+
+  function closeDetail() {
+    setSelectedId("");
+    setDetail(null);
+  }
+
   async function action(botId: string, kind: "start" | "stop") {
     setBusy(`${kind}:${botId}`);
     setNotice("");
@@ -137,6 +147,7 @@ export function BotCenterPage() {
           <button onClick={() => refresh()} disabled={loading}><RefreshCw size={15} /> Refresh</button>
         </div>
       </div>
+
       <div className="bot-toolbar">
         <label className="bot-search">
           <Search size={14} />
@@ -148,30 +159,40 @@ export function BotCenterPage() {
           ))}
         </div>
       </div>
+
       {notice ? <div className="bot-notice">{notice}</div> : null}
-      <div className={detail ? "bot-workspace detail-open" : "bot-workspace"}>
+
+      <div className="bot-workspace">
         <div className="bot-card-list">
           {loading ? Array.from({ length: 6 }).map((_, index) => <div className="bot-card skeleton" key={index} />) : null}
           {!loading && filteredBots.map((bot) => (
-            <article key={bot.id} className={selectedId === bot.id ? "bot-card active" : "bot-card"} onClick={() => { setSelectedId(bot.id); setTab("overview"); }}>
+            <article key={bot.id} className={selectedId === bot.id ? "bot-card active" : "bot-card"} onClick={() => openDetail(bot.id)}>
               <div className="bot-card-top">
-                <span className={`bot-dot ${stateTone(bot)}`} />
-                <span className="bot-chip">{platformLabel(bot.platform)}</span>
-                <button aria-label="View details" type="button">•••</button>
+                <div className="bot-card-status">
+                  <span className={`bot-dot ${stateTone(bot)}`} />
+                  <span className="bot-chip">{platformLabel(bot.platform)}</span>
+                  <span className="bot-chip subtle">{bot.process_state || bot.bot_state || "idle"}</span>
+                </div>
+                <button aria-label="View details" type="button"><ChevronRight size={15} /></button>
               </div>
+
               <div className="bot-card-title">
-                <h3>{bot.name}</h3>
                 <span>{bot.type}</span>
+                <h3>{bot.name}</h3>
+                <small>{bot.status_text || bot.bot_state || "Ready"}</small>
               </div>
+
               <p>{bot.description || bot.status_text || "No description yet."}</p>
+
               <div className="bot-mini-status">
                 <span>{bot.desired_state || (bot.enabled ? "enabled" : "disabled")}</span>
                 <span>Agent: {bot.agent_state || bot.bot_state}</span>
                 <span>Ingress: {bot.ingress_state}</span>
-                <span>QQ: {bot.qq_state || (bot.configured ? "configured" : "not_configured")}</span>
+                <span>QQ: {bot.qq_state || (bot.configured ? "configured" : "not configured")}</span>
                 <span>Runs: {bot.still_running_count || 0}</span>
                 <span>Queue: {bot.queued_count || 0}</span>
               </div>
+
               <div className="bot-card-footer">
                 <small>{bot.last_event_at || bot.last_message_at || "No recent event"}</small>
                 <div className="bot-card-actions" onClick={(event) => event.stopPropagation()}>
@@ -181,6 +202,7 @@ export function BotCenterPage() {
                   <button onClick={() => action(bot.id, "stop")} disabled={busy === `stop:${bot.id}`}>
                     <Square size={13} /> Stop
                   </button>
+                  <button onClick={() => openDetail(bot.id)} type="button">Details</button>
                 </div>
               </div>
             </article>
@@ -188,40 +210,43 @@ export function BotCenterPage() {
           {!loading && bots.length === 0 ? <div className="bot-empty"><Bot size={22} /> No bots configured.</div> : null}
           {!loading && bots.length > 0 && filteredBots.length === 0 ? <div className="bot-empty"><Search size={22} /> No bots match this search.</div> : null}
         </div>
+
         {detail ? (
-          <aside className="bot-detail-panel">
-            <div className="bot-detail-head">
-              <div className="bot-title">
-                <span className="bot-avatar">{platformLabel(detail.status.platform)}</span>
-                <div>
-                  <h2>{detail.status.name}</h2>
-                  <p>{detail.status.platform} / {detail.status.type}</p>
+          <div className="bot-drawer-backdrop" onClick={closeDetail}>
+            <aside className="bot-detail-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="bot-detail-head">
+                <div className="bot-title">
+                  <span className="bot-avatar">{platformLabel(detail.status.platform)}</span>
+                  <div>
+                    <h2>{detail.status.name}</h2>
+                    <p>{detail.status.platform} / {detail.status.type}</p>
+                  </div>
                 </div>
+                <button className="icon-button" onClick={closeDetail} type="button" title="Close details"><X size={15} /></button>
               </div>
-              <button className="icon-button" onClick={() => { setSelectedId(""); setDetail(null); }} type="button" title="Close details"><X size={15} /></button>
-            </div>
-            <div className="bot-detail-actions">
-              <button onClick={() => action(detail.status.bot_id, "start")} disabled={Boolean(busy)}><Play size={15} /> Start</button>
-              <button onClick={() => action(detail.status.bot_id, "stop")} disabled={Boolean(busy)}><Square size={14} /> Stop</button>
-              <button onClick={() => loadDetail(detail.status.bot_id)} disabled={Boolean(busy)}><RefreshCw size={15} /> Reload</button>
-            </div>
-            <div className="bot-tabs">
-              {tabs.map((item) => (
-                <button key={item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>
-              ))}
-            </div>
-            <div className="bot-detail-scroll">
-              {tab === "overview" ? <Overview detail={detail} /> : null}
-              {tab === "events" ? <Events detail={detail} /> : null}
-              {tab === "sessions" ? <Sessions detail={detail} /> : null}
-              {tab === "trace" ? <Trace detail={detail} /> : null}
-              {tab === "config" ? (
-                <ConfigPanel detail={detail} publicUrl={publicUrl} setPublicUrl={setPublicUrl} onSavePublicUrl={savePublicUrl} onCopyWebhook={copyWebhook} onTestVerify={testVerify} busy={Boolean(busy)} />
-              ) : null}
-              {tab === "security" ? <Security detail={detail} /> : null}
-              {tab === "logs" ? <Logs detail={detail} /> : null}
-            </div>
-          </aside>
+              <div className="bot-detail-actions">
+                <button onClick={() => action(detail.status.bot_id, "start")} disabled={Boolean(busy)}><Play size={15} /> Start</button>
+                <button onClick={() => action(detail.status.bot_id, "stop")} disabled={Boolean(busy)}><Square size={14} /> Stop</button>
+                <button onClick={() => loadDetail(detail.status.bot_id)} disabled={Boolean(busy)}><RefreshCw size={15} /> Reload</button>
+              </div>
+              <div className="bot-tabs">
+                {tabs.map((item) => (
+                  <button key={item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>
+                ))}
+              </div>
+              <div className="bot-detail-scroll">
+                {tab === "overview" ? <Overview detail={detail} /> : null}
+                {tab === "events" ? <Events detail={detail} /> : null}
+                {tab === "sessions" ? <Sessions detail={detail} /> : null}
+                {tab === "trace" ? <Trace detail={detail} /> : null}
+                {tab === "config" ? (
+                  <ConfigPanel detail={detail} publicUrl={publicUrl} setPublicUrl={setPublicUrl} onSavePublicUrl={savePublicUrl} onCopyWebhook={copyWebhook} onTestVerify={testVerify} busy={Boolean(busy)} />
+                ) : null}
+                {tab === "security" ? <Security detail={detail} /> : null}
+                {tab === "logs" ? <Logs detail={detail} /> : null}
+              </div>
+            </aside>
+          </div>
         ) : null}
       </div>
     </section>
@@ -240,7 +265,7 @@ function Overview({ detail }: { detail: BotDetail }) {
       <Info label="Agent State" value={s.agent_state || s.bot_state} />
       <Info label="Bot State" value={s.bot_state} />
       <Info label="Ingress State" value={s.ingress_state} />
-      <Info label="QQ State" value={s.qq_state || (s.configured ? "configured" : "not_configured")} />
+      <Info label="QQ State" value={s.qq_state || (s.configured ? "configured" : "not configured")} />
       <Info label="Local URL" value={s.local_url || ""} />
       <Info label="Public URL" value={s.public_url || ""} />
       <Info label="Webhook URL" value={s.webhook_url || detail.webhook_url || ""} />

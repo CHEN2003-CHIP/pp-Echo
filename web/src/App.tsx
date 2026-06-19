@@ -31,7 +31,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceStatus, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
@@ -910,6 +910,11 @@ export function App() {
               notice={notice}
               inspectorOpen={inspectorOpen}
               setInspectorOpen={setInspectorOpen}
+              onWorkspaceChanged={() => refreshAll().catch(() => undefined)}
+              onModelChanged={() => {
+                refreshAll().catch(() => undefined);
+                if (activeSessionId) refreshSessionState(activeSessionId).catch(() => undefined);
+              }}
             />
           ) : activeView === "traceInspect" ? (
             <TraceInspectPage
@@ -1617,7 +1622,9 @@ function ChatWorkspace({
   activeEvents,
   notice,
   inspectorOpen,
-  setInspectorOpen
+  setInspectorOpen,
+  onWorkspaceChanged,
+  onModelChanged
 }: {
   transcriptRef: RefObject<HTMLElement>;
   transcript: TranscriptItem[];
@@ -1652,6 +1659,8 @@ function ChatWorkspace({
   notice: Notice | null;
   inspectorOpen: boolean;
   setInspectorOpen: (value: boolean | ((current: boolean) => boolean)) => void;
+  onWorkspaceChanged: () => void;
+  onModelChanged: () => void;
 }) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState("");
@@ -1846,18 +1855,246 @@ function ChatWorkspace({
             <FolderOpen size={14} />
             {workspaceStatus?.name || workspace.active.name || "workspace"}
           </span>
-          <span>
-            <GitBranch size={14} />
-            {workspaceStatus?.git_branch || "no branch"}
-          </span>
-          <span>
-            <Monitor size={14} />
-            {activeModel || (activeSnapshot?.history?.source === "stored" ? "stored session" : "model pending")}
-          </span>
+          <ComposerGitBranchButton workspaceStatus={workspaceStatus} onChanged={onWorkspaceChanged} />
+          <ComposerModelButton activeSessionId={activeSessionId} activeModel={activeModel} onChanged={onModelChanged} />
         </div>
       </section>
     </div>
   );
+}
+
+function ComposerGitBranchButton({
+  workspaceStatus,
+  onChanged
+}: {
+  workspaceStatus: WorkspaceStatus | null;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [git, setGit] = useState<WorkspaceGitStatus | null>(null);
+  const [query, setQuery] = useState("");
+  const [newBranch, setNewBranch] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    loadGit();
+  }, [open]);
+
+  async function loadGit() {
+    setError("");
+    try {
+      setGit(await api.workspaceGit());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function switchBranch(branch: string) {
+    if (git?.dirty_count && !window.confirm("Workspace has local changes. Git switch will keep them, but conflicts can still block the switch. Continue?")) return;
+    setBusy(branch);
+    setError("");
+    try {
+      const next = await api.switchGitBranch(branch);
+      setGit(next);
+      onChanged();
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function createBranch() {
+    const branch = newBranch.trim();
+    if (!branch) return;
+    setBusy("create");
+    setError("");
+    try {
+      const next = await api.createGitBranch(branch);
+      setGit(next);
+      setNewBranch("");
+      onChanged();
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const branches = (git?.branches || []).filter((branch) => branch.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const label = git?.current_branch || workspaceStatus?.git_branch || "no branch";
+  const dirty = git?.dirty_count ?? workspaceStatus?.git_dirty_count ?? 0;
+
+  return (
+    <div className="composer-popover-wrap">
+      <button className="composer-status-button" onClick={() => setOpen((current) => !current)} type="button">
+        <GitBranch size={14} />
+        <span>{label}</span>
+        {dirty ? <em>{dirty}</em> : null}
+      </button>
+      {open ? (
+        <div className="composer-popover branch-popover">
+          <label className="composer-popover-search">
+            <Search size={14} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search branches" />
+          </label>
+          {error ? <div className="composer-popover-error">{error}</div> : null}
+          {!git?.is_repo ? <div className="composer-popover-empty">This workspace is not a git repository.</div> : null}
+          {git?.is_repo ? (
+            <>
+              <div className="composer-popover-section">Branches</div>
+              <div className="composer-popover-list">
+                {branches.map((branch) => (
+                  <button key={branch.name} onClick={() => switchBranch(branch.name)} disabled={Boolean(busy)} type="button">
+                    <GitBranch size={14} />
+                    <span>
+                      <strong>{branch.name}</strong>
+                      <small>{branch.upstream || (git.dirty_count ? `${git.dirty_count} changed files` : "clean")}</small>
+                    </span>
+                    {branch.current ? <Check size={15} /> : null}
+                  </button>
+                ))}
+              </div>
+              <div className="composer-popover-create">
+                <input value={newBranch} onChange={(event) => setNewBranch(event.target.value)} placeholder="Create new branch" />
+                <button onClick={createBranch} disabled={!newBranch.trim() || Boolean(busy)} type="button">
+                  <Plus size={14} /> Create
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ComposerModelButton({
+  activeSessionId,
+  activeModel,
+  onChanged
+}: {
+  activeSessionId: string;
+  activeModel: string;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    api.config(activeSessionId || undefined).then(setSnapshot).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [open, activeSessionId]);
+
+  const models = useMemo(() => modelCandidates(snapshot, activeModel), [snapshot, activeModel]);
+  const filteredModels = models.filter((model) => model.toLowerCase().includes(query.trim().toLowerCase()));
+  const effortField = snapshot?.schema.fields.find((field) => /reasoning|effort|thinking/i.test(field.path) && field.options?.length);
+
+  async function chooseModel(model: string) {
+    setBusy(model);
+    setError("");
+    try {
+      if (activeSessionId) {
+        await api.setSessionModel(activeSessionId, model);
+      } else {
+        const baseHash = snapshot?.config_hash;
+        await api.configSet("model.model", model, baseHash);
+      }
+      onChanged();
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function chooseEffort(value: string) {
+    if (!effortField || !snapshot) return;
+    setBusy(value);
+    setError("");
+    try {
+      if (activeSessionId && effortField.session_override) {
+        await api.sessionConfigSet(activeSessionId, effortField.path, value);
+      } else {
+        await api.configSet(effortField.path, value, snapshot.config_hash);
+      }
+      onChanged();
+      setSnapshot(await api.config(activeSessionId || undefined));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="composer-popover-wrap">
+      <button className="composer-status-button" onClick={() => setOpen((current) => !current)} type="button">
+        <Monitor size={14} />
+        <span>{activeModel || "model pending"}</span>
+      </button>
+      {open ? (
+        <div className="composer-popover model-popover">
+          <label className="composer-popover-search">
+            <Search size={14} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search models" />
+          </label>
+          {error ? <div className="composer-popover-error">{error}</div> : null}
+          {effortField?.options?.length ? (
+            <>
+              <div className="composer-popover-section">Reasoning</div>
+              <div className="composer-segment-row">
+                {effortField.options.map((option) => (
+                  <button key={option} onClick={() => chooseEffort(option)} disabled={Boolean(busy)} type="button">{option}</button>
+                ))}
+              </div>
+            </>
+          ) : null}
+          <div className="composer-popover-section">Models</div>
+          <div className="composer-popover-list">
+            {filteredModels.map((model) => (
+              <button key={model} onClick={() => chooseModel(model)} disabled={Boolean(busy)} type="button">
+                <Monitor size={14} />
+                <span>
+                  <strong>{model}</strong>
+                  <small>{modelProviderLabel(model)}</small>
+                </span>
+                {model === activeModel ? <Check size={15} /> : null}
+              </button>
+            ))}
+            {!filteredModels.length ? <div className="composer-popover-empty">No models match this search.</div> : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function modelCandidates(snapshot: ConfigSnapshot | null, activeModel: string) {
+  const values = new Set<string>();
+  const modelField = snapshot?.schema.fields.find((field) => field.path === "model.model");
+  modelField?.options?.forEach((option) => values.add(option));
+  const configured = snapshot ? readConfigPath(snapshot.effective_config, "model.model") : "";
+  if (typeof configured === "string" && configured.trim()) values.add(configured.trim());
+  if (activeModel.trim()) values.add(activeModel.trim());
+  return Array.from(values).filter(Boolean);
+}
+
+function modelProviderLabel(model: string) {
+  const lower = model.toLowerCase();
+  if (lower.includes("qwen")) return "Qwen";
+  if (lower.includes("deepseek")) return "DeepSeek";
+  if (lower.includes("gpt") || lower.includes("o3") || lower.includes("o4")) return "OpenAI";
+  if (lower.includes("claude")) return "Anthropic";
+  return "Model";
 }
 
 function ConversationTurnRail({
@@ -2403,6 +2640,7 @@ function MemoryStat({ label, value }: { label: string; value: string }) {
 }
 
 type CapabilityTab = "mcp" | "skills" | "plugins";
+type CapabilityDrawerMode = "none" | "edit" | "settings";
 
 function CapabilityWorkbench({
   initialTab,
@@ -2419,6 +2657,7 @@ function CapabilityWorkbench({
   const [selectedName, setSelectedName] = useState("");
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({});
+  const [drawerMode, setDrawerMode] = useState<CapabilityDrawerMode>("none");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -2474,6 +2713,7 @@ function CapabilityWorkbench({
       }
       setInventory(nextInventory);
       setSelectedName(String(payload.name || ""));
+      setDrawerMode("edit");
       setNotice("Saved.");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2487,6 +2727,7 @@ function CapabilityWorkbench({
       const nextInventory = await api.deleteMcpServer(String(selected.name));
       setInventory(nextInventory);
       setSelectedName("");
+      setDrawerMode("none");
       setNotice("Deleted.");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2496,6 +2737,7 @@ function CapabilityWorkbench({
   function newItem() {
     setSelectedName("");
     setDraft(capabilityItemToDraft(null, tab));
+    setDrawerMode("edit");
   }
 
   return (
@@ -2527,25 +2769,18 @@ function CapabilityWorkbench({
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${tab}`} />
         </label>
         <button onClick={() => reload()}><RefreshCw size={14} /> Reload</button>
+        <button onClick={() => setDrawerMode("settings")}><Settings size={14} /> Settings</button>
         <button onClick={newItem}><Plus size={14} /> New</button>
       </div>
 
       <div className="capability-layout">
-        <aside className="capability-sidebar">
-          <div className="capability-settings-card">
-            <strong>{tab.toUpperCase()} settings</strong>
-            {renderCapabilitySettings(settingsDraft, setSettingsDraft, tab)}
-            <button onClick={applySettings}>Apply settings</button>
-          </div>
-        </aside>
-
         <div className="capability-grid">
           {filteredItems.map((item) => (
             <button
               key={String(item.name)}
               className={String(item.name) === String(selected?.name || "") ? "capability-card active" : "capability-card"}
               title={String(item.description || item.path || item.resolved_transport || "")}
-              onClick={() => setSelectedName(String(item.name || ""))}
+              onClick={() => { setSelectedName(String(item.name || "")); setDrawerMode("edit"); }}
               type="button"
             >
               <div className="capability-card-top">
@@ -2563,20 +2798,47 @@ function CapabilityWorkbench({
           {items.length > 0 && filteredItems.length === 0 ? <div className="capability-empty">No {tab} resources match this search.</div> : null}
         </div>
 
-        <div className="capability-editor">
-          <div className="capability-editor-head">
-            <div>
-              <small>{selected ? "EDIT" : "CREATE"}</small>
-              <h3>{selected ? String(selected.name) : `New ${tab.slice(0, -1)}`}</h3>
-            </div>
-            <div className="capability-editor-actions">
-              {tab === "mcp" && selected ? <button onClick={deleteMcp}>Delete</button> : null}
-              <button onClick={() => setDraft(capabilityItemToDraft(selected, tab))}>Revert</button>
-              <button className="primary" onClick={saveItem}>Apply</button>
-            </div>
+        {drawerMode !== "none" ? (
+          <div className="capability-drawer-backdrop" onClick={() => setDrawerMode("none")}>
+            <aside className="capability-drawer" onClick={(event) => event.stopPropagation()}>
+              {drawerMode === "settings" ? (
+                <>
+                  <div className="capability-editor-head">
+                    <div>
+                      <small>SETTINGS</small>
+                      <h3>{tab.toUpperCase()} settings</h3>
+                      <p>{snapshot?.pending_effects?.slice(0, 3).join(", ") || `${snapshot?.reload_policy || "hot"} reload policy`}</p>
+                    </div>
+                    <div className="capability-editor-actions">
+                      <button onClick={() => setSettingsDraft(capabilitySettingsToDraft(inventory!, tab))} disabled={!inventory}>Revert</button>
+                      <button className="primary" onClick={applySettings}>Apply</button>
+                      <button onClick={() => setDrawerMode("none")}><X size={14} /></button>
+                    </div>
+                  </div>
+                  <div className="capability-settings-card drawer">
+                    {renderCapabilitySettings(settingsDraft, setSettingsDraft, tab)}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="capability-editor-head">
+                    <div>
+                      <small>{selected ? "EDIT" : "CREATE"}</small>
+                      <h3>{selected ? String(selected.name) : `New ${tab.slice(0, -1)}`}</h3>
+                    </div>
+                    <div className="capability-editor-actions">
+                      {tab === "mcp" && selected ? <button onClick={deleteMcp}>Delete</button> : null}
+                      <button onClick={() => setDraft(capabilityItemToDraft(selected, tab))}>Revert</button>
+                      <button className="primary" onClick={saveItem}>Apply</button>
+                      <button onClick={() => setDrawerMode("none")}><X size={14} /></button>
+                    </div>
+                  </div>
+                  {renderCapabilityEditor(tab, draft, setDraft)}
+                </>
+              )}
+            </aside>
           </div>
-          {renderCapabilityEditor(tab, draft, setDraft)}
-        </div>
+        ) : null}
       </div>
     </section>
   );

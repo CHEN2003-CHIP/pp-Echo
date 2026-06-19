@@ -64,6 +64,46 @@ def test_web_api_workspace_status_includes_git_branch(tmp_path: Path) -> None:
     assert response.json()["git_branch"] == "feature/config-ui"
 
 
+def test_web_api_workspace_git_status_switch_and_create_branch(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=workspace, check=True)
+    (workspace / "README.md").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=workspace, check=True)
+    subprocess.run(["git", "switch", "-c", "feature/existing"], cwd=workspace, check=True)
+    subprocess.run(["git", "switch", "main"], cwd=workspace, check=True)
+    client = TestClient(_app(tmp_path))
+
+    status = client.get("/api/workspace/git")
+    switched = client.post("/api/workspace/git/switch", json={"branch": "feature/existing"})
+    created = client.post("/api/workspace/git/branches", json={"branch": "feature/new"})
+
+    assert status.status_code == 200
+    assert status.json()["is_repo"] is True
+    assert {branch["name"] for branch in status.json()["branches"]} >= {"main", "feature/existing"}
+    assert switched.status_code == 200
+    assert switched.json()["current_branch"] == "feature/existing"
+    assert created.status_code == 200
+    assert created.json()["current_branch"] == "feature/new"
+
+
+def test_web_api_workspace_git_status_non_repo(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    client = TestClient(_app(tmp_path))
+
+    response = client.get("/api/workspace/git")
+
+    assert response.status_code == 200
+    assert response.json()["is_repo"] is False
+    assert response.json()["branches"] == []
+
+
 def test_web_api_prompt_endpoint(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

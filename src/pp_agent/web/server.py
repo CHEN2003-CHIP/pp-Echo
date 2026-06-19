@@ -43,6 +43,14 @@ class OpenWorkspaceRequest(BaseModel):
     confirmed: bool = False
 
 
+class GitSwitchRequest(BaseModel):
+    branch: str
+
+
+class GitCreateBranchRequest(BaseModel):
+    branch: str
+
+
 def create_app(
     workspace: Path,
     *,
@@ -121,11 +129,40 @@ def create_app(
     @app.get("/api/workspace/status")
     def workspace_status() -> dict:
         workspace = active_workspace()
+        git = _git_status(workspace)
         return {
             "path": str(workspace),
             "name": workspace.name or str(workspace),
-            "git_branch": _git_branch(workspace),
+            "git_branch": git.get("current_branch") or _git_branch(workspace),
+            "git_dirty_count": git.get("dirty_count", 0),
         }
+
+    @app.get("/api/workspace/git")
+    def workspace_git() -> dict:
+        return _git_status(active_workspace())
+
+    @app.post("/api/workspace/git/switch")
+    def workspace_git_switch(request: GitSwitchRequest) -> dict:
+        branch = request.branch.strip()
+        if not branch:
+            raise HTTPException(status_code=400, detail="branch is required")
+        try:
+            _git_run(active_workspace(), ["git", "switch", branch], timeout=8, raise_on_error=True)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _git_status(active_workspace())
+
+    @app.post("/api/workspace/git/branches")
+    def workspace_git_create_branch(request: GitCreateBranchRequest) -> dict:
+        branch = request.branch.strip()
+        if not branch:
+            raise HTTPException(status_code=400, detail="branch is required")
+        try:
+            _validate_git_branch_name(active_workspace(), branch)
+            _git_run(active_workspace(), ["git", "switch", "-c", branch], timeout=8, raise_on_error=True)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _git_status(active_workspace())
 
     @app.get("/api/workspaces")
     def workspaces() -> dict:
@@ -376,3 +413,104 @@ def _git_branch(workspace: Path) -> str:
         return f"detached:{commit}" if commit else ""
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def _git_run(
+    workspace: Path,
+    args: list[str],
+    *,
+    timeout: int = 3,
+    raise_on_error: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            args,
+            cwd=workspace,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        if raise_on_error:
+            raise RuntimeError(str(exc)) from exc
+        return subprocess.CompletedProcess(args, 1, "", str(exc))
+    if raise_on_error and result.returncode != 0:
+        message = (result.stderr or result.stdout or "git command failed").strip()
+        raise RuntimeError(message)
+    return result
+
+
+def _git_status(workspace: Path) -> dict:
+    root = _git_run(workspace, ["git", "rev-parse", "--show-toplevel"])
+    if root.returncode != 0:
+        return {
+            "is_repo": False,
+            "current_branch": "",
+            "branches": [],
+            "dirty_count": 0,
+            "untracked_count": 0,
+            "ahead": 0,
+            "behind": 0,
+            "error": (root.stderr or "").strip(),
+        }
+
+    current_branch = _git_branch(workspace)
+    branch_result = _git_run(workspace, ["git", "branch", "--format=%(refname:short)|%(HEAD)|%(upstream:short)"])
+    branches = []
+    for line in branch_result.stdout.splitlines():
+        name, marker, upstream = (line.split("|", 2) + ["", ""])[:3]
+        if not name.strip():
+            continue
+        branches.append({"name": name.strip(), "current": marker.strip() == "*", "upstream": upstream.strip()})
+
+    status_result = _git_run(workspace, ["git", "status", "--porcelain=v1", "--branch"])
+    dirty_count = 0
+    untracked_count = 0
+    ahead = 0
+    behind = 0
+    for line in status_result.stdout.splitlines():
+        if line.startswith("##"):
+            ahead, behind = _parse_ahead_behind(line)
+            continue
+        if not line:
+            continue
+        dirty_count += 1
+        if line.startswith("??"):
+            untracked_count += 1
+
+    return {
+        "is_repo": True,
+        "current_branch": current_branch,
+        "branches": branches,
+        "dirty_count": dirty_count,
+        "untracked_count": untracked_count,
+        "ahead": ahead,
+        "behind": behind,
+        "error": "",
+    }
+
+
+def _validate_git_branch_name(workspace: Path, branch: str) -> None:
+    result = _git_run(workspace, ["git", "check-ref-format", "--branch", branch], timeout=3)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Invalid branch name").strip())
+
+
+def _parse_ahead_behind(line: str) -> tuple[int, int]:
+    ahead = 0
+    behind = 0
+    for part in line.replace("[", ",").replace("]", ",").split(","):
+        text = part.strip()
+        if text.startswith("ahead "):
+            ahead = _safe_int(text.removeprefix("ahead "))
+        elif text.startswith("behind "):
+            behind = _safe_int(text.removeprefix("behind "))
+    return ahead, behind
+
+
+def _safe_int(value: str) -> int:
+    try:
+        return int(value.strip())
+    except ValueError:
+        return 0

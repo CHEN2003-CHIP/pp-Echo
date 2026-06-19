@@ -152,6 +152,24 @@ export type WorkspaceStatus = {
   path: string;
   name: string;
   git_branch?: string;
+  git_dirty_count?: number;
+};
+
+export type WorkspaceGitBranch = {
+  name: string;
+  current?: boolean;
+  upstream?: string;
+};
+
+export type WorkspaceGitStatus = {
+  is_repo: boolean;
+  current_branch: string;
+  branches: WorkspaceGitBranch[];
+  dirty_count: number;
+  untracked_count: number;
+  ahead?: number;
+  behind?: number;
+  error?: string;
 };
 
 export type RuntimeDoctorReport = {
@@ -647,6 +665,17 @@ export const api = {
   health: () => request<{ ok: boolean; workspace: string }>("/api/health"),
   workspace: () => request<{ path: string; name: string }>("/api/workspace"),
   workspaceStatus: () => request<WorkspaceStatus>("/api/workspace/status"),
+  workspaceGit: () => request<WorkspaceGitStatus>("/api/workspace/git"),
+  switchGitBranch: (branch: string) =>
+    request<WorkspaceGitStatus>("/api/workspace/git/switch", {
+      method: "POST",
+      body: JSON.stringify({ branch })
+    }),
+  createGitBranch: (branch: string) =>
+    request<WorkspaceGitStatus>("/api/workspace/git/branches", {
+      method: "POST",
+      body: JSON.stringify({ branch })
+    }),
   onboardingStatus: () => request<OnboardingStatus>("/api/onboarding/status"),
   onboardingCheckModel: () => request<OnboardingCheck>("/api/onboarding/check-model", { method: "POST" }),
   workspaces: () => request<WorkspacesState>("/api/workspaces"),
