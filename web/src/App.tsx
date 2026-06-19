@@ -37,7 +37,6 @@ import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
 import { AttachmentPanel } from "./features/attachments/AttachmentPanel";
 import { BotCenterPage } from "./features/bots/BotCenterPage";
-import { ResourceCenterPage } from "./features/resources/ResourceCenterPage";
 import { SettingsCenter } from "./features/settings/SettingsCenter";
 import { ActivityCard } from "./features/activity/ActivityCard";
 import { ActivityDetailsPanel } from "./features/activity/ActivityDetailsPanel";
@@ -58,7 +57,6 @@ type ViewKey =
   | "model"
   | "logs"
   | "attachments"
-  | "resources"
   | "bots"
   | "startupGuide"
   | "traceInspect"
@@ -151,7 +149,6 @@ const navItems: Array<{
   { view: "model", label: "模型", icon: Monitor, description: "模型与环境" },
   { view: "logs", label: "日志", icon: FileText, description: "时间线与日志" },
   { view: "attachments", label: "附件", icon: Paperclip, description: "上传文件、检索、导入与记忆写入" },
-  { view: "resources", label: "Resources", icon: Boxes, description: "Resource Center for tools, bots, memory, and integrations" },
   { view: "bots", label: "Bots", icon: Bot, description: "Bot Gateway and external message entry points" },
   { view: "traceInspect", label: "TraceInspect", icon: Activity, description: "Agent Trace 审计与回放" },
   { view: "usage", label: "用量", icon: Database, description: "运行统计" },
@@ -163,7 +160,7 @@ const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "对话", views: ["chat", "history", "group", "search"] },
   { title: "执行", views: ["workspace", "tasks", "board", "channels"] },
   { title: "扩展", views: ["plugins", "memory", "model"] },
-  { title: "监控", views: ["logs", "resources", "attachments", "bots", "traceInspect", "usage", "skills", "users"] }
+  { title: "监控", views: ["logs", "attachments", "bots", "traceInspect", "usage", "skills", "users"] }
 ];
 
 const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
@@ -928,15 +925,6 @@ export function App() {
               onDelete={deleteAttachment}
               onUpload={uploadAttachment}
             />
-          ) : activeView === "resources" ? (
-            <ResourceCenterPage
-              activeSessionId={activeSessionId}
-              workspaceStatus={workspaceStatus}
-              attachments={activeSessionId ? attachments[activeSessionId] || [] : []}
-              onOpenBots={() => setActiveView("bots")}
-              onOpenCapabilities={(kind) => setActiveView(kind === "mcp" ? "channels" : kind === "skills" ? "skills" : "plugins")}
-              onOpenAttachments={() => setActiveView("attachments")}
-            />
           ) : activeView === "bots" ? (
             <BotCenterPage />
           ) : activeView === "logs" ? (
@@ -958,7 +946,7 @@ export function App() {
             <SettingsCenter
               sessionId={activeSessionId}
               initialCategory={settingsFocus}
-              onOpenResources={() => setActiveView("resources")}
+              onOpenCapabilities={() => setActiveView("channels")}
               onSaved={() => {
                 refreshAll().catch(() => undefined);
                 if (activeSessionId) refreshSessionState(activeSessionId).catch(() => undefined);
@@ -2433,7 +2421,9 @@ function CapabilityWorkbench({
   const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
   const items = capabilityItems(inventory, tab);
+  const filteredItems = items.filter((item) => capabilityMatchesQuery(item, query));
   const selected = selectedName ? items.find((item) => String(item.name || "") === selectedName) : undefined;
 
   async function reload() {
@@ -2492,6 +2482,7 @@ function CapabilityWorkbench({
 
   async function deleteMcp() {
     if (tab !== "mcp" || !selected) return;
+    if (!window.confirm(`Delete MCP server "${String(selected.name)}"? This removes the server from workspace capability configuration.`)) return;
     try {
       const nextInventory = await api.deleteMcpServer(String(selected.name));
       setInventory(nextInventory);
@@ -2530,6 +2521,15 @@ function CapabilityWorkbench({
       {error ? <p className="settings-error">{error}</p> : null}
       {notice ? <p className="settings-success">{notice}</p> : null}
 
+      <div className="capability-toolbar">
+        <label className="capability-search">
+          <Search size={14} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${tab}`} />
+        </label>
+        <button onClick={() => reload()}><RefreshCw size={14} /> Reload</button>
+        <button onClick={newItem}><Plus size={14} /> New</button>
+      </div>
+
       <div className="capability-layout">
         <aside className="capability-sidebar">
           <div className="capability-settings-card">
@@ -2537,26 +2537,31 @@ function CapabilityWorkbench({
             {renderCapabilitySettings(settingsDraft, setSettingsDraft, tab)}
             <button onClick={applySettings}>Apply settings</button>
           </div>
-          <div className="capability-list-head">
-            <span>{items.length} items</span>
-            <button onClick={newItem}>
-              <Plus size={14} />
-              New
-            </button>
-          </div>
-          <div className="capability-list">
-            {items.map((item) => (
-              <button
-                key={String(item.name)}
-                className={String(item.name) === String(selected?.name || "") ? "capability-row active compact" : "capability-row compact"}
-                title={String(item.description || item.path || item.resolved_transport || "")}
-                onClick={() => setSelectedName(String(item.name || ""))}
-              >
-                <strong>{String(item.name || "unnamed")}</strong>
-              </button>
-            ))}
-          </div>
         </aside>
+
+        <div className="capability-grid">
+          {filteredItems.map((item) => (
+            <button
+              key={String(item.name)}
+              className={String(item.name) === String(selected?.name || "") ? "capability-card active" : "capability-card"}
+              title={String(item.description || item.path || item.resolved_transport || "")}
+              onClick={() => setSelectedName(String(item.name || ""))}
+              type="button"
+            >
+              <div className="capability-card-top">
+                <span>{tab.toUpperCase()}</span>
+                <em>{capabilityStatus(item, tab)}</em>
+              </div>
+              <strong>{String(item.name || "unnamed")}</strong>
+              <p>{String(item.description || item.path || item.entrypoint || item.command || "No description yet.")}</p>
+              <div className="capability-card-meta">
+                {capabilityMeta(item, tab).map((meta) => <span key={meta}>{meta}</span>)}
+              </div>
+            </button>
+          ))}
+          {items.length === 0 ? <div className="capability-empty">No {tab} resources configured yet.</div> : null}
+          {items.length > 0 && filteredItems.length === 0 ? <div className="capability-empty">No {tab} resources match this search.</div> : null}
+        </div>
 
         <div className="capability-editor">
           <div className="capability-editor-head">
@@ -2581,6 +2586,49 @@ function capabilityItems(inventory: CapabilityInventory | null, tab: CapabilityT
   if (!inventory) return [];
   if (tab === "mcp") return inventory.mcp.servers;
   return inventory[tab].items;
+}
+
+function capabilityMatchesQuery(item: Record<string, unknown>, query: string) {
+  const text = query.trim().toLowerCase();
+  if (!text) return true;
+  return [
+    item.name,
+    item.description,
+    item.path,
+    item.entrypoint,
+    item.command,
+    item.url,
+    item.transport,
+    item.protocol
+  ].map((value) => String(value || "")).join(" ").toLowerCase().includes(text);
+}
+
+function capabilityStatus(item: Record<string, unknown>, tab: CapabilityTab) {
+  if (item.enabled === false) return "disabled";
+  if (tab === "mcp") return String(item.resolved_transport || item.transport || "server");
+  if (tab === "skills") return String(item.source || "skill");
+  return String(item.entrypoint ? "configured" : "plugin");
+}
+
+function capabilityMeta(item: Record<string, unknown>, tab: CapabilityTab) {
+  if (tab === "mcp") {
+    return [
+      String(item.transport || item.resolved_transport || "auto"),
+      String(item.protocol || "auto"),
+      String(item.url || item.command || "no endpoint"),
+      item.timeout_seconds ? `${item.timeout_seconds}s` : ""
+    ].filter(Boolean).slice(0, 4);
+  }
+  if (tab === "skills") {
+    return [
+      String(item.source || item.root || "workspace"),
+      String(item.path || "inline"),
+    ].filter(Boolean).slice(0, 3);
+  }
+  return [
+    String(item.entrypoint || "no entrypoint"),
+    Array.isArray(item.provides) ? `${item.provides.length} provides` : ""
+  ].filter(Boolean);
 }
 
 function capabilitySettingsToDraft(inventory: CapabilityInventory, tab: CapabilityTab): Record<string, string> {

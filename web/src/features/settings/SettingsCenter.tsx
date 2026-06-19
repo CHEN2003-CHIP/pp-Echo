@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Brain, Database, KeyRound, RefreshCw, RotateCcw, Save, Settings, ShieldCheck, SlidersHorizontal, Wrench } from "lucide-react";
+import { Bot, Brain, Database, Eye, EyeOff, KeyRound, RefreshCw, RotateCcw, Save, Search, Settings, ShieldCheck, SlidersHorizontal, Wrench } from "lucide-react";
 import { api, type ConfigField, type ConfigSnapshot } from "../../api";
 
 type SettingsCategory = "general" | "providers" | "tools" | "agent" | "resources" | "memory" | "security" | "advanced";
@@ -10,7 +10,7 @@ const categories: Array<{ id: SettingsCategory; label: string; description: stri
   { id: "providers", label: "Models & Providers", description: "Model, provider, and endpoint configuration.", icon: KeyRound },
   { id: "tools", label: "Tools & Capabilities", description: "Tool policy, built-in capabilities, and approvals.", icon: Wrench },
   { id: "agent", label: "Agent Behavior", description: "Planning, subagents, checkpoints, and compaction.", icon: Brain },
-  { id: "resources", label: "Resources", description: "MCP, skills, plugins, and bot gateway settings.", icon: Bot },
+  { id: "resources", label: "Integrations", description: "MCP, skills, plugins, and bot gateway settings.", icon: Bot },
   { id: "memory", label: "Memory & Learning", description: "Memory files, search, learning, and storage.", icon: Database },
   { id: "security", label: "Security", description: "External access, shell risk, and approval safeguards.", icon: ShieldCheck },
   { id: "advanced", label: "Advanced", description: "Raw JSON patching and diagnostics.", icon: SlidersHorizontal }
@@ -20,12 +20,12 @@ export function SettingsCenter({
   sessionId,
   initialCategory = "general",
   onSaved,
-  onOpenResources
+  onOpenCapabilities
 }: {
   sessionId?: string;
   initialCategory?: string;
   onSaved?: () => void;
-  onOpenResources?: () => void;
+  onOpenCapabilities?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
   const [category, setCategory] = useState<SettingsCategory>(normalizeCategory(initialCategory));
@@ -36,6 +36,8 @@ export function SettingsCenter({
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     load().catch((err) => setError(errorMessage(err)));
@@ -62,7 +64,7 @@ export function SettingsCenter({
 
   async function applyChanges() {
     if (!snapshot) return;
-    const dirty = visibleFields.filter((field) => fieldDirty(snapshot, drafts, field, scope, profileDraft));
+    const dirty = fields.filter((field) => fieldDirty(snapshot, drafts, field, scope, profileDraft));
     if (!dirty.length) return;
     if (scope === "session" && !sessionId) {
       setError("Open a session before applying session overrides.");
@@ -118,8 +120,10 @@ export function SettingsCenter({
   }
 
   const fields = snapshot?.schema.fields || [];
-  const visibleFields = useMemo(() => fields.filter((field) => categoryMatches(field, category)), [fields, category]);
+  const visibleFields = useMemo(() => fields.filter((field) => categoryMatches(field, category) && matchesSettingSearch(field, query)), [fields, category, query]);
   const dirtyCount = snapshot ? fields.filter((field) => fieldDirty(snapshot, drafts, field, scope, profileDraft)).length : 0;
+  const selectedCategory = categories.find((item) => item.id === category) || categories[0];
+  const CategoryIcon = selectedCategory.icon;
 
   return (
     <section className="settings-center-page">
@@ -149,14 +153,21 @@ export function SettingsCenter({
       <main className="settings-center-main">
         <header className="settings-center-header">
           <div>
-            <small>{category.toUpperCase()}</small>
-            <h2>{categories.find((item) => item.id === category)?.description}</h2>
+            <small>SETTINGS</small>
+            <h2>Manage models, permissions, memory, web access, and Agent behavior.</h2>
           </div>
           <div className="settings-center-actions">
-            {category === "resources" ? <button onClick={onOpenResources} type="button">Open Resource Center</button> : null}
+            {category === "resources" ? <button onClick={onOpenCapabilities} type="button">Open Capability Workbench</button> : null}
             <button onClick={() => load()} disabled={saving} type="button"><RefreshCw size={14} /> Reload</button>
           </div>
         </header>
+
+        <div className="settings-toolbar">
+          <label className="settings-search">
+            <Search size={14} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search settings" />
+          </label>
+        </div>
 
         <div className="settings-health-strip">
           <div><span>Fields</span><strong>{visibleFields.length}</strong></div>
@@ -178,22 +189,41 @@ export function SettingsCenter({
             <button onClick={applyJson} disabled={saving} type="button"><Save size={14} /> Apply JSON</button>
           </section>
         ) : (
-          <div className="settings-field-grid">
+          <section className="settings-group">
+            <div className="settings-group-head">
+              <CategoryIcon size={16} />
+              <div>
+                <h3>{selectedCategory.label}</h3>
+                <p>{selectedCategory.description}</p>
+              </div>
+            </div>
+            <div className="settings-field-grid">
             {visibleFields.map((field) => {
               const dirty = snapshot ? fieldDirty(snapshot, drafts, field, scope, profileDraft) : false;
+              const secret = isSecretField(field);
               return (
-                <article className={dirty ? "settings-product-field dirty" : "settings-product-field"} key={field.path}>
+                <article className={settingCardClass(field, dirty)} key={field.path}>
                   <div>
-                    <strong>{field.path}</strong>
+                    <strong>{fieldLabel(field.path)}</strong>
                     <span>{field.description || "No description."}</span>
                     <em>{field.reload_policy} / {snapshot?.source_map[field.path] || "default"}</em>
                   </div>
-                  {renderInput(field, drafts[field.path] || "", (value) => setDrafts((current) => ({ ...current, [field.path]: value })))}
+                  <div className="setting-card-control">
+                    {renderInput(field, drafts[field.path] || "", (value) => setDrafts((current) => ({ ...current, [field.path]: value })), Boolean(revealed[field.path]))}
+                    {secret ? (
+                      <button onClick={() => setRevealed((current) => ({ ...current, [field.path]: !current[field.path] }))} type="button">
+                        {revealed[field.path] ? <EyeOff size={14} /> : <Eye size={14} />}
+                        {revealed[field.path] ? "Hide" : "Show"}
+                      </button>
+                    ) : null}
+                    <small>{dirty ? "Changed" : "Synced"}</small>
+                  </div>
                 </article>
               );
             })}
-            {snapshot && !visibleFields.length ? <div className="resource-empty">No fields in this category yet.</div> : null}
-          </div>
+            {snapshot && !visibleFields.length ? <div className="settings-empty">No settings match this category or search.</div> : null}
+            </div>
+          </section>
         )}
       </main>
 
@@ -226,14 +256,50 @@ function categoryMatches(field: ConfigField, category: SettingsCategory) {
   return false;
 }
 
-function renderInput(field: ConfigField, value: string, onChange: (value: string) => void) {
+function renderInput(field: ConfigField, value: string, onChange: (value: string) => void, revealed = false) {
   if (field.type === "boolean") {
-    return <select value={value || "false"} onChange={(event) => onChange(event.target.value)}><option value="true">Enabled</option><option value="false">Disabled</option></select>;
+    return (
+      <div className="setting-switch">
+        <button className={value !== "true" ? "active" : ""} onClick={() => onChange("false")} type="button">Off</button>
+        <button className={value === "true" ? "active" : ""} onClick={() => onChange("true")} type="button">On</button>
+      </div>
+    );
   }
   if (field.type === "array" || field.type === "object" || field.type.includes("null")) {
     return <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} />;
   }
-  return <input value={value} onChange={(event) => onChange(event.target.value)} />;
+  return <input type={isSecretField(field) && !revealed ? "password" : field.type === "number" || field.type.startsWith("integer") ? "number" : "text"} value={value} onChange={(event) => onChange(event.target.value)} />;
+}
+
+function settingCardClass(field: ConfigField, dirty: boolean) {
+  const classes = ["settings-product-field"];
+  if (dirty) classes.push("dirty");
+  if (field.type === "array" || field.type === "object" || field.type.includes("null")) classes.push("wide");
+  if (isDangerField(field)) classes.push("danger");
+  return classes.join(" ");
+}
+
+function fieldLabel(path: string) {
+  return path
+    .split(".")
+    .slice(-2)
+    .join(" ")
+    .replace(/[_-]/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function matchesSettingSearch(field: ConfigField, query: string) {
+  const text = query.trim().toLowerCase();
+  if (!text) return true;
+  return `${field.path} ${field.category} ${field.description || ""} ${field.type}`.toLowerCase().includes(text);
+}
+
+function isSecretField(field: ConfigField) {
+  return /(api[_-]?key|secret|token|password|authorization|credential)/i.test(field.path);
+}
+
+function isDangerField(field: ConfigField) {
+  return /(shell|delete|reset|danger|unrestricted|approval|write|filesystem)/i.test(field.path);
 }
 
 function buildDrafts(snapshot: ConfigSnapshot) {

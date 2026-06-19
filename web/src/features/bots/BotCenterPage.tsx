@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, ChevronLeft, Copy, Globe2, Play, RefreshCw, Square, TestTube2 } from "lucide-react";
+import { Bot, Copy, Globe2, Play, RefreshCw, Search, Square, TestTube2, X } from "lucide-react";
 import { api, BotDetail, BotSummary } from "../../api";
 
 type DetailTab = "overview" | "events" | "sessions" | "trace" | "config" | "security" | "logs";
+type BotFilter = "all" | "running" | "waiting" | "error" | "disabled";
 
 const tabs: Array<{ id: DetailTab; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -19,9 +20,12 @@ export function BotCenterPage() {
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<BotDetail | null>(null);
   const [tab, setTab] = useState<DetailTab>("overview");
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<BotFilter>("all");
   const [publicUrl, setPublicUrl] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     refresh().catch((error) => setNotice(errorMessage(error)));
@@ -44,12 +48,23 @@ export function BotCenterPage() {
     return () => window.clearInterval(timer);
   }, [selectedId, detail?.events]);
 
-  const selectedBot = useMemo(() => bots.find((item) => item.id === selectedId), [bots, selectedId]);
+  const filteredBots = useMemo(() => {
+    const text = query.trim().toLowerCase();
+    return bots.filter((bot) => {
+      const haystack = `${bot.name} ${bot.platform} ${bot.type} ${bot.status_text} ${bot.agent_state || ""} ${bot.bot_state} ${bot.ingress_state} ${bot.qq_state || ""}`.toLowerCase();
+      return matchesBotFilter(bot, filter) && (!text || haystack.includes(text));
+    });
+  }, [bots, query, filter]);
 
   async function refresh() {
-    const payload = await api.bots();
-    setBots(payload.bots);
-    if (selectedId) await loadDetail(selectedId);
+    setLoading(true);
+    try {
+      const payload = await api.bots();
+      setBots(payload.bots);
+      if (selectedId) await loadDetail(selectedId);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadDetail(botId: string) {
@@ -110,104 +125,104 @@ export function BotCenterPage() {
     setNotice("Webhook URL copied.");
   }
 
-  if (selectedId && detail) {
-    return (
-      <section className="bot-center bot-detail-page">
-        <div className="bot-detail-head">
-          <button className="bot-back" onClick={() => setSelectedId("")}>
-            <ChevronLeft size={16} /> Bots
-          </button>
-          <div className="bot-title">
-            <span className="bot-avatar">{platformLabel(detail.status.platform)}</span>
-            <div>
-              <h2>{detail.status.name}</h2>
-              <p>{detail.status.platform} / {detail.status.type}</p>
-            </div>
-          </div>
-          <div className="bot-detail-actions">
-            <button onClick={() => action(detail.status.bot_id, "start")} disabled={Boolean(busy)}>
-              <Play size={15} /> Start
-            </button>
-            <button onClick={() => action(detail.status.bot_id, "stop")} disabled={Boolean(busy)}>
-              <Square size={14} /> Stop
-            </button>
-            <button onClick={() => loadDetail(detail.status.bot_id)} disabled={Boolean(busy)}>
-              <RefreshCw size={15} />
-            </button>
-          </div>
-        </div>
-
-        {notice ? <div className="bot-notice">{notice}</div> : null}
-
-        <div className="bot-tabs">
-          {tabs.map((item) => (
-            <button key={item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>
-          ))}
-        </div>
-
-        {tab === "overview" ? <Overview detail={detail} /> : null}
-        {tab === "events" ? <Events detail={detail} /> : null}
-        {tab === "sessions" ? <Sessions detail={detail} /> : null}
-        {tab === "trace" ? <Trace detail={detail} /> : null}
-        {tab === "config" ? (
-          <ConfigPanel
-            detail={detail}
-            publicUrl={publicUrl}
-            setPublicUrl={setPublicUrl}
-            onSavePublicUrl={savePublicUrl}
-            onCopyWebhook={copyWebhook}
-            onTestVerify={testVerify}
-            busy={Boolean(busy)}
-          />
-        ) : null}
-        {tab === "security" ? <Security detail={detail} /> : null}
-        {tab === "logs" ? <Logs detail={detail} /> : null}
-      </section>
-    );
-  }
-
   return (
     <section className="bot-center">
       <div className="bot-list-head">
         <div>
           <h2>Bots</h2>
-          <p>Gateway entries that can safely trigger local pp-Echo runs.</p>
+          <p>Manage QQBot and external message gateways that can safely trigger pp-Echo runs.</p>
         </div>
-        <button onClick={() => refresh()}><RefreshCw size={15} /> Refresh</button>
+        <div className="bot-head-actions">
+          <button disabled><Bot size={15} /> Add Bot</button>
+          <button onClick={() => refresh()} disabled={loading}><RefreshCw size={15} /> Refresh</button>
+        </div>
+      </div>
+      <div className="bot-toolbar">
+        <label className="bot-search">
+          <Search size={14} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, platform, state" />
+        </label>
+        <div className="bot-filter-row">
+          {(["all", "running", "waiting", "error", "disabled"] as BotFilter[]).map((item) => (
+            <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)} type="button">{filterLabel(item)}</button>
+          ))}
+        </div>
       </div>
       {notice ? <div className="bot-notice">{notice}</div> : null}
-      <div className="bot-card-list">
-        {bots.map((bot) => (
-          <article key={bot.id} className="bot-card" onClick={() => setSelectedId(bot.id)}>
-            <div className="bot-avatar">{platformLabel(bot.platform)}</div>
-            <div className="bot-card-main">
+      <div className={detail ? "bot-workspace detail-open" : "bot-workspace"}>
+        <div className="bot-card-list">
+          {loading ? Array.from({ length: 6 }).map((_, index) => <div className="bot-card skeleton" key={index} />) : null}
+          {!loading && filteredBots.map((bot) => (
+            <article key={bot.id} className={selectedId === bot.id ? "bot-card active" : "bot-card"} onClick={() => { setSelectedId(bot.id); setTab("overview"); }}>
+              <div className="bot-card-top">
+                <span className={`bot-dot ${stateTone(bot)}`} />
+                <span className="bot-chip">{platformLabel(bot.platform)}</span>
+                <button aria-label="View details" type="button">•••</button>
+              </div>
               <div className="bot-card-title">
                 <h3>{bot.name}</h3>
-                <span className="bot-chip">{bot.type}</span>
+                <span>{bot.type}</span>
               </div>
-              <p>{bot.status_text}</p>
+              <p>{bot.description || bot.status_text || "No description yet."}</p>
               <div className="bot-mini-status">
                 <span>{bot.desired_state || (bot.enabled ? "enabled" : "disabled")}</span>
                 <span>Agent: {bot.agent_state || bot.bot_state}</span>
                 <span>Ingress: {bot.ingress_state}</span>
                 <span>QQ: {bot.qq_state || (bot.configured ? "configured" : "not_configured")}</span>
+                <span>Runs: {bot.still_running_count || 0}</span>
+                <span>Queue: {bot.queued_count || 0}</span>
               </div>
+              <div className="bot-card-footer">
+                <small>{bot.last_event_at || bot.last_message_at || "No recent event"}</small>
+                <div className="bot-card-actions" onClick={(event) => event.stopPropagation()}>
+                  <button onClick={() => action(bot.id, "start")} disabled={busy === `start:${bot.id}`}>
+                    <Play size={14} /> Start
+                  </button>
+                  <button onClick={() => action(bot.id, "stop")} disabled={busy === `stop:${bot.id}`}>
+                    <Square size={13} /> Stop
+                  </button>
+                </div>
+              </div>
+            </article>
+          ))}
+          {!loading && bots.length === 0 ? <div className="bot-empty"><Bot size={22} /> No bots configured.</div> : null}
+          {!loading && bots.length > 0 && filteredBots.length === 0 ? <div className="bot-empty"><Search size={22} /> No bots match this search.</div> : null}
+        </div>
+        {detail ? (
+          <aside className="bot-detail-panel">
+            <div className="bot-detail-head">
+              <div className="bot-title">
+                <span className="bot-avatar">{platformLabel(detail.status.platform)}</span>
+                <div>
+                  <h2>{detail.status.name}</h2>
+                  <p>{detail.status.platform} / {detail.status.type}</p>
+                </div>
+              </div>
+              <button className="icon-button" onClick={() => { setSelectedId(""); setDetail(null); }} type="button" title="Close details"><X size={15} /></button>
             </div>
-            <div className="bot-card-state">
-              <span className={`bot-dot ${stateTone(bot)}`} />
-              <strong>{bot.agent_state || bot.bot_state}</strong>
+            <div className="bot-detail-actions">
+              <button onClick={() => action(detail.status.bot_id, "start")} disabled={Boolean(busy)}><Play size={15} /> Start</button>
+              <button onClick={() => action(detail.status.bot_id, "stop")} disabled={Boolean(busy)}><Square size={14} /> Stop</button>
+              <button onClick={() => loadDetail(detail.status.bot_id)} disabled={Boolean(busy)}><RefreshCw size={15} /> Reload</button>
             </div>
-            <div className="bot-card-actions" onClick={(event) => event.stopPropagation()}>
-              <button onClick={() => action(bot.id, "start")} disabled={busy === `start:${bot.id}`}>
-                <Play size={14} /> Start
-              </button>
-              <button onClick={() => action(bot.id, "stop")} disabled={busy === `stop:${bot.id}`}>
-                <Square size={13} /> Stop
-              </button>
+            <div className="bot-tabs">
+              {tabs.map((item) => (
+                <button key={item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>
+              ))}
             </div>
-          </article>
-        ))}
-        {bots.length === 0 ? <div className="bot-empty"><Bot size={22} /> No bots configured.</div> : null}
+            <div className="bot-detail-scroll">
+              {tab === "overview" ? <Overview detail={detail} /> : null}
+              {tab === "events" ? <Events detail={detail} /> : null}
+              {tab === "sessions" ? <Sessions detail={detail} /> : null}
+              {tab === "trace" ? <Trace detail={detail} /> : null}
+              {tab === "config" ? (
+                <ConfigPanel detail={detail} publicUrl={publicUrl} setPublicUrl={setPublicUrl} onSavePublicUrl={savePublicUrl} onCopyWebhook={copyWebhook} onTestVerify={testVerify} busy={Boolean(busy)} />
+              ) : null}
+              {tab === "security" ? <Security detail={detail} /> : null}
+              {tab === "logs" ? <Logs detail={detail} /> : null}
+            </div>
+          </aside>
+        ) : null}
       </div>
     </section>
   );
@@ -342,11 +357,29 @@ function JsonList({ items, empty }: { items: Array<Record<string, unknown>>; emp
             <strong>{String(item.type || item.status || item.session_id || item.run_id || "item")}</strong>
             <span>{String(item.summary || item.timestamp || item.started_at || "")}</span>
           </summary>
-          <pre>{JSON.stringify(item, null, 2)}</pre>
+          <pre>{JSON.stringify(maskSensitive(item), null, 2)}</pre>
         </details>
       ))}
     </div>
   );
+}
+
+function matchesBotFilter(bot: BotSummary, filter: BotFilter) {
+  if (filter === "all") return true;
+  if (filter === "error") return bot.process_state === "crashed" || bot.bot_state === "error" || Boolean(bot.last_error);
+  if (filter === "disabled") return !bot.enabled || bot.desired_state === "stopped";
+  if (filter === "waiting") return bot.bot_state === "waiting_approval" || bot.queued_count || bot.agent_state === "waiting_approval";
+  if (filter === "running") return bot.process_state === "running" || bot.bot_state === "running_agent" || Boolean(bot.still_running_count);
+  return true;
+}
+
+function filterLabel(filter: BotFilter) {
+  if (filter === "all") return "All";
+  if (filter === "running") return "Running";
+  if (filter === "waiting") return "Waiting";
+  if (filter === "error") return "Error";
+  if (filter === "disabled") return "Disabled";
+  return filter;
 }
 
 function stateTone(bot: BotSummary) {
@@ -371,4 +404,18 @@ function unique(values: string[]) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function maskSensitive(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (!value || typeof value !== "object") return value;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((item) => maskSensitive(item, seen));
+  const output: Record<string, unknown> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+    output[key] = /(api[_-]?key|secret|token|password|authorization|signature|app[_-]?secret)/i.test(key)
+      ? "[masked]"
+      : maskSensitive(item, seen);
+  });
+  return output;
 }
