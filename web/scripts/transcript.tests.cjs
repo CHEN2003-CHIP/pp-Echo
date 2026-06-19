@@ -54,9 +54,9 @@ test("buildTranscript renders tool completion as collapsed activity", () => {
 
   assert.equal(toolItems.length, 0);
   assert.equal(activityItems.length, 1);
-  assert.ok(activityItems[0].activity.title.includes("已处理"));
-  assert.ok(activityItems[0].activity.title.includes("3s"));
-  assert.ok(activityItems[0].activity.summary.includes("已运行 1 条命令"));
+  assert.ok(activityItems[0].activity.title.includes("Done"));
+  assert.ok(activityItems[0].activity.title.includes("run_shell"));
+  assert.ok(activityItems[0].activity.summary.includes("run_shell"));
   assert.ok(activityItems[0].activity.entries.some((entry) => entry.label === "run_shell"));
   assert.ok(activityItems[0].activity.entries.some((entry) => entry.durationLabel === "1s"));
   assert.ok(activityItems.some((item) => item.body.text.includes("25")));
@@ -79,9 +79,9 @@ test("buildTranscript groups multiple tools in one turn", () => {
 
   const activityItems = transcript.filter((item) => item.role === "activity");
   assert.equal(activityItems.length, 1);
-  assert.ok(activityItems[0].activity.title.includes("已处理"));
-  assert.ok(activityItems[0].activity.summary.includes("已调用 2 个工具"));
-  assert.deepEqual(activityItems[0].activity.entries.map((entry) => entry.label), ["web.news", "web.fetch"]);
+  assert.ok(activityItems[0].activity.title.includes("Done"));
+  assert.equal(activityItems[0].activity.toolCount, 2);
+  assert.deepEqual(Array.from(new Set(activityItems[0].activity.entries.map((entry) => entry.label))), ["web.news", "web.fetch"]);
   assert.ok(activityItems[0].body.text.includes("News result"));
   assert.ok(activityItems[0].body.text.includes("Fetched page"));
 });
@@ -134,14 +134,14 @@ test("buildTranscript keeps planner nodes and adds planner details", () => {
 
   const activity = transcript.find((item) => item.role === "activity");
   assert.ok(activity);
-  const plannerStart = activity.activity.entries.find((entry) => entry.label === "planner_start");
-  const plannerEnd = activity.activity.entries.find((entry) => entry.label === "planner_end");
+  const plannerStart = activity.activity.entries.find((entry) => entry.rawType === "planner_start");
+  const plannerEnd = activity.activity.entries.find((entry) => entry.rawType === "planner_end");
   assert.ok(plannerStart);
   assert.ok(plannerEnd);
-  assert.ok(plannerStart.detail.includes("计划包含 2 个步骤"));
-  assert.ok(activity.body.text.includes("计划包含 2 个步骤"));
-  assert.ok(activity.body.text.includes("预计处理文件：web/src/App.tsx"));
-  assert.ok(activity.body.text.includes("准备运行命令：npm test"));
+  assert.ok(plannerStart.detail.includes("planner"));
+  assert.ok(activity.body.text.includes("Edit web/src/App.tsx"));
+  assert.ok(activity.body.text.includes("web/src/App.tsx"));
+  assert.ok(activity.body.text.includes("npm test"));
   assert.equal(activity.body.text.includes("Updated"), false);
 });
 
@@ -155,7 +155,7 @@ test("buildTranscript updates running tool activity when the tool completes", ()
   );
   const runningActivity = runningTranscript.find((item) => item.role === "activity");
   assert.ok(runningActivity);
-  assert.ok(runningActivity.activity.title.includes("处理中"));
+  assert.ok(runningActivity.activity.title.includes("Running"));
   assert.equal(runningActivity.activity.running, true);
   assert.equal(runningActivity.activity.entries[0].tone, "running");
 
@@ -170,9 +170,9 @@ test("buildTranscript updates running tool activity when the tool completes", ()
   );
   const completedActivity = completedTranscript.find((item) => item.role === "activity");
   assert.ok(completedActivity);
-  assert.ok(completedActivity.activity.title.includes("已处理"));
+  assert.ok(completedActivity.activity.title.includes("Done"));
   assert.equal(completedActivity.activity.running, false);
-  assert.equal(completedActivity.activity.entries[0].durationLabel, "3s");
+  assert.ok(completedActivity.activity.entries.some((entry) => entry.durationLabel === "3s"));
 });
 
 test("buildTranscript attaches safe web result images to tool activity", () => {
@@ -280,9 +280,9 @@ test("buildTranscript marks failed tool activity", () => {
 
   const activity = transcript.find((item) => item.role === "activity");
   assert.ok(activity);
-  assert.ok(activity.activity.title.includes("处理失败"));
+  assert.ok(activity.activity.title.includes("Failed"));
   assert.equal(activity.activity.tone, "error");
-  assert.equal(activity.activity.entries[0].tone, "error");
+  assert.ok(activity.activity.entries.some((entry) => entry.tone === "error"));
 });
 
 test("buildTurnMarkers groups transcript by user turns", () => {

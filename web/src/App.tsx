@@ -37,6 +37,10 @@ import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
 import { AttachmentPanel } from "./features/attachments/AttachmentPanel";
 import { BotCenterPage } from "./features/bots/BotCenterPage";
+import { ActivityCard } from "./features/activity/ActivityCard";
+import { ActivityDetailsPanel } from "./features/activity/ActivityDetailsPanel";
+import { buildActivityRuns } from "./features/activity/activity-normalizer";
+import type { ActivityItem } from "./features/activity/activity-types";
 
 type ViewKey =
   | "chat"
@@ -69,17 +73,7 @@ type TranscriptItem = {
   body: ReturnType<typeof extractMessageBody>;
   streaming?: boolean;
   timestamp?: number;
-  activity?: {
-    title: string;
-    summary: string;
-    detail: string;
-    durationLabel?: string;
-    entries?: ActivityEntry[];
-    startedAt?: number;
-    endedAt?: number;
-    running?: boolean;
-    tone?: "running" | "success" | "warning" | "error";
-  };
+  activity?: ActivityItem;
 };
 
 type ActivityEntry = {
@@ -206,6 +200,7 @@ export function App() {
   const [attachmentUploading, setAttachmentUploading] = useState(false);
 
   const pollers = useRef<Record<string, number>>({});
+  const eventSockets = useRef<Record<string, WebSocket>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
   const noticeTimer = useRef<number | null>(null);
 
@@ -246,7 +241,7 @@ export function App() {
   const activeSession = activeSessionId ? sessions.find((session) => session.id === activeSessionId) : undefined;
   const activeEvents = activeSessionId ? events[activeSessionId] || [] : [];
   const transcript = useMemo(() => buildTranscript(activeSnapshot, activeEvents), [activeSnapshot, activeEvents]);
-  const activityItems = useMemo(() => buildActivityItems(activeEvents), [activeEvents]);
+  const activityItems = useMemo(() => buildActivityItems(activeEvents, activeSnapshot, approvalSummary), [activeEvents, activeSnapshot, approvalSummary]);
   const activeApproval = useMemo(() => buildActiveApproval(activeSnapshot, activeEvents, approvalSummary), [activeSnapshot, activeEvents, approvalSummary]);
   const busy = runtimeIsBusy(activeSnapshot, activeEvents);
   const displayStatus = runtimeDisplayStatus(status, activeSnapshot, activeEvents);
@@ -320,8 +315,51 @@ export function App() {
   }
 
   function ensureEventPolling(sessionId: string) {
+    if (eventSockets.current[sessionId] || pollers.current[sessionId]) return;
+    if (connectEventSocket(sessionId)) return;
+    startEventPolling(sessionId);
+  }
+
+  function connectEventSocket(sessionId: string) {
+    if (!("WebSocket" in window)) return false;
+    try {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionId)}/events`);
+      eventSockets.current[sessionId] = socket;
+      socket.onopen = () => {
+        setStatus("Live events connected");
+        const poller = pollers.current[sessionId];
+        if (poller) {
+          window.clearInterval(poller);
+          delete pollers.current[sessionId];
+        }
+      };
+      socket.onmessage = (message) => {
+        try {
+          const event = JSON.parse(message.data) as RuntimeEvent;
+          appendEvent(sessionId, event);
+          if (event.type === "turn_end" || event.type === "agent_end" || event.type === "error" || event.type.includes("gate")) {
+            refreshSessionState(sessionId).catch(() => undefined);
+          }
+        } catch {
+          // Ignore malformed websocket payloads and let the next event/snapshot recover the UI.
+        }
+      };
+      socket.onerror = () => {
+        socket.close();
+      };
+      socket.onclose = () => {
+        if (eventSockets.current[sessionId] === socket) delete eventSockets.current[sessionId];
+        if (!pollers.current[sessionId]) startEventPolling(sessionId);
+      };
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function startEventPolling(sessionId: string) {
     if (pollers.current[sessionId]) return;
-    setStatus("Live events connected");
     const poll = async () => {
       try {
         const payload = await api.events(sessionId);
@@ -340,8 +378,8 @@ export function App() {
   function appendEvent(sessionId: string, event: RuntimeEvent) {
     setEvents((current) => {
       const existing = current[sessionId] || [];
-      const key = runtimeEventKey(event);
-      if (key && existing.some((item) => runtimeEventKey(item) === key)) return current;
+      const key = runtimeEventDedupeKey(event);
+      if (key && existing.some((item) => runtimeEventDedupeKey(item) === key)) return current;
       return { ...current, [sessionId]: [...existing, event].slice(-MAX_SESSION_EVENTS) };
     });
     setStatus(event.message || event.type);
@@ -455,13 +493,21 @@ export function App() {
   function stopPolling() {
     Object.values(pollers.current).forEach((poller) => window.clearInterval(poller));
     pollers.current = {};
+    Object.values(eventSockets.current).forEach((socket) => socket.close());
+    eventSockets.current = {};
   }
 
   function stopSessionPolling(sessionId: string) {
     const poller = pollers.current[sessionId];
-    if (!poller) return;
-    window.clearInterval(poller);
-    delete pollers.current[sessionId];
+    if (poller) {
+      window.clearInterval(poller);
+      delete pollers.current[sessionId];
+    }
+    const socket = eventSockets.current[sessionId];
+    if (socket) {
+      delete eventSockets.current[sessionId];
+      socket.close();
+    }
   }
 
   function stopPollingExcept(sessionId: string) {
@@ -469,6 +515,11 @@ export function App() {
       if (key === sessionId) return;
       window.clearInterval(poller);
       delete pollers.current[key];
+    });
+    Object.entries(eventSockets.current).forEach(([key, socket]) => {
+      if (key === sessionId) return;
+      delete eventSockets.current[key];
+      socket.close();
     });
   }
 
@@ -932,17 +983,7 @@ export function App() {
           )}
 
           {inspectorTab === "tools" && (
-            <InspectorCard title="工具调用" icon={Code2}>
-              <ul className="event-list">
-                {activityItems.length === 0 && <li className="muted-event">暂无工具活动</li>}
-                {activityItems.slice(-8).reverse().map((item, index) => (
-                  <li key={`${item.label}-${index}`}>
-                    <strong>{item.label}</strong>
-                    <span>{item.detail}</span>
-                  </li>
-                ))}
-              </ul>
-            </InspectorCard>
+            <ActivityDetailsPanel items={activityItems} />
           )}
 
           {inspectorTab === "approvals" && (
@@ -1582,7 +1623,7 @@ function ChatWorkspace({
   setPrompt: (value: string) => void;
   sendPrompt: () => void;
   cancelActiveSession: () => void;
-  activityItems: Array<{ label: string; detail: string }>;
+  activityItems: ActivityItem[];
   approvalSummary: ApprovalsSummary;
   approvalAction: { token: string; action: "approve" | "reject" } | null;
   approvalFeedback: string;
@@ -1700,7 +1741,7 @@ function ChatWorkspace({
             <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id} data-transcript-id={item.id}>
               <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : item.role === "activity" ? <Code2 size={15} /> : <MessageSquare size={15} />}</div>
               {item.role === "activity" && item.activity ? (
-                <ToolActivityBlock item={item} />
+                <ActivityCard item={item.activity} />
               ) : (
                 <div className="bubble">
                   <span>{roleLabel(item.role)}</span>
@@ -3149,7 +3190,7 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
   flushStream();
   flushActivityGroup();
   activityGroups.forEach((group, index) => {
-    const activity = formatActivityGroup(group, index);
+    const activity = combineActivityItemsForTranscript(buildActivityRuns(group), group);
     if (!activity) return;
     runtime.push({
       id: `activity-turn:${index}:${activity.startedAt || activity.endedAt || runtime.length}`,
@@ -3169,6 +3210,47 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     items.push({ id: "thinking", role: "assistant", body: { text: "Thinking", attachments: [] }, streaming: true });
   }
   return items;
+}
+
+function combineActivityItemsForTranscript(items: ActivityItem[], events: RuntimeEvent[]): ActivityItem | null {
+  if (items.length === 0) return null;
+  if (items.length === 1) return items[0];
+  const startedAt = firstTimestamp(events) ?? items[0].startedAt;
+  const endedAt = latestTerminalTimestamp(events) ?? items[items.length - 1].endedAt;
+  const running = items.some((item) => item.running);
+  const hasError = items.some((item) => item.status === "error");
+  const status = hasError ? "error" : running ? "running" : "success";
+  const endForDuration = running ? Date.now() / 1000 : endedAt;
+  const durationLabel = startedAt && endForDuration ? formatDuration(Math.max(0, (endForDuration - startedAt) * 1000)) : "";
+  const entries = items.flatMap((item) => item.entries);
+  const detail = entries.map((entry) => [entry.label, entry.detail].filter(Boolean).join("\n")).join("\n\n");
+  const toolCount = items.reduce((total, item) => total + item.toolCount, 0);
+  const approvalCount = items.reduce((total, item) => total + item.approvalCount, 0);
+  const errorCount = items.reduce((total, item) => total + item.errorCount, 0);
+  return {
+    id: `turn-activity:${startedAt || items[0].id}`,
+    phase: items.some((item) => item.phase === "reasoning") ? "reasoning" : items.some((item) => item.phase === "planning") ? "planning" : "tool",
+    status,
+    tone: status,
+    title: `${status === "error" ? "Failed" : running ? "Running" : "Done"} · ${items.length} activities${durationLabel ? ` · ${durationLabel}` : ""}`,
+    summary: [
+      toolCount ? `${toolCount} tool call${toolCount === 1 ? "" : "s"}` : "",
+      approvalCount ? `${approvalCount} approval${approvalCount === 1 ? "" : "s"}` : "",
+      errorCount ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" · ") || `${entries.length} runtime event${entries.length === 1 ? "" : "s"}`,
+    detail,
+    timestamp: startedAt,
+    startedAt,
+    endedAt: running ? undefined : endedAt,
+    durationLabel,
+    running,
+    entries,
+    attachments: entries.flatMap((entry) => entry.attachments || []),
+    eventCount: items.reduce((total, item) => total + item.eventCount, 0),
+    toolCount,
+    approvalCount,
+    errorCount
+  };
 }
 
 export function buildTurnMarkers(transcript: TranscriptItem[]): TurnMarker[] {
@@ -3281,7 +3363,17 @@ function isActivityEvent(event: RuntimeEvent) {
   );
 }
 
-function formatActivityGroup(events: RuntimeEvent[], index: number): NonNullable<TranscriptItem["activity"]> | null {
+function formatActivityGroup(events: RuntimeEvent[], index: number): {
+  title: string;
+  summary: string;
+  detail: string;
+  durationLabel?: string;
+  entries?: ActivityEntry[];
+  startedAt?: number;
+  endedAt?: number;
+  running?: boolean;
+  tone?: "running" | "success" | "warning" | "error";
+} | null {
   const activityEvents = events.filter(isActivityEvent);
   if (activityEvents.length === 0) return null;
   const startedAt = firstTimestamp(events) ?? firstTimestamp(activityEvents);
@@ -3649,6 +3741,16 @@ function appendDiagnosticLines(lines: string[], label: string, value: unknown) {
   }
 }
 
+function runtimeEventDedupeKey(event: RuntimeEvent) {
+  const details = event.details || {};
+  const trace = details.trace && typeof details.trace === "object" ? details.trace as Record<string, unknown> : {};
+  const activity = details.activity && typeof details.activity === "object" ? details.activity as Record<string, unknown> : {};
+  const explicit = event.event_id || trace.event_id || activity.event_id || details.event_id;
+  if (typeof explicit === "string" && explicit.trim()) return explicit;
+  if (typeof explicit === "number") return String(explicit);
+  return runtimeEventKey(event);
+}
+
 function runtimeEventKey(event: RuntimeEvent) {
   const detailKey = event.details?.event_id || event.details?.id || event.details?.tool_call_id || event.details?.token || event.details?.artifact_id || "";
   return [
@@ -3708,18 +3810,8 @@ function hasErrorSinceLatestStart(events: RuntimeEvent[]) {
   return events.slice(Math.max(0, latestStart)).some((event) => event.type === "error" || event.is_error);
 }
 
-export function buildActivityItems(events: RuntimeEvent[]) {
-  const toolStarts = new Map<string, RuntimeEvent>();
-  return events
-    .filter((event) => event.type.includes("tool") || event.type.includes("planner") || event.type.includes("checkpoint") || event.type.includes("subagent") || event.type === "cancel_requested")
-    .map((event) => {
-      const key = toolEventKey(event);
-      if (event.type === "tool_start" && key) toolStarts.set(key, event);
-      return {
-        label: event.tool_name || eventLabel(event),
-        detail: summarizeEvent(event, key ? toolStarts.get(key) : undefined)
-      };
-    });
+export function buildActivityItems(events: RuntimeEvent[], snapshot?: SessionSnapshot, approvals?: ApprovalsSummary) {
+  return buildActivityRuns(events, snapshot, approvals);
 }
 
 function eventLabel(event: RuntimeEvent) {

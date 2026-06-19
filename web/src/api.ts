@@ -46,6 +46,14 @@ export type RuntimeEvent = {
   turn_id?: number | null;
   phase?: string | null;
   timestamp?: number;
+  event_id?: string | null;
+  run_id?: string | null;
+  activity_id?: string | null;
+  parent_activity_id?: string | null;
+  status?: "pending" | "running" | "success" | "warning" | "error" | "cancelled" | string | null;
+  started_at?: number | null;
+  ended_at?: number | null;
+  duration_ms?: number | null;
   message?: string | null;
   delta?: string | null;
   tool_name?: string | null;

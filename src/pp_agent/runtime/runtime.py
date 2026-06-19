@@ -57,6 +57,10 @@ from pp_agent.runtime.lifecycle import (
     QUEUE_DEQUEUED,
     QUEUE_ENQUEUED,
     QUEUE_UPDATE,
+    REASONING_DELTA,
+    REASONING_END,
+    REASONING_START,
+    REASONING_SUMMARY,
     SESSION_BEFORE_COMPACT,
     SESSION_COMPACTED,
     SESSION_RESTORE,
@@ -194,6 +198,10 @@ class AgentRuntime:
         self._config_refresh_callback = config_refresh_callback
         self.observability = observability or NoopObservabilityHooks()
         self._trace_event_starts: dict[str, AgentEvent] = {}
+        self._event_sequence = 0
+        self._run_sequence = 0
+        self._current_run_id: str | None = None
+        self._activity_starts: dict[str, float] = {}
         self.lifecycle.subscribe(self._observe_runtime_event)
         self._attach_runtime_context_to_tool_registry()
 
@@ -253,6 +261,7 @@ class AgentRuntime:
         把这轮运行过程中产生的所有 AgentEvent 收集起来返回。
         """
         self._cancellation_token.clear()
+        self._begin_run("prompt")
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
         self.state.messages.append(user_message)
         context = _TurnPersistContext(
@@ -289,6 +298,7 @@ class AgentRuntime:
         """把之前排队的后续消息正式送进会话，然后从这条新消息开始再跑一轮。"""
         if decision.action == "inject_message" and decision.queued_message is not None:
             return self._collect_runtime_events(self._inject_controller_message(decision, phase="continue"))
+        self._begin_run("continue")
         context = _TurnPersistContext(
             new_message_start_index=len(self.state.messages),
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
@@ -330,6 +340,7 @@ class AgentRuntime:
     def approve_pending_plan(self, token: str) -> list[AgentEvent]:
         """核对审批 token → 删除待审批记录 → 打开“已批准”开关 → 记录审批通过事件 → 恢复执行之前挂起的工具计划。"""
         self._cancellation_token.clear()
+        self._begin_run("approval")
         if token != self.state.pending_plan_token:
             raise ValueError(f"Token {token} does not match the pending planner gate for this session")
         self._pending_action_store().remove(token)
@@ -717,6 +728,19 @@ class AgentRuntime:
         request_decision = self.lifecycle.emit_before_provider_request(request_event, self.state, messages, tools)
         #更新事件细节、发射事件用于监测
         request_event.details.update(request_decision.details)
+        list(
+            self._emit(
+                self._event(
+                    REASONING_START,
+                    message="Preparing model context and public progress.",
+                    details={
+                        "summary": "Preparing context and tool declarations.",
+                        "message_count": len(request_decision.messages or messages),
+                        "tool_count": len(request_decision.tools if request_decision.tools is not None else tools),
+                    },
+                )
+            )
+        )
         list(self._emit(request_event))
 
         #收集文本
@@ -727,6 +751,7 @@ class AgentRuntime:
         streamed_event_count = 0
         raw_usage: object | None = None
         request_id: str | None = None
+        emitted_reasoning_delta = False
         started = time.perf_counter()
         try:
             ## 核心：流式调用大模型（逐块返回响应，非一次性返回）
@@ -743,6 +768,18 @@ class AgentRuntime:
                 #收集返回文本、发送 MESSAGE_DELTA 事件
                 if event["text"]:
                     text_chunks.append(event["text"])
+                    if not emitted_reasoning_delta:
+                        emitted_reasoning_delta = True
+                        list(
+                            self._emit(
+                                self._event(
+                                    REASONING_DELTA,
+                                    message="Receiving public assistant output.",
+                                    delta="Receiving public assistant output.",
+                                    details={"summary": "The model has started returning visible output."},
+                                )
+                            )
+                        )
                     list(self._emit(self._event(MESSAGE_DELTA, delta=event["text"])))
                 #收集工具调用信息，注意模型可能分多块返回同一个工具调用的信息，所以要按 index 聚合
                 for index, tool in enumerate(event["tool_calls"]):
@@ -817,6 +854,34 @@ class AgentRuntime:
         response_decision = self.lifecycle.emit_provider_response(response_event, "".join(text_chunks), tool_calls)
         response_event.details.update(response_decision.details)
         list(self._emit(response_event))
+        visible_text = "".join(text_chunks).strip()
+        reasoning_summary = (
+            f"Prepared {len(tool_calls)} tool call(s)."
+            if tool_calls
+            else (safe_preview(visible_text, 220) if visible_text else "No visible text returned.")
+        )
+        list(
+            self._emit(
+                self._event(
+                    REASONING_SUMMARY,
+                    message=reasoning_summary,
+                    details={
+                        "summary": reasoning_summary,
+                        "tool_count": len(tool_calls),
+                        "text_length": len(visible_text),
+                    },
+                )
+            )
+        )
+        list(
+            self._emit(
+                self._event(
+                    REASONING_END,
+                    message="Public reasoning progress completed.",
+                    details={"summary": "Model response received and parsed."},
+                )
+            )
+        )
         #使用决策信息
         assistant_text = response_decision.assistant_text or "".join(text_chunks)
         resolved_tool_calls = response_decision.tool_calls or tool_calls
@@ -1267,6 +1332,7 @@ class AgentRuntime:
             event.turn_id = self.state.turn.turn_id
         if event.phase is None:
             event.phase = self.state.turn.phase
+        event = self._enrich_activity_event(event)
         event = self.runtime_monitor.attach_event(event, self.state)
         if self.timeline_store is not None and event.type != "message_delta":
             self.timeline_store.append(self.session_id, event)
@@ -2418,6 +2484,12 @@ class AgentRuntime:
             )
         return ToolErrorDecision(continue_loop=False)
 
+    def _begin_run(self, reason: str) -> str:
+        self._run_sequence += 1
+        self._current_run_id = f"{self.session_id}:run:{self._run_sequence}:{uuid.uuid4().hex[:8]}"
+        self._activity_starts.clear()
+        return self._current_run_id
+
     def _event(self, event_type: str, **kwargs) -> AgentEvent:
         """构造一个 AgentEvent 对象，自动补全常规字段"""
         if "timestamp" not in kwargs:
@@ -2428,7 +2500,115 @@ class AgentRuntime:
             kwargs["turn_id"] = self.state.turn.turn_id
         if "phase" not in kwargs:
             kwargs["phase"] = self.state.turn.phase
-        return AgentEvent(type=event_type, **kwargs)
+        return self._enrich_activity_event(AgentEvent(type=event_type, **kwargs))
+
+    def _enrich_activity_event(self, event: AgentEvent) -> AgentEvent:
+        if not event.event_id:
+            self._event_sequence += 1
+            event.event_id = f"{self.session_id}:{self._event_sequence}"
+        if not event.run_id:
+            event.run_id = self._current_run_id or f"{self.session_id}:run:0"
+        if event.status is None:
+            event.status = self._event_status(event)
+        if not event.activity_id:
+            event.activity_id = self._event_activity_id(event)
+        if event.started_at is None and event.status in {"pending", "running"}:
+            event.started_at = event.timestamp
+        if event.activity_id:
+            if event.status in {"pending", "running"}:
+                self._activity_starts.setdefault(event.activity_id, event.started_at or event.timestamp)
+            started = self._activity_starts.get(event.activity_id)
+            if started is not None:
+                event.started_at = event.started_at or started
+            if event.status in {"success", "warning", "error", "cancelled"}:
+                event.ended_at = event.ended_at or event.timestamp
+                if event.started_at is not None:
+                    event.duration_ms = max(int((event.ended_at - event.started_at) * 1000), 0)
+        event.details = self._event_details_with_activity(event)
+        return event
+
+    def _event_status(self, event: AgentEvent) -> str:
+        if event.is_error:
+            return "cancelled" if event.details.get("failure_kind") == "canceled" else "error"
+        if event.type.endswith("_start") or event.type in {
+            TURN_START,
+            TURN_PHASE_CHANGED,
+            TURN_STATE,
+            BEFORE_PROVIDER_REQUEST,
+            TOOL_CALL,
+            TOOL_START,
+            REASONING_START,
+            REASONING_DELTA,
+        }:
+            return "running"
+        if event.type.endswith("_pending") or event.type in {PLANNER_GATE_PENDING}:
+            return "pending"
+        if event.type.endswith("_rejected"):
+            return "warning"
+        if event.type in {ERROR, TOOL_ERROR, PROVIDER_ERROR, CHECKPOINT_RESTORE_FAILED}:
+            return "error"
+        return "success"
+
+    def _event_activity_id(self, event: AgentEvent) -> str:
+        details = event.details or {}
+        if event.type.startswith("reasoning_") or event.type in {BEFORE_PROVIDER_REQUEST, PROVIDER_RESPONSE, PROVIDER_ERROR}:
+            return f"{event.run_id}:reasoning:{event.turn_id}"
+        if event.type.startswith("planner_"):
+            token = details.get("token")
+            suffix = token if isinstance(token, str) and token else event.turn_id
+            return f"{event.run_id}:planner:{suffix}"
+        if event.type.startswith("tool_"):
+            call_id = details.get("tool_call_id")
+            suffix = call_id if isinstance(call_id, str) and call_id else event.tool_name or event.turn_id
+            return f"{event.run_id}:tool:{suffix}"
+        if event.type.startswith("subagent_"):
+            child = details.get("child_session_id") or details.get("session_id") or details.get("spec_name")
+            suffix = child if isinstance(child, str) and child else event.turn_id
+            return f"{event.run_id}:subagent:{suffix}"
+        if event.type.startswith("checkpoint_") or event.type.startswith("session_safe_rewind") or event.type == SESSION_SAFE_REWIND_COMPLETED:
+            checkpoint = details.get("checkpoint_id") or details.get("id") or details.get("token")
+            suffix = checkpoint if isinstance(checkpoint, str) and checkpoint else event.turn_id
+            return f"{event.run_id}:checkpoint:{suffix}"
+        if event.type.startswith("queue_") or event.type in {ERROR, COMPACTION, SESSION_COMPACTED, "cancel_requested"}:
+            return f"{event.run_id}:system:{event.type}:{event.turn_id}"
+        return f"{event.run_id}:event:{event.type}:{event.turn_id}"
+
+    def _event_details_with_activity(self, event: AgentEvent) -> dict[str, object]:
+        details: dict[str, object] = dict(event.details or {})
+        activity = dict(details.get("activity") or {}) if isinstance(details.get("activity"), dict) else {}
+        activity.update(
+            {
+                "event_id": event.event_id,
+                "run_id": event.run_id,
+                "activity_id": event.activity_id,
+                "parent_activity_id": event.parent_activity_id,
+                "status": event.status,
+                "started_at": event.started_at,
+                "ended_at": event.ended_at,
+                "duration_ms": event.duration_ms,
+                "phase": self._activity_phase(event),
+            }
+        )
+        details["activity"] = {key: value for key, value in activity.items() if value is not None}
+        trace = dict(details.get("trace") or {}) if isinstance(details.get("trace"), dict) else {}
+        trace.update({"event_id": event.event_id, "run_id": event.run_id})
+        details["trace"] = trace
+        return details
+
+    def _activity_phase(self, event: AgentEvent) -> str:
+        if event.type.startswith("reasoning_") or event.type in {BEFORE_PROVIDER_REQUEST, PROVIDER_RESPONSE, PROVIDER_ERROR}:
+            return "reasoning"
+        if event.type.startswith("planner_"):
+            return "approval" if "gate" in event.type else "planning"
+        if event.type.startswith("tool_"):
+            return "tool"
+        if event.type.startswith("subagent_"):
+            return "subagent"
+        if event.type.startswith("checkpoint_") or event.type.startswith("session_safe_rewind"):
+            return "checkpoint"
+        if event.type == COMPACTION or event.type.startswith("learning_"):
+            return "memory"
+        return "system"
 
     def _queue_lifecycle_event(self, event: AgentEvent) -> None:
         """在生命周期事件处理中，如果需要发出新的事件但又不想立刻发出，

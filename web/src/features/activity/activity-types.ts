@@ -1,0 +1,68 @@
+import type { RichAttachment } from "../../rich-text";
+
+export type ActivityPhase =
+  | "reasoning"
+  | "planning"
+  | "tool"
+  | "approval"
+  | "artifact"
+  | "checkpoint"
+  | "subagent"
+  | "queue"
+  | "memory"
+  | "system"
+  | "event";
+
+export type ActivityStatus = "pending" | "running" | "success" | "warning" | "error" | "cancelled";
+
+export type ActivityStep = {
+  id: string;
+  kind: "reasoning" | "tool" | "command" | "planner" | "subagent" | "checkpoint" | "approval" | "artifact" | "memory" | "system" | "event";
+  label: string;
+  detail: string;
+  timestamp?: number;
+  startedAt?: number;
+  endedAt?: number;
+  durationLabel?: string;
+  status: ActivityStatus;
+  tone?: ActivityStatus;
+  attachments?: RichAttachment[];
+  rawType?: string;
+};
+
+export type ActivityItem = {
+  id: string;
+  runId?: string;
+  activityId?: string;
+  parentActivityId?: string;
+  phase: ActivityPhase;
+  status: ActivityStatus;
+  tone?: ActivityStatus;
+  title: string;
+  summary: string;
+  detail: string;
+  timestamp?: number;
+  startedAt?: number;
+  endedAt?: number;
+  durationMs?: number;
+  durationLabel?: string;
+  running?: boolean;
+  entries: ActivityStep[];
+  attachments?: RichAttachment[];
+  eventCount: number;
+  toolCount: number;
+  approvalCount: number;
+  errorCount: number;
+};
+
+export type ActivityRunSummary = {
+  status: ActivityStatus;
+  eventCount: number;
+  activityCount: number;
+  toolCount: number;
+  approvalCount: number;
+  errorCount: number;
+  startedAt?: number;
+  endedAt?: number;
+  durationLabel?: string;
+};

@@ -44,6 +44,14 @@ class AgentEvent(BaseModel):
     turn_id: Optional[int] = None
     phase: Optional[str] = None
     timestamp: float = 0.0
+    event_id: Optional[str] = None
+    run_id: Optional[str] = None
+    activity_id: Optional[str] = None
+    parent_activity_id: Optional[str] = None
+    status: Optional[str] = None
+    started_at: Optional[float] = None
+    ended_at: Optional[float] = None
+    duration_ms: Optional[int] = None
     message: Optional[str] = None
     delta: Optional[str] = None
     tool_name: Optional[str] = None

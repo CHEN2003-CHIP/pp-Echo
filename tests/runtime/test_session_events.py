@@ -7,6 +7,8 @@ from pp_agent.runtime.lifecycle import (
     PLANNER_GATE_APPROVED,
     PLANNER_GATE_PENDING,
     PLANNER_GATE_REJECTED,
+    REASONING_END,
+    REASONING_START,
     SESSION_BEFORE_FORK,
     SESSION_BEFORE_SWITCH,
     SESSION_BEFORE_TREE,
@@ -73,6 +75,23 @@ def test_planner_gate_events_are_emitted(tmp_path: Path) -> None:
     assert any(event.type == PLANNER_GATE_PENDING for event in pending_events)
     assert any(event.type == PLANNER_GATE_APPROVED for event in approved_events)
     assert any(event.type == PLANNER_GATE_PENDING for event in pending_reject_events)
+
+
+def test_runtime_events_include_activity_metadata_and_public_reasoning(tmp_path: Path) -> None:
+    agent = _runtime(tmp_path)
+
+    events = agent.prompt("create file")
+
+    assert any(event.type == REASONING_START for event in events)
+    assert any(event.type == REASONING_END for event in events)
+    for event in events:
+        assert event.event_id
+        assert event.run_id
+        assert event.activity_id
+        assert event.status in {"pending", "running", "success", "warning", "error", "cancelled"}
+        assert "activity" in event.details
+        assert event.details["activity"]["event_id"] == event.event_id
+        assert event.details["activity"]["activity_id"] == event.activity_id
 
 
 def test_session_tree_facade_emits_distinct_view_and_navigation_events(tmp_path: Path) -> None:
