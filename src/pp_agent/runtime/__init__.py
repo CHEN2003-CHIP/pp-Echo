@@ -56,6 +56,8 @@ from pp_agent.runtime.lifecycle import (
     TURN_START,
     TURN_STATE,
 )
+from pp_agent.runtime.profile import RuntimeProfile
+from pp_agent.runtime.registry import RuntimeRegistry
 from pp_agent.runtime.runtime import AgentRuntime, AgentSession
 from pp_agent.runtime.safe_rewind import SafeRewindOrchestrator
 from pp_agent.runtime.session_host import ForkResult, NavigateResult, RewindResult, SessionHost, SessionTreeView, SwitchResult
@@ -104,6 +106,8 @@ __all__ = [
     "RewindResult",
     "RuntimeHooks",
     "RuntimeMonitor",
+    "RuntimeProfile",
+    "RuntimeRegistry",
     "SafeRewindOrchestrator",
     "SESSION_BEFORE_COMPACT",
     "SESSION_BEFORE_FORK",

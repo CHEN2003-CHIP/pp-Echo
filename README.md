@@ -37,6 +37,10 @@ pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangCha
 
 ## 🗞️ 最近更新
 
+### Model / Runtime 分层
+
+pp-Echo 现在区分 Provider、ModelCapabilityProfile 和 RuntimeProfile：Provider 负责供应商与认证，模型与运行时能力统一进入 profile。TraceInspect 已新增 Model / Runtime 卡片，用于查看每次 run 选择的 provider、model、runtime 和能力摘要。
+
 ### Core Memory / 多模型 Provider
 
 pp-Echo 的长期记忆机制升级为更成熟的 Core Memory Layer：长期事实默认先进入 `pending`，审批后才会注入；Core Memory 按 `user_profile`、`project_profile`、`agent_notes` 分层渲染，并补齐 SQLite 持久化、预算治理、安全扫描、去重冲突、审计链、CLI/API/Web 管理面、merge/compact preview/apply 和 provider 预留接口。旧 Episodic Memory、learning memory 和 file memory 继续保留，互不混淆。

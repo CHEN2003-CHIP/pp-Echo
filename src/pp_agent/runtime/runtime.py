@@ -9,9 +9,11 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
+from pp_agent.runtime.resolver import resolve_model_profile, resolve_runtime_profile
 from pp_agent.llm.usage import LLMUsageStats, estimate_cost_usd, normalize_usage
 from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
 from pp_agent.memory.provider import MemoryProvider, NoopMemoryProvider
@@ -199,6 +201,9 @@ class AgentRuntime:
         self.pending_config_effects: list[str] = []
         self._config_refresh_callback = config_refresh_callback
         self.observability = observability or NoopObservabilityHooks()
+        self.model_profile = None
+        self.runtime_profile = None
+        self._refresh_model_runtime_profiles()
         self._trace_event_starts: dict[str, AgentEvent] = {}
         self._event_sequence = 0
         self._run_sequence = 0
@@ -278,7 +283,7 @@ class AgentRuntime:
             user_goal_preview=safe_preview(text, 1000),
             provider=self._provider_name(),
             model=self.llm_client.model.model,
-            attributes={"entrypoint": "prompt"},
+            attributes={"entrypoint": "prompt", **self._model_runtime_attributes()},
         )
         try:
             events = self._collect_runtime_events(self._run_loop(turn_persist_context=context))
@@ -343,7 +348,7 @@ class AgentRuntime:
             user_goal_preview=safe_preview(next_message.text if next_message is not None else "continue", 1000),
             provider=self._provider_name(),
             model=self.llm_client.model.model,
-            attributes={"entrypoint": "continue", "decision": decision.action},
+            attributes={"entrypoint": "continue", "decision": decision.action, **self._model_runtime_attributes()},
         )
         try:
             events = self._collect_runtime_events(self._run_loop(turn_persist_context=context))
@@ -455,9 +460,62 @@ class AgentRuntime:
             self._persist()
         return events
 
+    def _refresh_model_runtime_profiles(self) -> None:
+        """
+        Refresh the normalized model/runtime profiles from the current config surface.
+
+        This is the v0.2.x migration boundary: AgentRuntime consumes profiles, while
+        resolver handles legacy provider/model pairs until v0.3.0 removes that branch.
+        """
+        config = self.config_snapshot or SimpleNamespace(
+            provider=getattr(self.llm_client, "provider", None),
+            model=getattr(self.llm_client, "model", None),
+            runtime_id=None,
+        )
+        self.model_profile = resolve_model_profile(config)
+        self.runtime_profile = resolve_runtime_profile(config)
+
+    def _model_runtime_attributes(self) -> dict[str, object]:
+        """Return run attributes that expose profile selection without leaking secrets."""
+        model_profile = self.model_profile
+        runtime_profile = self.runtime_profile
+        if model_profile is None or runtime_profile is None:
+            self._refresh_model_runtime_profiles()
+            model_profile = self.model_profile
+            runtime_profile = self.runtime_profile
+        return {
+            "runtime_id": runtime_profile.id,
+            "model_capabilities": model_profile.capability_summary(),
+            "runtime_supports": runtime_profile.supports_summary(),
+            "model_profile_source": model_profile.metadata.get("source"),
+            "runtime_profile_source": runtime_profile.metadata.get("source"),
+        }
+
+    def _model_runtime_selected_event(self) -> AgentEvent:
+        """Build the lifecycle event recorded at the start of each Agent run."""
+        model_profile = self.model_profile
+        runtime_profile = self.runtime_profile
+        if model_profile is None or runtime_profile is None:
+            self._refresh_model_runtime_profiles()
+            model_profile = self.model_profile
+            runtime_profile = self.runtime_profile
+        return self._event(
+            "model_runtime_selected",
+            details={
+                "provider_id": model_profile.provider_id,
+                "model_id": model_profile.model_id,
+                "runtime_id": runtime_profile.id,
+                "model_capabilities": model_profile.capability_summary(),
+                "runtime_supports": runtime_profile.supports_summary(),
+                "model_profile_source": model_profile.metadata.get("source"),
+                "runtime_profile_source": runtime_profile.metadata.get("source"),
+            },
+        )
+
     def _run_loop(self, *, turn_persist_context: _TurnPersistContext) -> Iterator[AgentEvent]:
         """开始一轮 → 看有没有待审批计划 → 没有就先问模型 → 有工具就执行工具 → 处理成功/失败 → 必要时压缩上下文 → 结束这一轮"""
         yield from self._refresh_config_for_turn()
+        yield from self._emit(self._model_runtime_selected_event())
         self.state.is_streaming = True
         self.state.error_message = None
         #把积压通知发完，再广播‘这轮开始了
@@ -2733,6 +2791,7 @@ class AgentRuntime:
             self.require_plan_approval = bool(settings.tool_policy.confirm_high_risk_plan)
             self.enforce_orchestrated_edit_contract = bool(settings.subagents.enforce_orchestrated_edit_contract)
             self.require_patch_artifact_for_code_change = bool(settings.subagents.require_patch_artifact_for_code_change)
+            self._refresh_model_runtime_profiles()
         reload_policy = str(getattr(snapshot, "reload_policy", "hot"))
         changed = previous_version is not None and previous_version != self.config_version
         if changed and reload_policy in {"rebuild_runtime", "restart_required"} and self._config_refresh_callback is not None:

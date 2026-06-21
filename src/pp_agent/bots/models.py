@@ -18,6 +18,9 @@ class BotConfig(BaseModel):
     name: str
     enabled: bool = False
     description: Optional[str] = None
+    model_provider_id: Optional[str] = None
+    model_id: Optional[str] = None
+    runtime_id: Optional[str] = None
     adapter: Dict[str, Any] = Field(default_factory=dict)
     ingress: Dict[str, Any] = Field(default_factory=dict)
     routing: Dict[str, Any] = Field(default_factory=dict)

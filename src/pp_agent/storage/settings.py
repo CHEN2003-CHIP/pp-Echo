@@ -269,6 +269,7 @@ class Settings(BaseModel):
     workspace: Path
     global_dir: Path
     project_dir: Path
+    runtime_id: Optional[str] = None
     provider: StoredProviderConfig = Field(default_factory=StoredProviderConfig)
     model: StoredModelConfig = Field(default_factory=StoredModelConfig)
     tool_policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
@@ -367,6 +368,8 @@ class Settings(BaseModel):
 
     def apply_project_config_data(self, data: dict) -> None:
         """利用data字典，动态更新 Settings 对象的配置项"""
+        if "runtime_id" in data:
+            self.runtime_id = str(data["runtime_id"]) if data["runtime_id"] is not None else None
         if "model" in data:
             if isinstance(data["model"], dict):
                 self.model = self.model.model_copy(update=data["model"], deep=True)
