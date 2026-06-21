@@ -6,7 +6,7 @@ import { StartupChecklist } from "./StartupChecklist";
 import { StartupNextSteps } from "./StartupNextSteps";
 import { copyText, statusLabel, statusTone } from "./onboarding-utils";
 
-const SAFE_FIRST_TASK = "请阅读 README，总结 pp-Echo 的核心模块，不要修改文件，不要执行 shell。";
+const SAFE_FIRST_TASK = "Please read README and summarize pp-Echo's core modules. Do not edit files and do not run shell commands.";
 
 export function StartupGuidePage({ onBack, onOpenTrace, onOpenChat }: { onBack: () => void; onOpenTrace: () => void; onOpenChat: () => void }) {
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
@@ -29,8 +29,11 @@ export function StartupGuidePage({ onBack, onOpenTrace, onOpenChat }: { onBack: 
 
   async function checkModel() {
     setCheckingModel(true);
+    setError("");
     try {
       setModelCheck(await api.onboardingCheckModel());
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setCheckingModel(false);
     }
@@ -46,31 +49,31 @@ export function StartupGuidePage({ onBack, onOpenTrace, onOpenChat }: { onBack: 
       <header className="startup-guide-hero">
         <div>
           <small>Startup Guide</small>
-          <h2>启动指引</h2>
-          <p>{status?.workspace || "正在检查当前 workspace..."}</p>
+          <h2>Startup Guide</h2>
+          <p>{status?.workspace || "Checking the current workspace..."}</p>
         </div>
         <div className="startup-guide-actions">
           <span className={`startup-overall startup-overall-${overall}`}>{overall}</span>
-          <button className="startup-secondary-button" onClick={load} disabled={loading}><RefreshCw size={15} /><span>刷新</span></button>
-          <button className="startup-secondary-button" onClick={onBack}><ArrowLeft size={15} /><span>返回会话</span></button>
+          <button className="startup-secondary-button" onClick={load} disabled={loading}><RefreshCw size={15} /><span>Refresh</span></button>
+          <button className="startup-secondary-button" onClick={onBack}><ArrowLeft size={15} /><span>Back to chat</span></button>
         </div>
       </header>
 
       {error ? <div className="startup-guide-error">{error}</div> : null}
-      {loading ? <div className="startup-guide-loading">正在检查启动环境...</div> : null}
+      {loading ? <div className="startup-guide-loading">Checking startup environment...</div> : null}
       {status ? <StartupChecklist checks={modelCheck ? [...status.checks, modelCheck] : status.checks} /> : null}
 
       <section className="startup-guide-section">
         <div className="startup-guide-section-head">
-          <h2>模型连接</h2>
+          <h2>Model connection</h2>
         </div>
         <div className="startup-model-check">
-          <p>点击后只会执行受控的模型连接检查入口；当前版本不会自动发送长 prompt 或保存密钥。</p>
-          <button onClick={checkModel} disabled={checkingModel}><Wifi size={15} /><span>{checkingModel ? "检查中" : "测试模型连接"}</span></button>
-          <small>提示：未来接入真实 ping 时，会发起一次轻量模型请求。</small>
+          <p>Clicking this runs one controlled, low-token model request. Startup checks do not run it automatically.</p>
+          <button onClick={checkModel} disabled={checkingModel}><Wifi size={15} /><span>{checkingModel ? "Checking" : "Test model connection"}</span></button>
+          <small>API keys are read from environment variables and are never returned to the page.</small>
           {modelCheck ? (
             <div className={`startup-model-result ${statusTone(modelCheck.status)}`}>
-              <strong>{statusLabel[modelCheck.status]}：{modelCheck.summary}</strong>
+              <strong>{statusLabel[modelCheck.status]}: {modelCheck.summary}</strong>
               {modelCheck.detail ? <span>{modelCheck.detail}</span> : null}
             </div>
           ) : null}
@@ -81,11 +84,11 @@ export function StartupGuidePage({ onBack, onOpenTrace, onOpenChat }: { onBack: 
 
       <section className="startup-guide-section">
         <div className="startup-guide-section-head">
-          <h2>安全首个任务</h2>
+          <h2>Safe first task</h2>
         </div>
         <div className="startup-safe-task">
           <p>{SAFE_FIRST_TASK}</p>
-          <button onClick={() => copyText(SAFE_FIRST_TASK)}><Copy size={14} /><span>复制 prompt</span></button>
+          <button onClick={() => copyText(SAFE_FIRST_TASK)}><Copy size={14} /><span>Copy prompt</span></button>
         </div>
       </section>
 

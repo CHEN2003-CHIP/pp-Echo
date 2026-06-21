@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Brain, Copy, Database, Eye, EyeOff, KeyRound, RefreshCw, RotateCcw, Save, Search, Settings, ShieldCheck, SlidersHorizontal, Wrench } from "lucide-react";
-import { api, type ConfigField, type ConfigSnapshot } from "../../api";
+import { Bot, Brain, Copy, Database, Eye, EyeOff, KeyRound, RefreshCw, RotateCcw, Save, Search, Settings, ShieldCheck, SlidersHorizontal, Wifi, Wrench } from "lucide-react";
+import { api, type ConfigField, type ConfigSnapshot, type ModelConnectivityResult, type ModelProviderPreset } from "../../api";
 
 type SettingsCategory = "general" | "providers" | "tools" | "agent" | "resources" | "memory" | "security" | "advanced";
 type SettingsScope = "project" | "profile" | "session";
@@ -39,6 +39,8 @@ export function SettingsCenter({
   const [query, setQuery] = useState("");
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [providers, setProviders] = useState<ModelProviderPreset[]>([]);
+  const [modelCheck, setModelCheck] = useState<ModelConnectivityResult | null>(null);
 
   useEffect(() => {
     load().catch((err) => setError(errorMessage(err)));
@@ -56,11 +58,16 @@ export function SettingsCenter({
   }, [snapshot, scope, profileDraft]);
 
   async function load() {
-    const payload = await api.config(sessionId || undefined);
+    const [payload, providerPayload] = await Promise.all([
+      api.config(sessionId || undefined),
+      api.modelProviders().catch(() => ({ providers: [] as ModelProviderPreset[] }))
+    ]);
     setSnapshot(payload);
+    setProviders(providerPayload.providers);
     setProfileDraft(payload.active_profile || payload.profiles[0] || "default");
     setError("");
     setNotice("");
+    setModelCheck(null);
   }
 
   async function applyChanges() {
@@ -143,6 +150,51 @@ export function SettingsCenter({
     setFieldErrors({});
     setError("");
     setNotice("");
+    setModelCheck(null);
+  }
+
+  function applyProviderPreset(providerId: string) {
+    const preset = providers.find((item) => item.id === providerId);
+    if (!preset) return;
+    const nextModel = preset.recommended_models[0] || "";
+    setDrafts((current) => ({
+      ...current,
+      "provider.name": preset.id,
+      "provider.base_url": preset.default_base_url,
+      "provider.api_key_env": preset.default_api_key_env,
+      "model.provider": preset.id,
+      "model.model": nextModel || current["model.model"] || ""
+    }));
+    setModelCheck(null);
+  }
+
+  async function testModelConnection() {
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.modelTest(
+        {
+          name: drafts["provider.name"] || "",
+          base_url: drafts["provider.base_url"] || "",
+          api_key_env: drafts["provider.api_key_env"] || ""
+        },
+        {
+          provider: drafts["model.provider"] || drafts["provider.name"] || "",
+          model: drafts["model.model"] || "",
+          temperature: Number.parseFloat(drafts["model.temperature"] || "0.2"),
+          max_tokens: drafts["model.max_tokens"] ? Number.parseInt(drafts["model.max_tokens"], 10) : null,
+          enable_thinking: drafts["model.enable_thinking"] === "true"
+        }
+      );
+      setModelCheck(result);
+      if (result.status === "ok") setNotice(result.message);
+      if (result.status !== "ok") setError(`${result.message}${result.safe_detail ? ` ${result.safe_detail}` : ""}`);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
   }
 
   const fields = snapshot?.schema.fields || [];
@@ -204,6 +256,38 @@ export function SettingsCenter({
         {snapshot?.pending_effects?.length ? <div className="settings-pending">{snapshot.pending_effects.slice(0, 8).map((item) => <span key={item}>{item}</span>)}</div> : null}
         {error ? <div className="settings-error">{error}</div> : null}
         {notice ? <div className="settings-success">{notice}</div> : null}
+        {category === "providers" ? (
+          <section className="model-provider-panel">
+            <div className="model-provider-head">
+              <div>
+                <strong>Provider quick switch</strong>
+                <span>Select a preset to fill the editable fields below, then apply when ready.</span>
+              </div>
+              <button onClick={testModelConnection} disabled={saving || !drafts["model.model"]} type="button"><Wifi size={14} /> Test model connection</button>
+            </div>
+            <div className="model-provider-grid">
+              {providers.map((provider) => (
+                <button
+                  className={drafts["provider.name"] === provider.id ? "active" : ""}
+                  key={provider.id}
+                  onClick={() => applyProviderPreset(provider.id)}
+                  type="button"
+                >
+                  <strong>{provider.label}</strong>
+                  <span>{provider.protocol}</span>
+                  <small>{provider.recommended_models[0] || "custom model"}</small>
+                </button>
+              ))}
+            </div>
+            {modelCheck ? (
+              <div className={`model-test-result ${modelCheck.status}`}>
+                <strong>{modelCheck.status.toUpperCase()} · {modelCheck.provider} / {modelCheck.model}</strong>
+                <span>{modelCheck.message}{modelCheck.latency_ms ? ` · ${modelCheck.latency_ms}ms` : ""}</span>
+                {modelCheck.safe_detail ? <small>{modelCheck.safe_detail}</small> : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         {category === "advanced" ? (
           <section className="settings-json-editor product">

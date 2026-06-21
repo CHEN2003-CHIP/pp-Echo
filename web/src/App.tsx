@@ -31,7 +31,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
@@ -2492,6 +2492,13 @@ function logEntryKey(entry: LogEntry, index: number) {
 
 function MemoryWorkbench() {
   const [status, setStatus] = useState<MemoryStatus | null>(null);
+  const [corePending, setCorePending] = useState<CoreMemoryRecord[]>([]);
+  const [coreActive, setCoreActive] = useState<CoreMemoryRecord[]>([]);
+  const [coreSnapshot, setCoreSnapshot] = useState<CoreMemorySnapshot | null>(null);
+  const [coreAudit, setCoreAudit] = useState<CoreMemoryAuditRecord[]>([]);
+  const [selectedCoreId, setSelectedCoreId] = useState("");
+  const [providerStatus, setProviderStatus] = useState<Record<string, unknown> | null>(null);
+  const [automationResult, setAutomationResult] = useState<Record<string, unknown> | null>(null);
   const [selectedPath, setSelectedPath] = useState("");
   const [selectedFile, setSelectedFile] = useState<MemoryFileRead | null>(null);
   const [query, setQuery] = useState("");
@@ -2504,8 +2511,20 @@ function MemoryWorkbench() {
   async function reload() {
     try {
       setError("");
-      const nextStatus = await api.memoryStatus();
+      const [nextStatus, pendingPayload, activePayload, snapshotPayload, auditPayload, providerPayload] = await Promise.all([
+        api.memoryStatus(),
+        api.coreMemoryPending(),
+        api.coreMemoryActive(),
+        api.coreMemorySnapshot(),
+        api.coreMemoryAudit(selectedCoreId || undefined, 80),
+        api.coreMemoryProviderStatus()
+      ]);
       setStatus(nextStatus);
+      setCorePending(pendingPayload.pending);
+      setCoreActive(activePayload.active);
+      setCoreSnapshot(snapshotPayload);
+      setCoreAudit(auditPayload.audit);
+      setProviderStatus(providerPayload);
       const nextPath = selectedPath || nextStatus.files[0]?.path || "";
       setSelectedPath(nextPath);
       if (nextPath) {
@@ -2513,6 +2532,48 @@ function MemoryWorkbench() {
       } else {
         setSelectedFile(null);
       }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  async function refreshCore(memoryId = selectedCoreId) {
+    const [pendingPayload, activePayload, snapshotPayload, auditPayload] = await Promise.all([
+      api.coreMemoryPending(),
+      api.coreMemoryActive(),
+      api.coreMemorySnapshot(),
+      api.coreMemoryAudit(memoryId || undefined, 80)
+    ]);
+    setCorePending(pendingPayload.pending);
+    setCoreActive(activePayload.active);
+    setCoreSnapshot(snapshotPayload);
+    setCoreAudit(auditPayload.audit);
+  }
+
+  async function actOnCoreMemory(action: "approve" | "reject" | "archive", memoryId: string) {
+    try {
+      setError("");
+      if (action === "approve") await api.approveCoreMemory(memoryId);
+      if (action === "reject") await api.rejectCoreMemory(memoryId);
+      if (action === "archive") await api.archiveCoreMemory(memoryId);
+      setSelectedCoreId(memoryId);
+      await refreshCore(memoryId);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  async function runAutomation(action: "merge-preview" | "merge-apply" | "compact-preview" | "compact-apply") {
+    try {
+      setError("");
+      const result =
+        action === "merge-preview" ? await api.coreMemoryMergePreview()
+        : action === "merge-apply" ? await api.coreMemoryMergeApply()
+        : action === "compact-preview" ? await api.coreMemoryCompactPreview()
+        : await api.coreMemoryCompactApply();
+      setAutomationResult(result);
+      await refreshCore();
+      setProviderStatus(await api.coreMemoryProviderStatus());
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
@@ -2561,11 +2622,98 @@ function MemoryWorkbench() {
       {error ? <p className="settings-error">{error}</p> : null}
 
       <div className="memory-stats">
-        <MemoryStat label="Memory" value={status?.enabled ? "enabled" : "disabled"} />
+        <MemoryStat label="Episodic memory" value={(status?.episodic_memory_enabled ?? status?.enabled) ? "enabled" : "disabled"} />
+        <MemoryStat label="Core memory" value={(status?.core_memory_enabled ?? true) ? "enabled" : "disabled"} />
+        <MemoryStat label="Core pending" value={`${corePending.length}`} />
+        <MemoryStat label="Core active" value={`${coreActive.length}`} />
+        <MemoryStat label="Snapshot" value={`${coreSnapshot?.chars || 0} chars`} />
+        <MemoryStat label="Provider" value={String(providerStatus?.provider || "unknown")} />
         <MemoryStat label="File memory" value={status?.file_memory_enabled ? "enabled" : "disabled"} />
         <MemoryStat label="Search" value={status?.search_enabled ? "enabled" : "disabled"} />
         <MemoryStat label="Files" value={`${status?.file_count || 0} files / ${status?.indexed_file_count || 0} indexed`} />
       </div>
+
+      <div className="core-memory-layout">
+        <section className="core-memory-column">
+          <div className="capability-list-head">
+            <span>Pending</span>
+            <button onClick={() => reload()}>Reload</button>
+          </div>
+          <CoreMemoryList
+            memories={corePending}
+            empty="No pending candidates."
+            selectedId={selectedCoreId}
+            onSelect={(id) => {
+              setSelectedCoreId(id);
+              api.coreMemoryAudit(id, 80).then((payload) => setCoreAudit(payload.audit)).catch(() => undefined);
+            }}
+            actions={(memory) => (
+              <>
+                <button onClick={() => actOnCoreMemory("approve", memory.id)}>
+                  <Check size={14} />
+                </button>
+                <button onClick={() => actOnCoreMemory("reject", memory.id)}>
+                  <X size={14} />
+                </button>
+              </>
+            )}
+          />
+        </section>
+
+        <section className="core-memory-column">
+          <div className="capability-list-head">
+            <span>Active</span>
+          </div>
+          <CoreMemoryList
+            memories={coreActive}
+            empty="No active core memory."
+            selectedId={selectedCoreId}
+            onSelect={(id) => {
+              setSelectedCoreId(id);
+              api.coreMemoryAudit(id, 80).then((payload) => setCoreAudit(payload.audit)).catch(() => undefined);
+            }}
+            actions={(memory) => (
+              <button onClick={() => actOnCoreMemory("archive", memory.id)}>
+                <Trash2 size={14} />
+              </button>
+            )}
+          />
+        </section>
+
+        <section className="core-memory-column core-memory-preview">
+          <div className="capability-list-head">
+            <span>Snapshot</span>
+            <small>{coreSnapshot?.snapshot_hash ? coreSnapshot.snapshot_hash.slice(0, 10) : "not frozen"}</small>
+          </div>
+          <pre>{coreSnapshot?.snapshot || "No active core memory will be injected."}</pre>
+          {coreSnapshot?.skipped_ids?.length ? <p className="muted">Skipped: {coreSnapshot.skipped_ids.join(", ")}</p> : null}
+        </section>
+
+        <section className="core-memory-column">
+          <div className="capability-list-head">
+            <span>Audit</span>
+            <small>{selectedCoreId ? shortId(selectedCoreId) : "all"}</small>
+          </div>
+          <div className="core-audit-list">
+            {coreAudit.length ? coreAudit.map((record) => (
+              <div key={record.audit_id} className="core-audit-row">
+                <strong>{record.action}</strong>
+                <span>{`${record.before_status || "-"} -> ${record.after_status || "-"}`}</span>
+                <p>{record.reason || record.actor}</p>
+              </div>
+            )) : <p className="muted">No audit records.</p>}
+          </div>
+        </section>
+      </div>
+
+      <div className="core-automation-bar">
+        <button onClick={() => runAutomation("merge-preview")}>Merge preview</button>
+        <button onClick={() => runAutomation("merge-apply")}>Merge apply</button>
+        <button onClick={() => runAutomation("compact-preview")}>Compact preview</button>
+        <button onClick={() => runAutomation("compact-apply")}>Compact apply</button>
+        <span>Provider writes: {String(providerStatus?.mirrored_write_count ?? 0)} / turns: {String(providerStatus?.synced_turn_count ?? 0)}</span>
+      </div>
+      {automationResult ? <pre className="core-automation-result">{JSON.stringify(automationResult, null, 2)}</pre> : null}
 
       <div className="memory-layout">
         <aside className="memory-sidebar">
@@ -2635,6 +2783,36 @@ function MemoryStat({ label, value }: { label: string; value: string }) {
     <div>
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function CoreMemoryList({
+  memories,
+  empty,
+  selectedId,
+  onSelect,
+  actions
+}: {
+  memories: CoreMemoryRecord[];
+  empty: string;
+  selectedId: string;
+  onSelect: (id: string) => void;
+  actions: (memory: CoreMemoryRecord) => React.ReactNode;
+}) {
+  if (!memories.length) return <div className="core-memory-list"><p className="muted">{empty}</p></div>;
+  return (
+    <div className="core-memory-list">
+      {memories.map((memory) => (
+        <article key={memory.id} className={selectedId === memory.id ? "core-memory-item active" : "core-memory-item"}>
+          <button className="core-memory-main" onClick={() => onSelect(memory.id)}>
+            <span className="core-memory-meta">{memory.scope}/{memory.section}/{memory.type}</span>
+            <strong className="core-memory-content">{memory.content}</strong>
+            <small>{shortId(memory.id)} · confidence {memory.confidence.toFixed(2)}</small>
+          </button>
+          <div className="core-memory-actions">{actions(memory)}</div>
+        </article>
+      ))}
     </div>
   );
 }

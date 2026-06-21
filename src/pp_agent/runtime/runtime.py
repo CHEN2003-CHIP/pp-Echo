@@ -137,6 +137,7 @@ class AgentRuntime:
         memory_provider: Optional[MemoryProvider] = None,
         auto_index_scheduler: Optional[AutoIndexScheduler] = None,
         learning_runtime: Optional[object] = None,
+        core_memory_service: Optional[object] = None,
         enforce_orchestrated_edit_contract: bool = True,
         require_patch_artifact_for_code_change: bool = True,
         config_manager: Optional[object] = None,
@@ -189,6 +190,7 @@ class AgentRuntime:
         self.memory_provider = memory_provider or NoopMemoryProvider()
         self.auto_index_scheduler = auto_index_scheduler or NoopAutoIndexScheduler()
         self.learning_runtime = learning_runtime
+        self.core_memory_service = core_memory_service
         self.enforce_orchestrated_edit_contract = bool(enforce_orchestrated_edit_contract)
         self.require_patch_artifact_for_code_change = bool(require_patch_artifact_for_code_change)
         self.config_manager = config_manager
@@ -269,6 +271,7 @@ class AgentRuntime:
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
             turn_started_at=user_message.timestamp,
         )
+        self._propose_explicit_core_memory(text, context)
         self.observability.start_run(
             session_id=self.session_id,
             turn_id=context.turn_id,
@@ -284,6 +287,36 @@ class AgentRuntime:
             raise
         self.observability.end_run(status=self._trace_status_from_events(events))
         return events
+
+    def _propose_explicit_core_memory(self, text: str, context: _TurnPersistContext) -> None:
+        """Capture explicit user memory requests without injecting them into the current turn."""
+        service = self.core_memory_service
+        if service is None:
+            return
+        try:
+            result = service.propose_from_user_text(
+                text,
+                session_id=self.session_id,
+                turn_id=context.turn_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Core memory proposal failed for session=%s turn=%s: %s", self.session_id, context.turn_id, exc)
+            return
+        if result is None:
+            return
+        self._queue_lifecycle_event(
+            self._event(
+                "core_memory_candidate_created",
+                message="Core memory candidate created",
+                details={
+                    "memory_id": result.memory.id,
+                    "status": result.memory.status,
+                    "section": result.memory.section,
+                    "type": result.memory.type,
+                    "warnings": list(result.warnings),
+                },
+            )
+        )
 
     def continue_(self) -> list[AgentEvent]:
         """如果当前没有挂起的 tool calls,并且没有挂起的 planner approval token,那才允许从 queued_messages 里取下一条消息出来；"""
@@ -1819,6 +1852,15 @@ class AgentRuntime:
                             )
                         )
                     )
+        if dual_write_turn_id and new_messages is not None and self.core_memory_service is not None:
+            try:
+                self.core_memory_service.provider.sync_turn(
+                    session_id=self.session_id,
+                    turn_id=dual_write_turn_id,
+                    messages=new_messages,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Core memory provider turn sync failed for session=%s turn=%s: %s", self.session_id, dual_write_turn_id, exc)
 
     def _session_exists(self) -> bool:
         try:

@@ -96,6 +96,8 @@ def mount_capability_config_routes(app, active_workspace) -> None:
         return {
             "workspace": str(workspace()),
             "enabled": settings.memory.enable,
+            "episodic_memory_enabled": settings.memory.enable,
+            "core_memory_enabled": settings.memory.core_memory.enabled,
             "file_memory_enabled": settings.memory.file_memory_enable,
             "search_enabled": settings.memory.file_memory_search_enable,
             "memory_root": str(settings.file_memory_root_path()),

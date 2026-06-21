@@ -486,6 +486,158 @@ if app:
             json_mode=json_mode,
         )
 
+    @memory_app.command("propose")
+    def memory_propose(
+        content: str = typer.Argument(...),
+        scope: str = typer.Option("workspace", "--scope"),
+        section: str = typer.Option("project_profile", "--section"),
+        memory_type: str = typer.Option("general", "--type"),
+        confidence: float = typer.Option(0.5, "--confidence"),
+        reason: str = typer.Option("", "--reason"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_propose_main
+
+        memory_propose_main(
+            workspace,
+            content,
+            scope=scope,
+            section=section,
+            memory_type=memory_type,
+            confidence=confidence,
+            reason=reason,
+            json_mode=json_mode,
+        )
+
+    @memory_app.command("pending")
+    def memory_pending(
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_pending_main
+
+        memory_pending_main(workspace, json_mode=json_mode)
+
+    @memory_app.command("approve")
+    def memory_approve(
+        memory_id: str,
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_approve_main
+
+        memory_approve_main(workspace, memory_id, json_mode=json_mode)
+
+    @memory_app.command("reject")
+    def memory_reject(
+        memory_id: str,
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_reject_main
+
+        memory_reject_main(workspace, memory_id, json_mode=json_mode)
+
+    @memory_app.command("archive")
+    def memory_archive(
+        memory_id: str,
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_archive_main
+
+        memory_archive_main(workspace, memory_id, json_mode=json_mode)
+
+    @memory_app.command("replace")
+    def memory_replace(
+        old_memory_id: str,
+        content: str,
+        section: str = typer.Option("project_profile", "--section"),
+        memory_type: str = typer.Option("general", "--type"),
+        confidence: float = typer.Option(0.5, "--confidence"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_replace_main
+
+        memory_replace_main(
+            workspace,
+            old_memory_id,
+            content,
+            section=section,
+            memory_type=memory_type,
+            confidence=confidence,
+            json_mode=json_mode,
+        )
+
+    @memory_app.command("snapshot")
+    def memory_snapshot(
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_snapshot_main
+
+        memory_snapshot_main(workspace, json_mode=json_mode)
+
+    @memory_app.command("audit")
+    def memory_audit(
+        memory_id: Optional[str] = typer.Argument(None),
+        limit: int = typer.Option(100, "--limit"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_audit_main
+
+        memory_audit_main(workspace, memory_id=memory_id, limit=limit, json_mode=json_mode)
+
+    @memory_app.command("compact-preview")
+    def memory_compact_preview(
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_compact_preview_main
+
+        memory_compact_preview_main(workspace, json_mode=json_mode)
+
+    @memory_app.command("compact-apply")
+    def memory_compact_apply(
+        reason: str = typer.Option("manual_compaction", "--reason"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_compact_apply_main
+
+        memory_compact_apply_main(workspace, reason=reason, json_mode=json_mode)
+
+    @memory_app.command("merge-preview")
+    def memory_merge_preview(
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_merge_preview_main
+
+        memory_merge_preview_main(workspace, json_mode=json_mode)
+
+    @memory_app.command("merge-apply")
+    def memory_merge_apply(
+        reason: str = typer.Option("auto_merge", "--reason"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_merge_apply_main
+
+        memory_merge_apply_main(workspace, reason=reason, json_mode=json_mode)
+
+    @memory_app.command("provider-status")
+    def memory_provider_status(
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_provider_status_main
+
+        memory_provider_status_main(workspace, json_mode=json_mode)
+
 
     @app.command("rewind-safe")
     def rewind_safe(
@@ -683,6 +835,28 @@ def main() -> None:
     memory_get_parser.add_argument("--start-line", type=int, default=None)
     memory_get_parser.add_argument("--line-count", type=int, default=None)
     memory_get_parser.add_argument("--json", action="store_true")
+    memory_audit_parser = memory_subparsers.add_parser("audit")
+    memory_audit_parser.add_argument("memory_id", nargs="?")
+    memory_audit_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_audit_parser.add_argument("--limit", type=int, default=100)
+    memory_audit_parser.add_argument("--json", action="store_true")
+    memory_compact_preview_parser = memory_subparsers.add_parser("compact-preview")
+    memory_compact_preview_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_compact_preview_parser.add_argument("--json", action="store_true")
+    memory_compact_apply_parser = memory_subparsers.add_parser("compact-apply")
+    memory_compact_apply_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_compact_apply_parser.add_argument("--reason", default="manual_compaction")
+    memory_compact_apply_parser.add_argument("--json", action="store_true")
+    memory_merge_preview_parser = memory_subparsers.add_parser("merge-preview")
+    memory_merge_preview_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_merge_preview_parser.add_argument("--json", action="store_true")
+    memory_merge_apply_parser = memory_subparsers.add_parser("merge-apply")
+    memory_merge_apply_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_merge_apply_parser.add_argument("--reason", default="auto_merge")
+    memory_merge_apply_parser.add_argument("--json", action="store_true")
+    memory_provider_status_parser = memory_subparsers.add_parser("provider-status")
+    memory_provider_status_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_provider_status_parser.add_argument("--json", action="store_true")
     rewind_safe_parser = subparsers.add_parser("rewind-safe")
     rewind_safe_parser.add_argument("--session", required=True)
     rewind_safe_parser.add_argument("--checkpoint", default=None)
@@ -885,6 +1059,30 @@ def main() -> None:
             line_count=args.line_count,
             json_mode=args.json,
         )
+    elif command == "memory" and args.memory_command == "audit":
+        from pp_agent.cli.commands.memory import memory_audit_main
+
+        memory_audit_main(Path(args.workspace), memory_id=args.memory_id, limit=args.limit, json_mode=args.json)
+    elif command == "memory" and args.memory_command == "compact-preview":
+        from pp_agent.cli.commands.memory import memory_compact_preview_main
+
+        memory_compact_preview_main(Path(args.workspace), json_mode=args.json)
+    elif command == "memory" and args.memory_command == "compact-apply":
+        from pp_agent.cli.commands.memory import memory_compact_apply_main
+
+        memory_compact_apply_main(Path(args.workspace), reason=args.reason, json_mode=args.json)
+    elif command == "memory" and args.memory_command == "merge-preview":
+        from pp_agent.cli.commands.memory import memory_merge_preview_main
+
+        memory_merge_preview_main(Path(args.workspace), json_mode=args.json)
+    elif command == "memory" and args.memory_command == "merge-apply":
+        from pp_agent.cli.commands.memory import memory_merge_apply_main
+
+        memory_merge_apply_main(Path(args.workspace), reason=args.reason, json_mode=args.json)
+    elif command == "memory" and args.memory_command == "provider-status":
+        from pp_agent.cli.commands.memory import memory_provider_status_main
+
+        memory_provider_status_main(Path(args.workspace), json_mode=args.json)
     elif command == "rewind-safe":
         from pp_agent.cli.commands.checkpoint import rewind_safe_main
 

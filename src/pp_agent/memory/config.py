@@ -1,6 +1,50 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class CoreMemoryBudgetSettings(BaseModel):
+    user_profile_chars: int = 1200
+    project_profile_chars: int = 2000
+    agent_notes_chars: int = 1500
+    total_chars: int = 4000
+
+
+class CoreMemoryFeatureToggle(BaseModel):
+    enabled: bool = True
+
+
+class CoreMemoryAutomationSettings(BaseModel):
+    enabled: bool = True
+    use_llm_summary: bool = False
+    llm_summary_model: str = ""
+    max_merge_group_size: int = 8
+    max_compaction_group_size: int = 8
+
+
+class CoreMemoryProviderSettings(BaseModel):
+    enabled: bool = True
+    backend: str = "local"
+    sqlite_path: str = ""
+
+
+class CoreMemorySettings(BaseModel):
+    enabled: bool = True
+    require_approval: bool = True
+    auto_approve_explicit_user_memory: bool = False
+    sqlite_path: str = ""
+    budgets: CoreMemoryBudgetSettings = Field(default_factory=CoreMemoryBudgetSettings)
+    safety: CoreMemoryFeatureToggle = Field(default_factory=CoreMemoryFeatureToggle)
+    dedupe: CoreMemoryFeatureToggle = Field(default_factory=CoreMemoryFeatureToggle)
+    conflict_detection: CoreMemoryFeatureToggle = Field(default_factory=CoreMemoryFeatureToggle)
+    automation: CoreMemoryAutomationSettings = Field(default_factory=CoreMemoryAutomationSettings)
+    provider: CoreMemoryProviderSettings = Field(default_factory=CoreMemoryProviderSettings)
+
+
+class EpisodicMemorySettings(BaseModel):
+    enabled: bool = True
+    max_snippets: int = 4
+    max_chars: int = 3000
 
 
 class MemorySettings(BaseModel):
@@ -56,3 +100,5 @@ class MemorySettings(BaseModel):
     file_memory_snippet_chars: int = 700
     file_memory_sync_on_search: bool = True
     file_memory_allow_remote_embedding: bool = True
+    core_memory: CoreMemorySettings = Field(default_factory=CoreMemorySettings)
+    episodic_memory: EpisodicMemorySettings = Field(default_factory=EpisodicMemorySettings)

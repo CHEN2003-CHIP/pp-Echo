@@ -91,7 +91,7 @@ pp-Echo 想回答一个学习者真正关心的问题：
 - 对文件、Git、Shell、Browser、Memory、MCP、SubAgent 的工具化封装。
 - Approval Gate：高风险动作先预览、再确认、再执行。
 - Git-backed checkpoint / safe rewind：代码状态和会话状态都能回退。
-- Memory 检索与上下文注入：让 Agent 不只活在当前一轮对话里。
+- Memory 检索与上下文注入：Core Memory 负责受审批、可审计、按 workspace 隔离的稳定长期事实；Episodic Memory 保留现有历史检索能力，按需召回会话细节。见 [`docs/core-memory.md`](docs/core-memory.md)。
 - 受控 SubAgent：能分工，但要有工具白名单、轮次限制和产物边界。
 - File Attachments：上传文件按 session 存储、解析、切块、索引，再通过附件工具按需读取，避免把大文件直接塞进 prompt。运行时只注入附件清单和短 preview；Agent 会优先使用 `list_attachments`、`inspect_attachment`、`search_attachment`、`read_attachment_text`、`read_attachment_chunk`、`read_attachment_range` 等工具回答文件问题。导入 workspace 必须走 Approval Gate；写入长期 Memory 必须显式触发；PDF/DOCX/Markdown/code 会尽量保留 page、heading、line 或 symbol source ref。见 [`docs/attachments.md`](docs/attachments.md)。
 

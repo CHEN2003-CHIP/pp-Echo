@@ -52,7 +52,7 @@ web/.rich-text-tests-*/
 
 # Local runtime state
 .pp-agent/
-memory/
+/memory/
 .tmp-debug/
 .tmp-debug*/
 
@@ -70,7 +70,9 @@ rust/target/
 .npm-cache/
 node_modules/
 
-memory/
+/memory/
+!src/pp_agent/memory/
+!src/pp_agent/memory/*.py
 MEMORY.md
 AGENTS.md
 test.py
