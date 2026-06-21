@@ -4570,6 +4570,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding-bottom: 24px;
+  scroll-behavior: smooth;
 }
 
 .memory-header {
@@ -4759,7 +4761,7 @@ body {
 }
 
 .memory-layout {
-  min-height: 0;
+  min-height: clamp(560px, 72vh, 980px);
   display: grid;
   grid-template-columns: 420px minmax(0, 1fr);
   gap: 12px;
@@ -4923,7 +4925,7 @@ body {
 }
 
 .memory-reader {
-  min-height: 0;
+  min-height: clamp(520px, 68vh, 920px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
@@ -5875,6 +5877,14 @@ body {
   .core-memory-layout {
     flex: 0 0 auto;
   }
+
+  .memory-layout {
+    min-height: auto;
+  }
+
+  .memory-reader {
+    min-height: 620px;
+  }
 }
 
 .app-shell.sidebar-collapsed {
@@ -6632,6 +6642,76 @@ html[data-theme="light"] .attachment-panel-detail {
   letter-spacing: 0.06em;
 }
 
+.trace-model-runtime-card {
+  display: grid;
+  gap: 12px;
+}
+
+.trace-model-runtime-head {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trace-model-runtime-head > div,
+.trace-model-runtime-group {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel-2);
+}
+
+.trace-model-runtime-head span,
+.trace-model-runtime-group h4 {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.trace-model-runtime-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.trace-model-runtime-grids {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trace-model-runtime-group > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trace-model-runtime-group span {
+  max-width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  color: var(--app-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.trace-model-runtime-group span.enabled {
+  color: var(--app-success);
+  border-color: color-mix(in srgb, var(--app-success) 38%, var(--app-border));
+}
+
+.trace-model-runtime-group span.disabled {
+  color: var(--app-muted);
+}
+
 .trace-inspect-two-col {
   height: clamp(360px, 56vh, 560px);
   min-height: 0;
@@ -6779,6 +6859,11 @@ html[data-theme="light"] .attachment-panel-detail {
 
   .trace-inspect-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trace-model-runtime-head,
+  .trace-model-runtime-grids {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .trace-timeline-list button {
