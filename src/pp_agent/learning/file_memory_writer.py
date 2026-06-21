@@ -23,30 +23,24 @@ CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 @dataclass(frozen=True)
 class FileMemoryWriteResult:
-    candidate_id: str          # 候选项 ID
-    action: str                # 执行的动作：global_bootstrap, workspace_bootstrap, journal, detailed_memory, ignored, skipped, pending_* 等
-    path: Path | None = None   # 写入的文件路径（如果有）
-    warnings: list[str] = field(default_factory=list)  # 非致命警告列表
+    """Outcome of applying one learning candidate to Markdown File Memory."""
+
+    candidate_id: str
+    action: str
+    path: Path | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 class FileMemoryWriter:
+    """Write approved learning candidates into Markdown File Memory.
+
+    Learning extracts candidates, while this writer decides whether a candidate
+    becomes global bootstrap memory, workspace ``MEMORY.md``, a daily journal,
+    or detailed ``memory/*.md`` content. It updates LearningStore state and can
+    refresh the File Memory index, but it does not own candidate extraction,
+    Core Memory approval, or episodic history retrieval.
     """
-    LearningCandidate 的文件记忆写入器。
 
-    FileMemoryWriter 负责把学习候选写入长期 Markdown 记忆体系：
-    - 全局用户偏好 -> global bootstrap memory；
-    - 项目约定 / 工作流 / 经验 -> workspace/MEMORY.md；
-    - 临时或当天记录 -> memory/daily/YYYY-MM-DD.md；
-    - bug/debug/architecture/workflow/lesson 等详细经验 -> memory/*.md。
-
-    它会根据 candidate.suggested_target、kind、confidence 和 auto_apply 设置
-    决定是否自动写入、写到哪里、是否需要保持 pending。
-    写入成功后会更新 LearningStore 中候选状态，
-    并在需要时同步 BootstrapMemoryManager 和 FileMemorySearchEngine index。
-
-    它不负责候选抽取，也不负责检索；
-    它只负责把候选安全、去重、分类地落到文件 memory 中。
-    """
     def __init__(self, *, workspace: Path, settings: LearningSettings, store: LearningStore | None = None) -> None:
         self.workspace = workspace.resolve()
         self.settings = settings

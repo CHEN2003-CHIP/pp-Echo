@@ -19,6 +19,8 @@ MemoryScope = Literal["auto", "workspace", "global", "all"]
 
 @dataclass(frozen=True)
 class FileMemorySearchRequest:
+    """Search options for durable Markdown File Memory."""
+
     query: str
     top_k: int = 5
     mode: SearchMode = "auto"
@@ -28,6 +30,8 @@ class FileMemorySearchRequest:
 
 @dataclass(frozen=True)
 class FileMemorySearchHit:
+    """One ranked Markdown memory chunk returned to CLI, tools, or Web UI."""
+
     path: str
     source_scope: str
     line_start: int
@@ -68,6 +72,8 @@ class FileMemorySearchHit:
 
 @dataclass(frozen=True)
 class FileMemorySearchResult:
+    """Structured result for File Memory search with optional diagnostics."""
+
     query: str
     mode: str
     semantic_available: bool
@@ -88,6 +94,8 @@ class FileMemorySearchResult:
 
 @dataclass(frozen=True)
 class FileMemorySyncSummary:
+    """Counts produced when Markdown memory files are indexed or refreshed."""
+
     scanned: int = 0
     indexed_files: int = 0
     indexed_chunks: int = 0
@@ -107,13 +115,14 @@ class FileMemorySyncSummary:
 
 
 class FileMemorySearchEngine:
-    """
-    记忆搜索引擎，它处理存储在本地文件系统中的 Markdown 文件，将它们切分成有结构的文本块（chunk），并为每个块建立两种索引：
+    """Search engine for durable Markdown File Memory.
 
-    BM25 索引：基于词频和文档频率的稀疏检索，适合精确的关键词匹配。
-
-    向量索引：通过 Embedding 模型将文本块转换为稠密向量，支持语义相似度搜索。
+    The engine scans allowed memory roots, chunks Markdown, keeps a SQLite
+    index, and ranks results with BM25 plus optional vector search. It never
+    mutates Core Memory and never reads arbitrary workspace files outside the
+    configured memory roots.
     """
+
     def __init__(
         self,
         *,

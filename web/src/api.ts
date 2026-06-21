@@ -489,6 +489,7 @@ export type MemoryStatus = {
   workspace: string;
   enabled: boolean;
   episodic_memory_enabled?: boolean;
+  episodic_history_enabled?: boolean;
   core_memory_enabled?: boolean;
   file_memory_enabled: boolean;
   search_enabled: boolean;

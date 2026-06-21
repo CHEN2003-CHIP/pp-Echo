@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 
 
 class CoreMemoryBudgetSettings(BaseModel):
+    """Character budgets for each curated Core Memory snapshot section."""
+
     user_profile_chars: int = 1200
     project_profile_chars: int = 2000
     agent_notes_chars: int = 1500
@@ -11,10 +13,14 @@ class CoreMemoryBudgetSettings(BaseModel):
 
 
 class CoreMemoryFeatureToggle(BaseModel):
+    """Small nested toggle used by Core Memory governance features."""
+
     enabled: bool = True
 
 
 class CoreMemoryAutomationSettings(BaseModel):
+    """Settings for Core Memory merge and compaction helpers."""
+
     enabled: bool = True
     use_llm_summary: bool = False
     llm_summary_model: str = ""
@@ -23,12 +29,21 @@ class CoreMemoryAutomationSettings(BaseModel):
 
 
 class CoreMemoryProviderSettings(BaseModel):
+    """Provider mirror settings for optional external Core Memory backends."""
+
     enabled: bool = True
     backend: str = "local"
     sqlite_path: str = ""
 
 
 class CoreMemorySettings(BaseModel):
+    """Curated long-term memory that can be approved and injected into context.
+
+    Core Memory is separate from episodic/history retrieval and file memory. It
+    stores durable user, project, and agent notes behind approval, governance,
+    audit records, and rendering budgets.
+    """
+
     enabled: bool = True
     require_approval: bool = True
     auto_approve_explicit_user_memory: bool = False
@@ -42,12 +57,28 @@ class CoreMemorySettings(BaseModel):
 
 
 class EpisodicMemorySettings(BaseModel):
+    """Fine-grained limits for history retrieval snippets.
+
+    The older top-level ``memory.enable`` flag still controls whether the
+    history store/provider is active. This nested object only scopes the
+    retrieval injection limits for the Episodic Memory layer.
+    """
+
     enabled: bool = True
     max_snippets: int = 4
     max_chars: int = 3000
 
 
 class MemorySettings(BaseModel):
+    """Settings for pp-Echo memory layers.
+
+    The historical top-level fields belong to Episodic Memory: SQLite history,
+    embeddings, vector index, retrieval, reranking, and snippet shaping. They
+    are intentionally kept as stable project configuration keys. Core Memory
+    and File Memory live under their own explicit groups so UI and docs do not
+    treat ``memory.enable`` as a global switch for every memory subsystem.
+    """
+
     enable: bool = False
     backend: str = "sqlite"
     sqlite_path: str = ""

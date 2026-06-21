@@ -592,6 +592,14 @@ class Settings(BaseModel):
             self.capabilities.web.zhipu_base_url = str(web_config["zhipu_base_url"])
 
     def _apply_memory_config(self, memory_config: dict) -> None:
+        """Apply memory config while preserving stable public key names.
+
+        The flat ``memory.*`` fields are still the public project config shape
+        for Episodic Memory/history retrieval. Newer nested groups such as
+        ``core_memory`` and ``episodic_memory`` refine behavior without turning
+        ``memory.enable`` into a global switch for Core Memory or File Memory.
+        """
+
         if "enable" in memory_config:
             self.memory.enable = bool(memory_config["enable"])
         if "backend" in memory_config:

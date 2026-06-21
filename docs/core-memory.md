@@ -1,6 +1,8 @@
 # Memory Architecture
 
-pp-Echo now treats long-term memory as two separate systems.
+pp-Echo now treats long-term memory as four explicit layers: Core Memory,
+Episodic Memory, File Memory, and Learning Memory. They cooperate, but their
+storage, approval rules, and runtime responsibilities stay separate.
 
 ## Core Memory
 
@@ -41,10 +43,21 @@ Episodic Memory is the existing history retrieval system: chunks, keyword/vector
 
 Episodic snippets are not promoted to Core Memory automatically. Promotion must go through candidate creation, safety checks, dedupe/conflict checks, pending state, and approval.
 
-The legacy `memory.enable` flag controls this episodic/history memory layer. It
-can be disabled while Core Memory and File Memory remain available. UI status
-labels should call this `Episodic memory`, not generic `Memory`, to avoid
-confusing it with the whole memory system.
+The stable `memory.enable` project config key controls this episodic/history
+memory layer. It is retained for existing workspaces, but it is not a global
+switch for every memory subsystem. Effective runtime recall also respects
+`memory.episodic_memory.enabled`; Core Memory and File Memory can remain
+available when Episodic Memory is disabled. UI status labels should call this
+`Episodic memory`, not generic `Memory`, to avoid confusing it with the whole
+memory system.
+
+## File Memory and Learning Memory
+
+File Memory indexes durable Markdown files such as `MEMORY.md` and
+`memory/**/*.md` for explicit search/read workflows. Learning Memory extracts
+candidate lessons and can write approved or auto-applied items into those
+Markdown files. Neither layer bypasses Core Memory approval, and neither layer
+depends on `memory.enable`.
 
 ## Service Boundary
 

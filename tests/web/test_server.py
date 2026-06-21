@@ -261,6 +261,29 @@ def test_web_api_memory_status_search_and_read(tmp_path: Path) -> None:
     assert "focused pytest" in read.json()["content"]
 
 
+def test_web_api_memory_status_distinguishes_episodic_effective_state(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project_dir = workspace / ".pp-agent"
+    project_dir.mkdir()
+    (project_dir / "config.json").write_text(
+        '{"memory":{"enable":true,"episodic_memory":{"enabled":false}}}',
+        encoding="utf-8",
+    )
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    status = client.get("/api/memory/status")
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert status.json()["episodic_history_enabled"] is True
+    assert status.json()["episodic_memory_enabled"] is False
+    assert status.json()["core_memory_enabled"] is True
+    assert status.json()["file_memory_enabled"] is True
+
+
 def test_web_api_capability_config_inventory_and_project_templates(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

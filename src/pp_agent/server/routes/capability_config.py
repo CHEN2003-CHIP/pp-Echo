@@ -89,14 +89,24 @@ def mount_capability_config_routes(app, active_workspace) -> None:
 
     @app.get("/api/memory/status")
     def memory_status() -> dict[str, Any]:
+        """Return UI-facing status for each memory layer.
+
+        ``enabled`` is kept for older Web clients and mirrors the stable
+        Episodic Memory history switch. ``episodic_memory_enabled`` reports the
+        effective retrieval layer state after the nested episodic toggle is
+        applied, while Core Memory and File Memory remain separate statuses.
+        """
+
         settings = _safe_memory_settings(workspace())
         store = build_file_memory_store(workspace(), settings=settings)
         files = store.scan_memory_files()
         indexed = store.indexed_files()
+        episodic_enabled = settings.memory.enable and settings.memory.episodic_memory.enabled
         return {
             "workspace": str(workspace()),
             "enabled": settings.memory.enable,
-            "episodic_memory_enabled": settings.memory.enable,
+            "episodic_memory_enabled": episodic_enabled,
+            "episodic_history_enabled": settings.memory.enable,
             "core_memory_enabled": settings.memory.core_memory.enabled,
             "file_memory_enabled": settings.memory.file_memory_enable,
             "search_enabled": settings.memory.file_memory_search_enable,

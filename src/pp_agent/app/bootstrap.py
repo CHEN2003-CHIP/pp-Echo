@@ -440,6 +440,13 @@ def trace_store_for(workspace: Path) -> TraceStore:
 
 
 def memory_provider_for(workspace: Path):
+    """Build the Episodic Memory history provider for a workspace.
+
+    This provider owns conversation-history persistence and chunking only. It
+    is guarded by the stable ``memory.enable`` project config key and is
+    intentionally separate from Core Memory snapshots and Markdown File Memory.
+    """
+
     settings = load_settings(workspace)
     memory_settings = settings.memory
     if not memory_settings.enable or memory_settings.backend != "sqlite":
@@ -468,6 +475,13 @@ def core_memory_store_for(workspace: Path) -> CoreMemoryStore:
 
 
 def core_memory_context_hook_for(workspace: Path) -> CoreMemoryContextHook | None:
+    """Build the Core Memory snapshot hook when curated memory is enabled.
+
+    Core Memory injects approved durable facts at context-build time. It does
+    not depend on ``memory.enable`` because that flag belongs to the episodic
+    history retrieval layer.
+    """
+
     settings = load_settings(workspace)
     core = settings.memory.core_memory
     if not core.enabled:
@@ -611,6 +625,14 @@ def reranker_for(workspace: Path):
 
 
 def memory_retrieval_hook_for(workspace: Path, *, session_id: str | None = None) -> MemoryRetrievalHook:
+    """Build the Episodic Memory retrieval hook for runtime context recall.
+
+    Effective recall requires both the stable history switch
+    ``memory.enable`` and the nested ``memory.episodic_memory.enabled`` limit
+    group. The nested group can cap or disable recall without disabling the
+    history store that older project configs still use.
+    """
+
     settings = load_settings(workspace)
     retriever = history_retriever_for(workspace, session_id=session_id)
     return MemoryRetrievalHook(
