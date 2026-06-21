@@ -86,16 +86,20 @@ def create_app(
     from pp_agent.server.routes.config import mount_config_routes
     from pp_agent.server.routes.capability_config import mount_capability_config_routes
     from pp_agent.server.routes.onboarding import mount_onboarding_routes
+    from pp_agent.server.routes.models import mount_model_routes
     from pp_agent.server.routes.traces import mount_trace_routes
     from pp_agent.server.routes.attachments import mount_attachment_routes
+    from pp_agent.server.routes.core_memory import mount_core_memory_routes
     from pp_agent.server.routes.qqbot import mount_qqbot_routes
     from pp_agent.server.routes.bots import mount_bot_routes
 
     mount_config_routes(app, active_workspace, session_manager)
     mount_capability_config_routes(app, active_workspace)
+    mount_model_routes(app, active_workspace)
     mount_onboarding_routes(app, active_workspace)
     mount_trace_routes(app, active_workspace)
     mount_attachment_routes(app, active_workspace)
+    mount_core_memory_routes(app, active_workspace)
     mount_bot_routes(app, active_workspace)
     mount_qqbot_routes(app, active_workspace, session_manager)
 

@@ -37,6 +37,16 @@ pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangCha
 
 ## 🗞️ 最近更新
 
+### Core Memory / 多模型 Provider
+
+pp-Echo 的长期记忆机制升级为更成熟的 Core Memory Layer：长期事实默认先进入 `pending`，审批后才会注入；Core Memory 按 `user_profile`、`project_profile`、`agent_notes` 分层渲染，并补齐 SQLite 持久化、预算治理、安全扫描、去重冲突、审计链、CLI/API/Web 管理面、merge/compact preview/apply 和 provider 预留接口。旧 Episodic Memory、learning memory 和 file memory 继续保留，互不混淆。
+
+模型接入也从单一 OpenAI-compatible 配置扩展为 Provider Registry：内置 OpenAI、DeepSeek、Qwen/DashScope、小米、阿里百炼、Anthropic Claude 和自定义 OpenAI-compatible preset；Settings 页面可以快速切换 provider/model，左上角 Startup Guide 的“测试模型连接”会在显式点击后发起一次低 token 连接测试，不会自动暴露或保存 API key。
+
+推荐阅读：
+
+- [Core Memory 设计与管理说明](docs/core-memory.md)
+
 ### Bot Center / QQBot Gateway
 
 pp-Echo 现在加入了 `Bots` 页面：QQBot 不再只是一个“能跑通 webhook 的实验入口”，而是被纳入统一 Bot Center，可以查看状态、启动/停止、配置公网 URL、追踪事件、消息、run、trace 和日志。默认 `qq-main` 不自动暴露公网，群聊仍使用 `/pp` 触发。
@@ -91,7 +101,7 @@ pp-Echo 想回答一个学习者真正关心的问题：
 - 对文件、Git、Shell、Browser、Memory、MCP、SubAgent 的工具化封装。
 - Approval Gate：高风险动作先预览、再确认、再执行。
 - Git-backed checkpoint / safe rewind：代码状态和会话状态都能回退。
-- Memory 检索与上下文注入：让 Agent 不只活在当前一轮对话里。
+- Memory 检索与上下文注入：Core Memory 负责受审批、可审计、按 workspace 隔离的稳定长期事实；Episodic Memory 保留现有历史检索能力，按需召回会话细节。见 [`docs/core-memory.md`](docs/core-memory.md)。
 - 受控 SubAgent：能分工，但要有工具白名单、轮次限制和产物边界。
 - File Attachments：上传文件按 session 存储、解析、切块、索引，再通过附件工具按需读取，避免把大文件直接塞进 prompt。运行时只注入附件清单和短 preview；Agent 会优先使用 `list_attachments`、`inspect_attachment`、`search_attachment`、`read_attachment_text`、`read_attachment_chunk`、`read_attachment_range` 等工具回答文件问题。导入 workspace 必须走 Approval Gate；写入长期 Memory 必须显式触发；PDF/DOCX/Markdown/code 会尽量保留 page、heading、line 或 symbol source ref。见 [`docs/attachments.md`](docs/attachments.md)。
 

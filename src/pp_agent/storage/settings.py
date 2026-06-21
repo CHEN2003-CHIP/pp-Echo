@@ -693,6 +693,16 @@ class Settings(BaseModel):
             self.memory.file_memory_sync_on_search = bool(memory_config["file_memory_sync_on_search"])
         if "file_memory_allow_remote_embedding" in memory_config:
             self.memory.file_memory_allow_remote_embedding = bool(memory_config["file_memory_allow_remote_embedding"])
+        core_config = memory_config.get("core_memory", {})
+        if isinstance(core_config, dict):
+            core_payload = self.memory.core_memory.model_dump(mode="python")
+            core_payload.update(core_config)
+            self.memory.core_memory = type(self.memory.core_memory).model_validate(core_payload)
+        episodic_config = memory_config.get("episodic_memory", {})
+        if isinstance(episodic_config, dict):
+            episodic_payload = self.memory.episodic_memory.model_dump(mode="python")
+            episodic_payload.update(episodic_config)
+            self.memory.episodic_memory = type(self.memory.episodic_memory).model_validate(episodic_payload)
 
     def _apply_learning_config(self, learning_config: dict) -> None:
         if "enable" in learning_config:
@@ -748,6 +758,20 @@ class Settings(BaseModel):
             env_var="PP_AGENT_MEMORY_SQLITE_PATH",
             configured=self.memory.sqlite_path,
             default=self.project_dir / "history.db",
+        )
+
+    def core_memory_db_path(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_CORE_MEMORY_SQLITE_PATH",
+            configured=self.memory.core_memory.sqlite_path,
+            default=self.project_dir / "core-memory.db",
+        )
+
+    def core_memory_provider_db_path(self) -> Path:
+        return self._resolve_runtime_path(
+            env_var="PP_AGENT_CORE_MEMORY_PROVIDER_SQLITE_PATH",
+            configured=self.memory.core_memory.provider.sqlite_path,
+            default=self.project_dir / "core-memory-provider.db",
         )
 
     def chroma_dir_path(self) -> Path:

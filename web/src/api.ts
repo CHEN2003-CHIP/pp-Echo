@@ -488,6 +488,8 @@ export type MemoryFileEntry = {
 export type MemoryStatus = {
   workspace: string;
   enabled: boolean;
+  episodic_memory_enabled?: boolean;
+  core_memory_enabled?: boolean;
   file_memory_enabled: boolean;
   search_enabled: boolean;
   memory_root: string;
@@ -527,6 +529,44 @@ export type MemoryFileRead = {
   content: string;
 };
 
+export type CoreMemoryRecord = {
+  id: string;
+  scope: "global" | "workspace" | string;
+  workspace_id?: string | null;
+  section: "user_profile" | "project_profile" | "agent_notes" | string;
+  type: string;
+  content: string;
+  confidence: number;
+  status: "pending" | "active" | "rejected" | "archived" | string;
+  metadata?: Record<string, unknown>;
+  created_at?: number;
+  updated_at?: number;
+};
+
+export type CoreMemorySnapshot = {
+  snapshot: string;
+  workspace_id: string;
+  session_id?: string | null;
+  included_ids: string[];
+  skipped_ids: string[];
+  skipped_reasons: Record<string, string>;
+  chars: number;
+  snapshot_hash: string;
+  budget: Record<string, unknown>;
+};
+
+export type CoreMemoryAuditRecord = {
+  audit_id: string;
+  memory_id: string;
+  action: string;
+  actor: string;
+  before_status?: string | null;
+  after_status?: string | null;
+  reason: string;
+  created_at: number;
+  metadata?: Record<string, unknown>;
+};
+
 export type OpenWorkspaceResponse = WorkspacesState & {
   requires_confirmation: boolean;
   candidate?: WorkspaceEntry | null;
@@ -563,6 +603,31 @@ export type ConfigSnapshot = {
   active_profile?: string | null;
   profiles: string[];
   schema: { fields: ConfigField[]; categories: string[] };
+};
+
+export type ModelProviderPreset = {
+  id: string;
+  label: string;
+  protocol: "openai-compatible" | "anthropic";
+  default_base_url: string;
+  default_api_key_env: string;
+  recommended_models: string[];
+  supports_thinking: boolean;
+  supports_streaming: boolean;
+  supports_tools: boolean;
+  notes?: string;
+};
+
+export type ModelConnectivityResult = {
+  provider: string;
+  model: string;
+  base_url: string;
+  api_key_env: string;
+  status: "ok" | "warning" | "error";
+  latency_ms?: number | null;
+  message: string;
+  retryable: boolean;
+  safe_detail: string;
 };
 
 export type BotSummary = {
@@ -678,6 +743,17 @@ export const api = {
     }),
   onboardingStatus: () => request<OnboardingStatus>("/api/onboarding/status"),
   onboardingCheckModel: () => request<OnboardingCheck>("/api/onboarding/check-model", { method: "POST" }),
+  modelProviders: () => request<{ providers: ModelProviderPreset[] }>("/api/models/providers"),
+  modelTest: (provider?: Record<string, unknown>, model?: Record<string, unknown>) =>
+    request<ModelConnectivityResult>("/api/models/test", {
+      method: "POST",
+      body: JSON.stringify({ provider, model })
+    }),
+  applyModelPreset: (providerId: string, model?: string, baseHash?: string) =>
+    request<ConfigSnapshot>("/api/models/apply-preset", {
+      method: "POST",
+      body: JSON.stringify({ provider_id: providerId, model, base_hash: baseHash })
+    }),
   workspaces: () => request<WorkspacesState>("/api/workspaces"),
   bots: () => request<{ bots: BotSummary[] }>("/api/bots"),
   botDetail: (botId: string) => request<BotDetail>(`/api/bots/${encodeURIComponent(botId)}`),
@@ -740,6 +816,42 @@ export const api = {
     if (lineCount) query.set("line_count", String(lineCount));
     return request<MemoryFileRead>(`/api/memory/file?${query.toString()}`);
   },
+  coreMemoryPending: () => request<{ pending: CoreMemoryRecord[] }>("/api/memory/core/pending"),
+  coreMemoryActive: () => request<{ active: CoreMemoryRecord[] }>("/api/memory/core/active"),
+  coreMemorySnapshot: () => request<CoreMemorySnapshot>("/api/memory/core/snapshot"),
+  coreMemoryAudit: (memoryId?: string, limit = 100) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (memoryId) query.set("memory_id", memoryId);
+    return request<{ audit: CoreMemoryAuditRecord[] }>(`/api/memory/core/audit?${query.toString()}`);
+  },
+  coreMemoryCompactPreview: () => request<Record<string, unknown>>("/api/memory/core/compact-preview"),
+  coreMemoryCompactApply: (reason = "web compaction") =>
+    request<Record<string, unknown>>("/api/memory/core/compact-apply", {
+      method: "POST",
+      body: JSON.stringify({ actor: "web", reason })
+    }),
+  coreMemoryMergePreview: () => request<Record<string, unknown>>("/api/memory/core/merge-preview"),
+  coreMemoryMergeApply: (reason = "web merge") =>
+    request<Record<string, unknown>>("/api/memory/core/merge-apply", {
+      method: "POST",
+      body: JSON.stringify({ actor: "web", reason })
+    }),
+  coreMemoryProviderStatus: () => request<Record<string, unknown>>("/api/memory/core/provider/status"),
+  approveCoreMemory: (memoryId: string, reason = "web approval") =>
+    request<{ memory: CoreMemoryRecord }>(`/api/memory/core/${encodeURIComponent(memoryId)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ actor: "web", reason })
+    }),
+  rejectCoreMemory: (memoryId: string, reason = "web rejection") =>
+    request<{ memory: CoreMemoryRecord }>(`/api/memory/core/${encodeURIComponent(memoryId)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ actor: "web", reason })
+    }),
+  archiveCoreMemory: (memoryId: string, reason = "web archive") =>
+    request<{ memory: CoreMemoryRecord }>(`/api/memory/core/${encodeURIComponent(memoryId)}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ actor: "web", reason })
+    }),
   tree: (sessionId: string) => request<Record<string, unknown>>(`/api/sessions/${sessionId}/tree`),
   prompt: (sessionId: string, prompt: string) =>
     request<{ session_id: string; queued: boolean }>(`/api/sessions/${sessionId}/prompt`, {

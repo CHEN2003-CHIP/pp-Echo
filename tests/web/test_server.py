@@ -251,6 +251,10 @@ def test_web_api_memory_status_search_and_read(tmp_path: Path) -> None:
 
     assert status.status_code == 200
     assert status.json()["file_count"] == 1
+    assert status.json()["enabled"] is False
+    assert status.json()["episodic_memory_enabled"] is False
+    assert status.json()["core_memory_enabled"] is True
+    assert status.json()["file_memory_enabled"] is True
     assert search.status_code == 200
     assert search.json()["results"][0]["path"] == "MEMORY.md"
     assert read.status_code == 200

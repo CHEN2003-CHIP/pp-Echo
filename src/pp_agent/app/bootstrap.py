@@ -39,6 +39,10 @@ from pp_agent.memory.reranker import LightweightReranker, NoopReranker
 from pp_agent.memory.retrieval import HistoryRetriever
 from pp_agent.memory.retrieval_hook import MemoryRetrievalHook
 from pp_agent.memory.file_memory_tools import register_file_memory_tools
+from pp_agent.memory.core_renderer import CoreMemoryBudget, CoreMemoryContextHook, CoreMemoryRenderer, workspace_id_for_path
+from pp_agent.memory.core_service import service_for_workspace
+from pp_agent.memory.core_store import CoreMemoryStore
+from pp_agent.memory.core_tools import register_core_memory_tools
 from pp_agent.memory.vector_index import ChromaVectorIndex, NoopVectorIndex
 from pp_agent.mcp import MCPManager
 from pp_agent.mcp.config import load_mcp_server_configs
@@ -458,6 +462,33 @@ def history_store_for(workspace: Path) -> SQLiteHistoryStore:
     return SQLiteHistoryStore(settings.history_db_path(), busy_timeout_ms=memory_settings.sqlite_busy_timeout_ms)
 
 
+def core_memory_store_for(workspace: Path) -> CoreMemoryStore:
+    settings = load_settings(workspace)
+    return CoreMemoryStore(settings.core_memory_db_path(), busy_timeout_ms=settings.memory.sqlite_busy_timeout_ms)
+
+
+def core_memory_context_hook_for(workspace: Path) -> CoreMemoryContextHook | None:
+    settings = load_settings(workspace)
+    core = settings.memory.core_memory
+    if not core.enabled:
+        return None
+    budget = core.budgets
+    service = service_for_workspace(workspace, settings)
+    return CoreMemoryContextHook(
+        store=service.store,
+        workspace_id=workspace_id_for_path(workspace),
+        renderer=CoreMemoryRenderer(
+            CoreMemoryBudget(
+                user_profile_chars=budget.user_profile_chars,
+                project_profile_chars=budget.project_profile_chars,
+                agent_notes_chars=budget.agent_notes_chars,
+                total_chars=budget.total_chars,
+            )
+        ),
+        service=service,
+    )
+
+
 def embedding_provider_for(workspace: Path):
     settings = load_settings(workspace)
     memory_settings = settings.memory
@@ -586,10 +617,10 @@ def memory_retrieval_hook_for(workspace: Path, *, session_id: str | None = None)
         retriever=retriever,
         builder=recall_builder_for(workspace),
         session_id=session_id,
-        enabled=retriever is not None and settings.memory.retrieval_enable,
+        enabled=retriever is not None and settings.memory.retrieval_enable and settings.memory.episodic_memory.enabled,
         retrieval_limit=settings.memory.retrieval_limit,
-        retrieval_max_snippets=settings.memory.retrieval_max_snippets,
-        retrieval_max_chars=settings.memory.retrieval_max_chars,
+        retrieval_max_snippets=min(settings.memory.retrieval_max_snippets, settings.memory.episodic_memory.max_snippets),
+        retrieval_max_chars=min(settings.memory.retrieval_max_chars, settings.memory.episodic_memory.max_chars),
         recent_dedup_enable=settings.memory.recent_dedup_enable,
         recent_dedup_use_chunk_metadata=settings.memory.recent_dedup_use_chunk_metadata,
         retrieval_version="v2_rerank_metadata",
@@ -669,6 +700,7 @@ def create_tool_registry(
     settings = load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
     register_file_memory_tools(registry, settings=settings)
+    register_core_memory_tools(registry, settings=settings)
     if include_dynamic_extensions:
         runtime_hooks = RuntimeHooks()
         extension_runtime = load_executable_extensions(
@@ -749,6 +781,7 @@ def create_capability_providers(
     settings = settings or load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
     register_file_memory_tools(registry, settings=settings)
+    register_core_memory_tools(registry, settings=settings)
     extension_registry = ExtensionRegistry()
     skill_roots = _skill_roots_for(workspace.resolve(), settings)
     extension_roots = _extension_roots_for(workspace.resolve(), settings)
@@ -941,6 +974,7 @@ def create_runtime_from_record(
     )
     if options.mode == "main" or (options.subagent_profile is not None and options.subagent_profile.memory.allow_memory_search):
         register_file_memory_tools(tool_registry, settings=settings)
+        register_core_memory_tools(tool_registry, settings=settings)
     _register_spawn_subagent_tool(
         workspace=workspace,
         session_store=session_store,
@@ -971,6 +1005,7 @@ def create_runtime_from_record(
         memory_provider=memory_provider_for(workspace),
         auto_index_scheduler=auto_index_scheduler_for(workspace),
         learning_runtime=learning_runtime_for(workspace, llm_client),
+        core_memory_service=service_for_workspace(workspace, settings) if settings.memory.core_memory.enabled else None,
         enforce_orchestrated_edit_contract=settings.subagents.enforce_orchestrated_edit_contract,
         require_patch_artifact_for_code_change=settings.subagents.require_patch_artifact_for_code_change,
         config_manager=config_manager,
@@ -1009,6 +1044,9 @@ def create_runtime_from_record(
         setattr(skill_runtime, "subagent_skill_policy", options.subagent_profile.skill)
     # 注册上下文转换钩子
     if options.enable_memory_hooks:
+        core_memory_hook = core_memory_context_hook_for(workspace)
+        if core_memory_hook is not None:
+            agent.runtime_hooks.add_transform_context_hook("core_memory", "memory", core_memory_hook.transform_context)
         global_memory_hook = global_memory_context_hook_for(workspace)
         if global_memory_hook is not None:
             agent.runtime_hooks.add_transform_context_hook("global_memory", "global_memory", global_memory_hook.transform_context)
@@ -1064,6 +1102,7 @@ def reload_runtime_extensions(
         previous_runtime.close()
     agent.tool_registry.reset_dynamic_registrations()
     register_file_memory_tools(agent.tool_registry, settings=settings)
+    register_core_memory_tools(agent.tool_registry, settings=settings)
     extension_commands = getattr(agent, "extension_commands", None)
     if extension_commands is not None:
         extension_commands.clear()
@@ -1095,6 +1134,10 @@ def reload_runtime_extensions(
         search_roots=_skill_roots_for(workspace.resolve(), settings, extra_paths=extension_resource_roots["skill_paths"]),
     )
     agent.learning_runtime = learning_runtime_for(workspace, agent.llm_client)
+    agent.core_memory_service = service_for_workspace(workspace, settings) if settings.memory.core_memory.enabled else None
+    core_memory_hook = core_memory_context_hook_for(workspace)
+    if core_memory_hook is not None:
+        agent.runtime_hooks.add_transform_context_hook("core_memory", "memory", core_memory_hook.transform_context)
     global_memory_hook = global_memory_context_hook_for(workspace)
     if global_memory_hook is not None:
         agent.runtime_hooks.add_transform_context_hook("global_memory", "global_memory", global_memory_hook.transform_context)

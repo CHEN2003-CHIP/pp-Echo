@@ -212,6 +212,35 @@ def test_memory_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
     assert settings.memory.snippet_path_weight_boost == 1.5
 
 
+def test_core_and_episodic_memory_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
+    project_dir = tmp_path / ".pp-agent"
+    project_dir.mkdir()
+    (project_dir / "config.json").write_text(
+        '{"memory":{"core_memory":{"enabled":true,"require_approval":true,'
+        '"budgets":{"user_profile_chars":111,"project_profile_chars":222,"agent_notes_chars":333,"total_chars":444},'
+        '"safety":{"enabled":false},'
+        '"automation":{"use_llm_summary":true,"llm_summary_model":"test-model"},'
+        '"provider":{"enabled":true,"backend":"local","sqlite_path":"state/provider.db"}},'
+        '"episodic_memory":{"enabled":false,"max_snippets":2,"max_chars":900}}}',
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(tmp_path)
+
+    assert settings.memory.core_memory.budgets.user_profile_chars == 111
+    assert settings.memory.core_memory.budgets.project_profile_chars == 222
+    assert settings.memory.core_memory.budgets.agent_notes_chars == 333
+    assert settings.memory.core_memory.budgets.total_chars == 444
+    assert settings.memory.core_memory.safety.enabled is False
+    assert settings.memory.core_memory.automation.use_llm_summary is True
+    assert settings.memory.core_memory.automation.llm_summary_model == "test-model"
+    assert settings.memory.core_memory.provider.backend == "local"
+    assert settings.core_memory_provider_db_path() == tmp_path / "state" / "provider.db"
+    assert settings.memory.episodic_memory.enabled is False
+    assert settings.memory.episodic_memory.max_snippets == 2
+    assert settings.memory.episodic_memory.max_chars == 900
+
+
 def test_storage_settings_are_loaded_from_project_config(tmp_path: Path) -> None:
     project_dir = tmp_path / ".pp-agent"
     project_dir.mkdir(parents=True)
