@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bot, ChevronRight, Copy, Globe2, Play, RefreshCw, Search, Square, TestTube2, X } from "lucide-react";
-import { api, BotDetail, BotSummary } from "../../api";
+import { api, BotDetail, BotSummary, CapabilityInventory } from "../../api";
 
 type DetailTab = "overview" | "events" | "sessions" | "trace" | "config" | "security" | "logs";
 type BotFilter = "all" | "running" | "waiting" | "error" | "disabled";
@@ -19,6 +19,7 @@ export function BotCenterPage() {
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<BotDetail | null>(null);
+  const [capabilities, setCapabilities] = useState<CapabilityInventory | null>(null);
   const [tab, setTab] = useState<DetailTab>("overview");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<BotFilter>("all");
@@ -59,8 +60,9 @@ export function BotCenterPage() {
   async function refresh() {
     setLoading(true);
     try {
-      const payload = await api.bots();
+      const [payload, inventory] = await Promise.all([api.bots(), api.capabilityConfig()]);
       setBots(payload.bots);
+      setCapabilities(inventory);
       if (selectedId) await loadDetail(selectedId);
     } finally {
       setLoading(false);
@@ -235,7 +237,7 @@ export function BotCenterPage() {
                 ))}
               </div>
               <div className="bot-detail-scroll">
-                {tab === "overview" ? <Overview detail={detail} /> : null}
+                {tab === "overview" ? <Overview detail={detail} capabilities={capabilities} /> : null}
                 {tab === "events" ? <Events detail={detail} /> : null}
                 {tab === "sessions" ? <Sessions detail={detail} /> : null}
                 {tab === "trace" ? <Trace detail={detail} /> : null}
@@ -253,8 +255,9 @@ export function BotCenterPage() {
   );
 }
 
-function Overview({ detail }: { detail: BotDetail }) {
+function Overview({ detail, capabilities }: { detail: BotDetail; capabilities: CapabilityInventory | null }) {
   const s = detail.status;
+  const governance = connectorCapabilitySummary(capabilities, s.bot_id);
   return (
     <div className="bot-detail-grid">
       <Info label="Bot ID" value={s.bot_id} />
@@ -277,8 +280,13 @@ function Overview({ detail }: { detail: BotDetail }) {
       <Info label="Last Run" value={s.last_run_at || ""} />
       <Info label="In-flight Runs" value={String(s.still_running_count || 0)} />
       <Info label="Queued" value={String(s.queued_count || 0)} />
+      <Info label="Capability Status" value={governance.status} />
+      <Info label="Capability Risk" value={governance.risk} />
       <Info label="Last Error" value={s.last_error || ""} />
       <Info label="Bot Path" value={s.bot_path} wide />
+      <div className="bot-security-note">
+        Capability governance: {governance.summary}
+      </div>
     </div>
   );
 }
@@ -425,6 +433,18 @@ function arrayValue(value: unknown) {
 
 function unique(values: string[]) {
   return Array.from(new Set(values));
+}
+
+function connectorCapabilitySummary(inventory: CapabilityInventory | null, botId: string) {
+  const items = inventory?.capabilities?.items || [];
+  const item = items.find((candidate) => candidate.kind === "connector" && (candidate.name === botId || candidate.id === `connector.${botId}`));
+  if (!item) return { status: "Not listed", risk: "-", summary: "connector capability is not present in the current catalog snapshot." };
+  const tags = Array.isArray(item.tags) ? item.tags.join(", ") : "";
+  return {
+    status: String(item.status || "unknown"),
+    risk: String(item.risk_level || "unknown"),
+    summary: `${String(item.id || item.name)} from ${String(item.source_kind || "connector")}${tags ? ` (${tags})` : ""}.`
+  };
 }
 
 function errorMessage(error: unknown) {

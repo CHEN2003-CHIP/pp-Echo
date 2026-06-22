@@ -7,6 +7,7 @@ from pp_agent.runtime.lifecycle import (
     AGENT_END,
     AGENT_START,
     BEFORE_PROVIDER_REQUEST,
+    CAPABILITY_SELECTED,
     CONTEXT_BUILT,
     PROVIDER_RESPONSE,
     TOOL_CALL,
@@ -105,10 +106,24 @@ def test_prompt_emits_minimum_lifecycle_sequence(tmp_path: Path) -> None:
     assert AGENT_START in types
     assert TURN_START in types
     assert CONTEXT_BUILT in types
+    assert CAPABILITY_SELECTED in types
     assert BEFORE_PROVIDER_REQUEST in types
     assert PROVIDER_RESPONSE in types
     assert TURN_END in types
     assert AGENT_END in types
+
+
+def test_capability_selected_event_shape(tmp_path: Path) -> None:
+    agent = _agent(tmp_path, HelloLLMClient())
+
+    events = agent.prompt("list files")
+    event = next(item for item in events if item.type == CAPABILITY_SELECTED)
+
+    assert event.details["type"] == "capability_selected"
+    assert event.details["selected"]
+    assert "blocked" in event.details
+    assert event.details["policy_context"]["session_id"] == agent.session_id
+    assert event.details["policy_context"]["trust_level"] == "local"
 
 
 def test_tool_lifecycle_success_order(tmp_path: Path) -> None:

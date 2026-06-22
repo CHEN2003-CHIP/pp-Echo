@@ -89,3 +89,33 @@ def test_config_api_validation_errors_are_structured(tmp_path: Path) -> None:
     assert response.status_code == 400
     detail = response.json()["detail"]
     assert detail["errors"][0]["path"] == "unknown.value"
+
+
+def test_session_tools_api_uses_capability_descriptors(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    client = TestClient(create_app(workspace))
+    session = client.post("/api/sessions").json()
+
+    response = client.get(f"/api/sessions/{session['session_id']}/tools")
+
+    assert response.status_code == 200
+    tools = response.json()["tools"]
+    run_shell = next(item for item in tools if item["name"] == "run_shell")
+    assert run_shell["kind"] == "builtin_tool"
+    assert run_shell["risk_level"] == "shell"
+    assert run_shell["effects"] == ["shell_command"]
+
+
+def test_capability_config_includes_catalog_snapshot(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    client = TestClient(create_app(workspace))
+
+    response = client.get("/api/capability-config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["capabilities"]["count"] > 0
+    assert payload["capabilities"]["by_kind"]["builtin_tool"] > 0
+    assert any(item["id"] == "run_shell" for item in payload["capabilities"]["items"])

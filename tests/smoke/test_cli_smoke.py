@@ -67,7 +67,7 @@ def test_pp_agent_capabilities_list_smoke(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     demo = next(item for item in payload if item["name"] == "demo")
     assert demo["status"] == "discovered"
-    assert demo["origin_type"] == "project"
+    assert demo["metadata"]["origin_type"] == "project"
 
 
 def test_pp_agent_skills_commands_smoke(tmp_path: Path) -> None:

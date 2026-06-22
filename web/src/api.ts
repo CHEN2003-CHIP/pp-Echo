@@ -455,6 +455,11 @@ export type LogEntry = {
 
 export type CapabilityInventory = {
   workspace: string;
+  capabilities?: {
+    items: Array<Record<string, unknown>>;
+    by_kind: Record<string, number>;
+    count: number;
+  };
   settings: {
     mcp: Record<string, unknown>;
     skills: Record<string, unknown>;

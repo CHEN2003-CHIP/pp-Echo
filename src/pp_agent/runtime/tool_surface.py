@@ -2,25 +2,37 @@ from __future__ import annotations
 
 from typing import Any
 
+from pp_agent.capabilities.catalog import CapabilityCatalog
+from pp_agent.capabilities.discovery import BuiltinToolCapabilityDiscoveryProvider
+
 
 def active_tool_surface(agent: Any) -> dict[str, Any]:
+    """
+    Return the session tool listing from CapabilityCatalog descriptors.
+
+    This keeps the Web/API tool surface on the governance model while
+    ToolRegistry remains the execution source of truth.
+    """
     registry = getattr(agent, "tool_registry", None)
     if registry is None:
         return {"config_version": getattr(agent, "config_version", None), "tools": []}
-    metadata = registry.metadata()
+    catalog = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(registry)])
     tools = []
-    for name, item in sorted(metadata.items()):
-        spec = registry.get_spec(name)
+    for descriptor in sorted(catalog.list(kind="builtin_tool"), key=lambda item: item.name):
+        metadata = descriptor.metadata
         tools.append(
             {
-                "name": name,
-                "category": item.category,
-                "tool_family": item.tool_family,
-                "permission_domain": item.permission_domain,
-                "requires_confirmation": spec.requires_confirmation,
-                "model_callable": spec.model_callable,
-                "sensitive": spec.sensitive,
-                "description": spec.description,
+                "id": descriptor.id,
+                "name": descriptor.name,
+                "kind": descriptor.kind,
+                "category": metadata.get("category"),
+                "tool_family": metadata.get("tool_family"),
+                "permission_domain": (descriptor.permissions_required or [None])[0],
+                "requires_confirmation": metadata.get("requires_confirmation"),
+                "model_callable": metadata.get("model_callable"),
+                "risk_level": descriptor.risk_level,
+                "effects": list(descriptor.effects),
+                "description": descriptor.description,
             }
         )
     return {

@@ -13,6 +13,11 @@ from types import SimpleNamespace
 from typing import Optional
 
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
+from pp_agent.capabilities.catalog import CapabilityCatalog
+from pp_agent.capabilities.discovery import BuiltinToolCapabilityDiscoveryProvider
+from pp_agent.capabilities.policy import CapabilityRouteContext
+from pp_agent.capabilities.router import CapabilityRouter
+from pp_agent.capabilities.trace import build_capability_selected_event_payload
 from pp_agent.runtime.resolver import resolve_model_profile, resolve_runtime_profile
 from pp_agent.llm.usage import LLMUsageStats, estimate_cost_usd, normalize_usage
 from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
@@ -36,6 +41,7 @@ from pp_agent.runtime.lifecycle import (
     AGENT_END,
     AGENT_START,
     BEFORE_PROVIDER_REQUEST,
+    CAPABILITY_SELECTED,
     CHECKPOINT_BEFORE_CREATE,
     CHECKPOINT_BEFORE_RESTORE,
     CHECKPOINT_CREATED,
@@ -805,6 +811,7 @@ class AgentRuntime:
         self._ensure_provider_context_budget()
         messages = self._messages_for_model()
         tools = self.tool_registry.openapi_specs()
+        self._emit_capability_selection_for_request(tools)
         #构建模型请求事件
         request_event = self._event(
             BEFORE_PROVIDER_REQUEST,
@@ -1295,8 +1302,7 @@ class AgentRuntime:
                 files_touched.append(path)
             if command:
                 shell_commands.append(self._compact_plan_value(command, 120))
-            spec = self.tool_registry.get_spec(call.name)
-            if spec.requires_confirmation and call.name not in high_risk_tools:
+            if self._tool_requires_risk_approval(call.name) and call.name not in high_risk_tools:
                 high_risk_tools.append(call.name)
         preview = {
             "count": len(plan_steps),
@@ -1317,7 +1323,65 @@ class AgentRuntime:
         if not self.require_plan_approval or self.state.pending_tool_calls:
            
             return False
-        return any(self.tool_registry.get_spec(call.name).requires_confirmation for call in tool_calls)
+        return any(self._tool_requires_risk_approval(call.name) for call in tool_calls)
+
+    def _emit_capability_selection_for_request(self, tools: list[dict[str, object]]) -> None:
+        """
+        Emit a trace-safe capability selection snapshot before tool exposure.
+
+        This is observability-only in v0.2.1: the selected set mirrors the
+        current ToolRegistry snapshot and does not alter the runtime execution
+        path or the provider request tool list.
+        """
+        try:
+            catalog = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(self.tool_registry)])
+            context = CapabilityRouteContext(
+                workspace_id=str(self.tool_registry.workspace),
+                session_id=self.session_id,
+                trust_level=self._capability_trust_level(),
+            )
+            selection = CapabilityRouter().select(
+                self._latest_user_text_for_capability_routing(),
+                catalog,
+                [],
+                context,
+                max_capabilities=len(tools) or 16,
+            )
+            payload = build_capability_selected_event_payload(selection, context, max_capabilities=len(tools) or 16)
+            list(self._emit(self._event(CAPABILITY_SELECTED, message="Capability selection snapshot", details=payload)))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("capability selection event failed: %s", exc)
+
+    def _tool_requires_risk_approval(self, tool_name: str) -> bool:
+        """
+        Classify high-risk tool preview entries through CapabilityDescriptor risk.
+
+        ToolRegistry still owns execution policy. This helper only removes the
+        old preview-only risk check from planner metadata.
+        """
+        try:
+            catalog = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(self.tool_registry)])
+            descriptor = catalog.get("builtin_tool", tool_name)
+        except Exception:  # noqa: BLE001
+            return self.tool_registry.get_spec(tool_name).requires_confirmation
+        return descriptor.risk_level in {"write", "network", "shell", "destructive"}
+
+    def _capability_trust_level(self) -> str:
+        """
+        Infer a coarse trust level for governance traces from runtime context.
+
+        Connectors can later pass explicit trust levels; until then, regular
+        in-process runs report ``local``.
+        """
+        return "local"
+
+    def _latest_user_text_for_capability_routing(self) -> str:
+        """Return the latest user text for deterministic capability keyword routing."""
+        for message in reversed(self.state.messages):
+            if message.role != "user":
+                continue
+            return " ".join(str(getattr(part, "text", "") or "") for part in message.content).strip()
+        return ""
 
     def _stage_plan_approval(self, tool_calls: list[ToolCall], plan_steps: list[PlanStep]) -> dict[str, object]:
         
