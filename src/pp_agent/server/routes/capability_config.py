@@ -244,6 +244,13 @@ def mount_capability_config_routes(app, active_workspace) -> None:
 
 
 def _capability_inventory(workspace: Path) -> dict[str, Any]:
+    """
+    Build the Web capability inventory with a governance catalog snapshot.
+
+    The legacy editable groups are kept for staged migration, while
+    ``capabilities`` is the v0.2.1 read path for UI, TraceInspect, Bot Center,
+    and tool listing consumers.
+    """
     settings = bootstrap.load_settings(workspace)
     project_dir = workspace / ".pp-agent"
     user_root = settings.global_dir
@@ -270,8 +277,10 @@ def _capability_inventory(workspace: Path) -> dict[str, Any]:
     extension_roots = extension_search_roots(workspace, user_root, config=settings.capabilities.extensions)
     skills = load_skills(workspace, user_root, config=settings.capabilities.skills, search_roots=skill_roots)
     extensions = load_extensions(workspace, user_root, config=settings.capabilities.extensions, search_roots=extension_roots)
+    capability_snapshot = _capability_catalog_snapshot(workspace)
     return {
         "workspace": str(workspace),
+        "capabilities": capability_snapshot,
         "settings": {
             "mcp": settings.capabilities.mcp.model_dump(mode="json"),
             "skills": settings.capabilities.skills.model_dump(mode="json"),
@@ -292,6 +301,27 @@ def _capability_inventory(workspace: Path) -> dict[str, Any]:
             "roots": [root.model_dump(mode="json") for root in extension_roots],
             "items": [_plugin_payload(item, settings.capabilities.extensions) for item in extensions.values()],
         },
+    }
+
+
+def _capability_catalog_snapshot(workspace: Path) -> dict[str, Any]:
+    """
+    Return a compact CapabilityCatalog snapshot for read-only Web consumers.
+
+    This is intentionally separate from the editable config payload because
+    catalog entries describe discovered runtime capabilities, not just the
+    configuration files that produced them.
+    """
+    catalog = bootstrap.create_capability_catalog(workspace)
+    items = [item.model_dump(mode="json") for item in catalog.list()]
+    by_kind: dict[str, int] = {}
+    for item in items:
+        kind = str(item.get("kind") or "unknown")
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+    return {
+        "items": items,
+        "by_kind": by_kind,
+        "count": len(items),
     }
 
 

@@ -8,7 +8,17 @@ from pp_agent.api import sdk
 from pp_agent.cli.render.runtime import console
 
 
-VALID_KINDS = {"skill", "builtin_tool", "extension", "mcp_tool", "mcp_resource", "mcp_prompt"}
+VALID_KINDS = {
+    "builtin_tool",
+    "mcp_tool",
+    "mcp_resource",
+    "mcp_prompt",
+    "skill",
+    "subagent",
+    "connector",
+    "runtime_adapter",
+    "extension",
+}
 
 
 def capabilities_list_main(workspace: Path, kind: Optional[str] = None, include_mcp: Optional[bool] = None) -> list[dict]:

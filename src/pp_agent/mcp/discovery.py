@@ -19,7 +19,7 @@ def discover_mcp_tools(server: MCPServerConfig, session: MCPSession) -> list[MCP
                 requires_auth=server.requires_auth,
                 is_destructive=is_destructive,
                 approval_mode=item.get("approval_mode", server.approval_mode),
-                risk_level="high" if server.is_remote and is_destructive else "medium" if is_destructive else "low",
+                risk_level="network" if server.is_remote else "write" if is_destructive else "read",
                 input_schema=item.get("input_schema", {}),
                 metadata={"title": item.get("title", item["name"])},
             )
@@ -41,7 +41,7 @@ def discover_mcp_resources(server: MCPServerConfig, session: MCPSession) -> list
                 requires_auth=server.requires_auth,
                 is_destructive=False,
                 approval_mode=item.get("approval_mode", server.approval_mode),
-                risk_level="low",
+                risk_level="read",
                 metadata={"title": item.get("title", item.get("name", item["uri"]))},
             )
         )
@@ -60,7 +60,7 @@ def discover_mcp_prompts(server: MCPServerConfig, session: MCPSession) -> list[M
                 requires_auth=server.requires_auth,
                 is_destructive=False,
                 approval_mode=item.get("approval_mode", server.approval_mode),
-                risk_level="low",
+                risk_level="read",
                 arguments_schema=item.get("arguments_schema", {}),
                 metadata={"title": item.get("title", item["name"])},
             )

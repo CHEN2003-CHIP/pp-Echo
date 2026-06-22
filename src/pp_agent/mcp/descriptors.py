@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -14,7 +14,7 @@ class _MCPDescriptorBase(BaseModel):
     requires_auth: bool = False
     is_destructive: bool = False
     approval_mode: str = "default"
-    risk_level: str = "low"
+    risk_level: Literal["safe", "read", "write", "network", "shell", "destructive"] = "read"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("metadata")

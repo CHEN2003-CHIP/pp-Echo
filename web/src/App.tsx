@@ -2842,6 +2842,7 @@ function CapabilityWorkbench({
   const items = capabilityItems(inventory, tab);
   const filteredItems = items.filter((item) => capabilityMatchesQuery(item, query));
   const selected = selectedName ? items.find((item) => String(item.name || "") === selectedName) : undefined;
+  const governanceSummary = capabilityGovernanceSummary(inventory, tab);
 
   async function reload() {
     const [nextInventory, nextSnapshot] = await Promise.all([api.capabilityConfig(), api.config(activeSessionId || undefined)]);
@@ -2929,6 +2930,9 @@ function CapabilityWorkbench({
           <span>{workspaceStatus?.git_branch || "no branch"}</span>
           <span>{snapshot?.effective_hash ? snapshot.effective_hash.slice(0, 10) : "hash pending"}</span>
           <span className={`reload-badge reload-${snapshot?.reload_policy || "hot"}`}>{snapshot?.reload_policy || "hot"}</span>
+          <span>{governanceSummary.total} governed</span>
+          <span>{governanceSummary.currentTab} {governanceSummary.label}</span>
+          <span>{governanceSummary.risk}</span>
         </div>
       </header>
 
@@ -3026,6 +3030,39 @@ function capabilityItems(inventory: CapabilityInventory | null, tab: CapabilityT
   if (!inventory) return [];
   if (tab === "mcp") return inventory.mcp.servers;
   return inventory[tab].items;
+}
+
+function capabilityGovernanceSummary(inventory: CapabilityInventory | null, tab: CapabilityTab) {
+  const snapshot = inventory?.capabilities;
+  const items = snapshot?.items || [];
+  const total = Number(snapshot?.count || items.length || 0);
+  const kinds = capabilityGovernanceKinds(tab);
+  const currentTab = kinds.reduce((count, kind) => count + Number(snapshot?.by_kind?.[kind] || 0), 0);
+  const riskCounts = items.reduce<Record<string, number>>((counts, item) => {
+    const kind = String(item.kind || "");
+    if (!kinds.includes(kind)) return counts;
+    const risk = String(item.risk_level || "unknown");
+    counts[risk] = (counts[risk] || 0) + 1;
+    return counts;
+  }, {});
+  const risk = Object.entries(riskCounts)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 2)
+    .map(([name, count]) => `${count} ${name}`)
+    .join(", ") || "no catalog risk";
+  return { total, currentTab, label: capabilityGovernanceLabel(tab), risk };
+}
+
+function capabilityGovernanceKinds(tab: CapabilityTab) {
+  if (tab === "mcp") return ["mcp_tool", "mcp_resource", "mcp_prompt"];
+  if (tab === "skills") return ["skill"];
+  return ["runtime_adapter", "extension"];
+}
+
+function capabilityGovernanceLabel(tab: CapabilityTab) {
+  if (tab === "mcp") return "MCP capabilities";
+  if (tab === "skills") return "skill capabilities";
+  return "plugin capabilities";
 }
 
 function capabilityMatchesQuery(item: Record<string, unknown>, query: string) {

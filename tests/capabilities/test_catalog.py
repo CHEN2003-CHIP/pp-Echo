@@ -304,7 +304,7 @@ def test_extension_discovery_prefers_custom_and_manifest_project_roots(tmp_path:
 
     extension = catalog.get("extension", "demo")
     assert extension.description == "custom extension"
-    assert extension.origin_type == "custom"
+    assert extension.metadata["origin_type"] == "custom"
     assert extension.metadata["root_name"] == "custom-extensions"
 
 
@@ -338,11 +338,11 @@ def test_skill_and_extension_metadata_include_origin_fields(tmp_path: Path, monk
 
     skill = catalog.get("skill", "demo")
     extension = catalog.get("extension", "demo_ext")
-    assert skill.origin_type == "project"
+    assert skill.metadata["origin_type"] == "project"
     assert skill.metadata["declared_by_manifest"] is True
     assert skill.metadata["discovery_root"] == str(project_dir / "manifest-skills")
     assert skill.metadata["discovery_mode"] == "workspace_directory"
-    assert extension.origin_type == "project"
+    assert extension.metadata["origin_type"] == "project"
     assert extension.metadata["declared_by_manifest"] is True
     assert extension.metadata["event_counts"] == {}
     assert extension.metadata["resource_roots"] == {}

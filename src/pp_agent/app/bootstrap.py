@@ -16,10 +16,12 @@ from pp_agent.app.skills_runtime import SkillRuntime
 from pp_agent.attachments.context import AttachmentContextHook
 from pp_agent.capabilities import (
     BuiltinToolCapabilityDiscoveryProvider,
+    BotConnectorCapabilityDiscoveryProvider,
     CapabilityCatalog,
     CapabilityDescriptor,
     CapabilityDiscoveryProvider,
     SkillCapabilityDiscoveryProvider,
+    SubAgentCapabilityDiscoveryProvider,
 )
 from pp_agent.config import get_config_manager
 from pp_agent.domain.checkpoints import CheckpointEntry
@@ -115,17 +117,22 @@ class _ExtensionCapabilitySource:
         descriptor = binding.descriptor
         return CapabilityDescriptor(
             kind="extension",
+            id=f"extension.{descriptor.name}",
             name=descriptor.name,
+            display_name=descriptor.name,
             description=descriptor.description,
             source=f"extension:{descriptor.name}",
-            path=str(descriptor.path) if descriptor.path else None,
+            source_kind="extension",
             status=binding.status,
-            origin_type=descriptor.origin_type,
-            risk_level="low",
+            risk_level="safe",
             cost_hint="low",
+            latency_hint="fast",
             discoverability="listed",
+            tags=["extension", descriptor.origin_type],
             metadata={
                 "origin": "extension",
+                "path": str(descriptor.path) if descriptor.path else None,
+                "origin_type": descriptor.origin_type,
                 "entrypoint": descriptor.entrypoint,
                 "provides": descriptor.provides,
                 "root_name": descriptor.root_name,
@@ -197,16 +204,21 @@ class _MCPExtensionBackend:
         descriptors: list[CapabilityDescriptor] = [
             CapabilityDescriptor(
                 kind="extension",
+                id=f"extension.{extension_descriptor.name}",
                 name=extension_descriptor.name,
+                display_name=extension_descriptor.name,
                 description=extension_descriptor.description,
                 source=f"extension:{extension_descriptor.name}",
+                source_kind="extension",
                 status="loaded",
-                origin_type=extension_descriptor.origin_type,
-                risk_level="low",
+                risk_level="safe",
                 cost_hint="low",
+                latency_hint="fast",
                 discoverability="listed",
+                tags=["extension", extension_descriptor.origin_type],
                 metadata={
                     "origin": "extension",
+                    "origin_type": extension_descriptor.origin_type,
                     "entrypoint": extension_descriptor.entrypoint,
                     "provides": extension_descriptor.provides,
                     "root_name": extension_descriptor.root_name,
@@ -236,12 +248,17 @@ class _MCPExtensionBackend:
                     #能力描述清单
                     CapabilityDescriptor(
                         kind="mcp_tool",
+                        id=f"mcp_tool.{qualified}",
                         name=qualified,
+                        display_name=qualified,
                         description=tool.description,
                         source=f"extension:mcp_adapter:{server_name}:tool:{tool.name}",
+                        source_kind="mcp",
                         status="loaded",
-                        origin_type="extension",
                         risk_level=tool.risk_level,
+                        permissions_required=["network"] if tool.is_remote else [],
+                        effects=["remote_tool_call"] if tool.is_remote else ["tool_call"],
+                        tags=["mcp", "tool", server_name],
                         cost_hint="medium" if tool.is_remote else "low",
                         discoverability="listed",
                         metadata={
@@ -265,12 +282,17 @@ class _MCPExtensionBackend:
                 descriptors.append(
                     CapabilityDescriptor(
                         kind="mcp_resource",
+                        id=f"mcp_resource.{qualified}",
                         name=qualified,
+                        display_name=qualified,
                         description=resource.description,
                         source=f"extension:mcp_adapter:{server_name}:resource:{resource.uri}",
+                        source_kind="mcp",
                         status="loaded",
-                        origin_type="extension",
                         risk_level=resource.risk_level,
+                        permissions_required=["network"] if resource.is_remote else ["read"],
+                        effects=["remote_resource_read"] if resource.is_remote else ["resource_read"],
+                        tags=["mcp", "resource", server_name],
                         cost_hint="medium" if resource.is_remote else "low",
                         discoverability="listed",
                         metadata={
@@ -293,12 +315,17 @@ class _MCPExtensionBackend:
                 descriptors.append(
                     CapabilityDescriptor(
                         kind="mcp_prompt",
+                        id=f"mcp_prompt.{qualified}",
                         name=qualified,
+                        display_name=qualified,
                         description=prompt.description,
                         source=f"extension:mcp_adapter:{server_name}:prompt:{prompt.name}",
+                        source_kind="mcp",
                         status="loaded",
-                        origin_type="extension",
                         risk_level=prompt.risk_level,
+                        permissions_required=["network"] if prompt.is_remote else ["read"],
+                        effects=["remote_prompt_read"] if prompt.is_remote else ["prompt_read"],
+                        tags=["mcp", "prompt", server_name],
                         cost_hint="medium" if prompt.is_remote else "low",
                         discoverability="listed",
                         metadata={
@@ -749,12 +776,10 @@ def create_capability_catalog(
     time_fn=None,
 ) -> CapabilityCatalog:
     """
-    创建能力目录，整合所有能力提供者
-    :param workspace: 工作空间路径
-    :param include_mcp: 是否包含MCP能力，可选
-    :param transport_factory: MCP传输工厂，可选
-    :param time_fn: 时间函数，可选
-    :return: 能力目录实例
+    Create the governance capability catalog for the workspace.
+
+    This assembles discovery providers only; ToolRegistry, MCPManager, skill
+    loading, Bot Center, and AgentRuntime remain the execution owners.
     """
     settings = load_settings(workspace)
     providers = create_capability_providers(
@@ -774,11 +799,10 @@ def create_capability_catalog_with_mcp(
     time_fn=None,
 ) -> CapabilityCatalog:
     """
-    创建包含MCP能力的能力目录
-    :param workspace: 工作空间路径
-    :param transport_factory: MCP传输工厂，可选
-    :param time_fn: 时间函数，可选
-    :return: 能力目录实例
+    Create a governance catalog that includes MCP discovery.
+
+    MCP entries are still discovered through the extension MCP backend instead
+    of being executed or called by the governance layer.
     """
     return create_capability_catalog(workspace, include_mcp=True, transport_factory=transport_factory, time_fn=time_fn)
 
@@ -792,13 +816,10 @@ def create_capability_providers(
     time_fn=None,
 ) -> list[CapabilityDiscoveryProvider]:
     """
-    创建所有能力发现提供者（技能、扩展、内置工具、MCP）
-    :param workspace: 工作空间路径
-    :param settings: 配置实例，可选
-    :param include_mcp: 是否包含MCP，可选
-    :param transport_factory: MCP传输工厂，可选
-    :param time_fn: 时间函数，可选
-    :return: 能力发现提供者列表
+    Build all capability discovery providers for the governance catalog.
+
+    Providers translate existing runtime surfaces into descriptors without
+    replacing those surfaces or changing their execution contracts.
     """
     settings = settings or load_settings(workspace)
     registry = ToolRegistry(workspace, policy=settings.tool_policy)
@@ -825,6 +846,8 @@ def create_capability_providers(
             registry=registry,
             enabled=settings.capabilities.builtin_tools.enable,
         ),
+        SubAgentCapabilityDiscoveryProvider(SubAgentCatalog(configured_subagent_specs(settings))),
+        BotConnectorCapabilityDiscoveryProvider(workspace=workspace.resolve()),
     ]
     mcp_enabled = settings.capabilities.mcp.enable if include_mcp is None else include_mcp
     if mcp_enabled:
@@ -849,11 +872,10 @@ def create_mcp_manager(
     time_fn=None,
 ) -> MCPManager:
     """
-    创建MCP管理器实例
-    :param workspace: 工作空间路径
-    :param transport_factory: 传输工厂，可选
-    :param time_fn: 时间函数，可选
-    :return: MCP管理器实例
+    Create the MCP manager used by the execution and discovery paths.
+
+    Capability Governance may inventory MCP descriptors, but this manager stays
+    the component responsible for MCP connection lifecycle.
     """
     settings = load_settings(workspace)
     config_paths = settings.capabilities.mcp.resolved_config_paths(settings.project_dir)

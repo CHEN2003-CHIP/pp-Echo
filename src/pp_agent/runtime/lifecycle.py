@@ -36,6 +36,7 @@ TURN_END = "turn_end"
 AGENT_END = "agent_end"
 
 CONTEXT_BUILT = "context_built"
+CAPABILITY_SELECTED = "capability_selected"
 BEFORE_PROVIDER_REQUEST = "before_provider_request"
 PROVIDER_RESPONSE = "provider_response"
 PROVIDER_ERROR = "provider_error"
