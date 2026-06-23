@@ -377,6 +377,60 @@ def test_ordinary_write_file_approval_round_trip_persists_result_and_resumes(tmp
     assert any(message.role == "assistant" and message.content for message in agent.state.messages)
 
 
+def test_context_built_event_includes_budget_report(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("hello context")
+    context_events = [event for event in events if event.type == "context_built"]
+
+    assert context_events
+    details = context_events[-1].details
+    assert details["context_payload_version"] == 2
+    assert "context" in details
+    assert "budget_report" in details["context"]
+    assert "included_sources" in details["context"]
+    assert "dropped_sources" in details["context"]
+    assert "sections" in details["context"]
+    assert "context_budget_report" not in details
+    assert "memory_recall" not in details
+    assert details["model_id"]
+    assert details["runtime_id"]
+
+
+def test_context_v2_payload_is_written_to_trace(tmp_path: Path) -> None:
+    from pp_agent.observability.recorder import TraceRecorder
+    from pp_agent.observability.store import TraceStore
+
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create("system", ModelConfig())
+    trace_store = TraceStore(tmp_path)
+    agent = AgentSession(
+        llm_client=NoopLLMClient(),
+        tool_registry=ToolRegistry(tmp_path),
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        confirm_callback=lambda _name, _args: True,
+        require_plan_approval=False,
+        observability=TraceRecorder(trace_store, workspace=tmp_path),
+    )
+    agent.restore_session_record(record)
+
+    agent.prompt("hello trace context")
+    latest = trace_store.find_latest_run(session_id=record.id)
+    assert latest is not None
+    detail = trace_store.read_run(latest.run_id)
+    context_events = [event for event in detail.events if event.name == "context_built"]
+    context_spans = [span for span in detail.spans if span.name == "context.build"]
+
+    assert context_events
+    assert context_spans
+    assert context_events[-1].payload["details"]["context_payload_version"] == 2
+    assert "budget_report" in context_events[-1].payload["details"]["context"]
+    assert context_spans[-1].output["context_payload_version"] == 2
+    assert "budget_report" in context_spans[-1].output["context"]
+
+
 def test_ordinary_run_shell_approval_round_trip_persists_stdout_and_resumes(tmp_path: Path) -> None:
     from pp_agent.cli.commands.approvals import approve_or_execute_pending_action
 

@@ -139,5 +139,8 @@ def test_runtime_retrieval_hook_injects_single_context_block(tmp_path: Path) -> 
     assert "Remember that the repo uses pytest" in recall_messages[0].content[0].text
     context_events = [event for event in events if event.type == "context_built"]
     assert context_events
-    assert context_events[0].details["memory_recall"]["recalled_chunk_ids"] == ["chunk-1", "chunk-2"]
-    assert context_events[0].details["memory_recall"]["snippet_chars"] > 0
+    assert context_events[0].details["context_payload_version"] == 2
+    assert "memory_recall" not in context_events[0].details
+    recall = context_events[0].details["context"]["memory_recall"]
+    assert recall["recalled_chunk_ids"] == ["chunk-1", "chunk-2"]
+    assert recall["snippet_chars"] > 0

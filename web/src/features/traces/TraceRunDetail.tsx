@@ -3,6 +3,7 @@ import { TraceApprovalPanel } from "./TraceApprovalPanel";
 import { TraceArtifactsPanel } from "./TraceArtifactsPanel";
 import { TraceCapabilityPanel } from "./TraceCapabilityPanel";
 import { TraceCheckpointPanel } from "./TraceCheckpointPanel";
+import { TraceContextBudgetPanel } from "./TraceContextBudgetPanel";
 import { TraceDiagnosisPanel } from "./TraceDiagnosisPanel";
 import { TraceMemoryPanel } from "./TraceMemoryPanel";
 import { TraceModelRuntimeCard } from "./TraceModelRuntimeCard";
@@ -23,6 +24,7 @@ export function TraceRunDetail({ detail, selectedSpan, onSelectSpan }: { detail:
         <TraceTimeline spans={detail.spans} selectedSpanId={selectedSpan?.span_id || null} onSelect={onSelectSpan} />
         <TraceSpanInspector span={selectedSpan} />
       </div>
+      <TraceContextBudgetPanel detail={detail} />
       <TraceCapabilityPanel detail={detail} />
       <TraceToolCallsPanel spans={detail.spans} />
       <TraceApprovalPanel spans={detail.spans} />

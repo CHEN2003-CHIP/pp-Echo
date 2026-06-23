@@ -76,3 +76,27 @@ node_modules/
 MEMORY.md
 AGENTS.md
 test.py
+
+# Project Intelligence Layer local guidance.
+# These files help local agents orient in this workspace and should not be uploaded to GitHub.
+.pp-echo/
+docs/adr/
+docs/project-intelligence.md
+src/pp_agent/**/MODULE.md
+scripts/generate_project_map.py
+
+# Project Intelligence Layer local guidance.
+# These files help local agents orient in this workspace and should not be uploaded to GitHub.
+.pp-echo/
+docs/adr/
+docs/project-intelligence.md
+src/pp_agent/**/MODULE.md
+scripts/generate_project_map.py
+
+# Project Intelligence Layer local guidance.
+# These files help local agents orient in this workspace and should not be uploaded to GitHub.
+.pp-echo/
+docs/adr/
+docs/project-intelligence.md
+src/pp_agent/**/MODULE.md
+scripts/generate_project_map.py

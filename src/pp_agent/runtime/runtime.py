@@ -18,6 +18,7 @@ from pp_agent.capabilities.discovery import BuiltinToolCapabilityDiscoveryProvid
 from pp_agent.capabilities.policy import CapabilityRouteContext
 from pp_agent.capabilities.router import CapabilityRouter
 from pp_agent.capabilities.trace import build_capability_selected_event_payload
+from pp_agent.context.adapters import build_context_pack_from_messages, context_pack_to_trace_details
 from pp_agent.runtime.resolver import resolve_model_profile, resolve_runtime_profile
 from pp_agent.llm.usage import LLMUsageStats, estimate_cost_usd, normalize_usage
 from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
@@ -1421,11 +1422,50 @@ class AgentRuntime:
         context_decision = self.lifecycle.emit_context_built(context_event, self.state, messages)
         # 9. 更新事件细节、发射事件用于监测
         context_event.details.update(context_decision.details)
+        final_messages = context_decision.messages or messages
+        context_event.details.update(self._context_pack_trace_details(final_messages))
         recall_metadata = self.state.memory_context.get("memory_recall")
-        if isinstance(recall_metadata, dict):
-            context_event.details["memory_recall"] = recall_metadata
+        context_payload = context_event.details.get("context")
+        if isinstance(recall_metadata, dict) and isinstance(context_payload, dict):
+            context_payload["memory_recall"] = recall_metadata
         list(self._emit(context_event))
-        return context_decision.messages or messages
+        return final_messages
+
+    def _context_pack_trace_details(self, messages: list[ChatMessage]) -> dict[str, object]:
+        """Build trace-safe ContextPack details without changing provider messages."""
+
+        try:
+            pack = build_context_pack_from_messages(
+                state=self.state,
+                messages=messages,
+                model_profile=self.model_profile,
+                runtime_profile=self.runtime_profile,
+                hook_metadata=dict(self.state.memory_context or {}),
+                strict_core_memory=False,
+            )
+            details = context_pack_to_trace_details(pack)
+            details["model_id"] = self._model_trace_id()
+            details["runtime_id"] = self._runtime_trace_id()
+            return details
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("context pack trace build failed: %s", exc)
+            return {
+                "context_payload_version": 2,
+                "context": {},
+                "context_error": safe_preview(str(exc), 500),
+                "model_id": self._model_trace_id(),
+                "runtime_id": self._runtime_trace_id(),
+            }
+
+    def _model_trace_id(self) -> str:
+        """Return a stable model id for context trace metadata."""
+
+        return str(getattr(self.llm_client.model, "model", "") or getattr(self.model_profile, "model_id", "") or "unknown")
+
+    def _runtime_trace_id(self) -> str:
+        """Return a stable runtime id for context trace metadata."""
+
+        return str(getattr(self.runtime_profile, "runtime_id", "") or getattr(self.runtime_profile, "id", "") or "agent_runtime")
 
     def _emit_compaction_if_needed(self) -> Iterator[AgentEvent]:
         """自动触发对话历史压缩，解决大模型上下文窗口超限"""
@@ -1543,6 +1583,9 @@ class AgentRuntime:
                 self._trace_event_starts[key] = event
             return
         if event.type == CONTEXT_BUILT:
+            context = details.get("context") if isinstance(details.get("context"), dict) else {}
+            budget_report = context.get("budget_report") if isinstance(context, dict) and isinstance(context.get("budget_report"), dict) else {}
+            dropped_sources = context.get("dropped_sources") if isinstance(context, dict) and isinstance(context.get("dropped_sources"), list) else []
             record_span(
                 "context.build",
                 "context",
@@ -1553,8 +1596,19 @@ class AgentRuntime:
                     "queue_count": details.get("queue_count"),
                     "memory_count": self._trace_memory_count(details),
                     "estimated_tokens": details.get("estimated_tokens"),
+                    "model_id": details.get("model_id"),
+                    "runtime_id": details.get("runtime_id"),
+                    "context_payload_version": details.get("context_payload_version"),
+                    "context_used": budget_report.get("used"),
+                    "context_total_budget": budget_report.get("total_budget"),
+                    "context_dropped_count": len(dropped_sources),
+                    "core_memory_budget_error": context.get("core_memory_budget_error") if isinstance(context, dict) else None,
                 },
-                output={"memory_recall": details.get("memory_recall")} if isinstance(details.get("memory_recall"), dict) else {},
+                output={
+                    "context_payload_version": details.get("context_payload_version"),
+                    "context": context,
+                    "context_error": details.get("context_error"),
+                },
             )
             self._record_memory_span_from_context(event, record_span)
             return
@@ -1730,7 +1784,8 @@ class AgentRuntime:
 
     @staticmethod
     def _trace_memory_count(details: dict[str, object]) -> int:
-        recall = details.get("memory_recall")
+        context = details.get("context") if isinstance(details.get("context"), dict) else {}
+        recall = context.get("memory_recall") if isinstance(context, dict) else None
         if not isinstance(recall, dict):
             return 0
         return int(recall.get("returned_count") or len(recall.get("hits") or recall.get("snippets") or []))
@@ -1758,7 +1813,9 @@ class AgentRuntime:
 
     @staticmethod
     def _record_memory_span_from_context(event: AgentEvent, record_span) -> None:
-        recall = event.details.get("memory_recall") if event.details else None
+        details = event.details if event.details else {}
+        context = details.get("context") if isinstance(details.get("context"), dict) else {}
+        recall = context.get("memory_recall") if isinstance(context, dict) else None
         if not isinstance(recall, dict):
             return
         record_span(
