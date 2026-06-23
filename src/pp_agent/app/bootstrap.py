@@ -778,8 +778,6 @@ def create_tool_registry(
             transport_factory=transport_factory,
             time_fn=time_fn,
         )
-        if extension_runtime.mcp_runtime is not None:
-            extension_runtime.mcp_runtime.ensure_discovered()
         setattr(registry, "_extension_runtime", extension_runtime)
     return registry
 

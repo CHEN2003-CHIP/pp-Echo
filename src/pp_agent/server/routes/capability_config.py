@@ -151,8 +151,8 @@ def mount_capability_config_routes(app, active_workspace) -> None:
             raise HTTPException(status_code=400, detail={"message": exc.message, "errors": [config_error("path", exc.code, exc.message)]}) from exc
 
     @app.get("/api/capability-config")
-    def capability_config() -> dict[str, Any]:
-        return _capability_inventory(workspace())
+    def capability_config(include_live_mcp: bool = False) -> dict[str, Any]:
+        return _capability_inventory(workspace(), include_live_mcp=include_live_mcp)
 
     @app.patch("/api/capability-config/settings")
     def update_capability_settings(request: CapabilitySettingsPatch) -> dict[str, Any]:
@@ -205,6 +205,13 @@ def mount_capability_config_routes(app, active_workspace) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/skills/{name}")
+    def get_skill(name: str) -> dict[str, Any]:
+        try:
+            return _skill_detail(workspace(), name)
+        except ConfigValidationError as exc:
+            raise validation_error(exc) from exc
+
     @app.put("/api/skills/{name}")
     def update_skill(name: str, request: SkillRequest) -> dict[str, Any]:
         try:
@@ -243,7 +250,7 @@ def mount_capability_config_routes(app, active_workspace) -> None:
         return FileResponse(path, media_type="image/svg+xml")
 
 
-def _capability_inventory(workspace: Path) -> dict[str, Any]:
+def _capability_inventory(workspace: Path, *, include_live_mcp: bool = False) -> dict[str, Any]:
     """
     Build the Web capability inventory with a governance catalog snapshot.
 
@@ -277,7 +284,7 @@ def _capability_inventory(workspace: Path) -> dict[str, Any]:
     extension_roots = extension_search_roots(workspace, user_root, config=settings.capabilities.extensions)
     skills = load_skills(workspace, user_root, config=settings.capabilities.skills, search_roots=skill_roots)
     extensions = load_extensions(workspace, user_root, config=settings.capabilities.extensions, search_roots=extension_roots)
-    capability_snapshot = _capability_catalog_snapshot(workspace)
+    capability_snapshot = _capability_catalog_snapshot(workspace, include_live_mcp=include_live_mcp)
     return {
         "workspace": str(workspace),
         "capabilities": capability_snapshot,
@@ -295,7 +302,7 @@ def _capability_inventory(workspace: Path) -> dict[str, Any]:
         },
         "skills": {
             "roots": [root.model_dump(mode="json") for root in skill_roots],
-            "items": [_skill_payload(item, settings.capabilities.skills) for item in skills.values()],
+            "items": [_skill_payload(item, settings.capabilities.skills, include_body=False) for item in skills.values()],
         },
         "plugins": {
             "roots": [root.model_dump(mode="json") for root in extension_roots],
@@ -304,7 +311,7 @@ def _capability_inventory(workspace: Path) -> dict[str, Any]:
     }
 
 
-def _capability_catalog_snapshot(workspace: Path) -> dict[str, Any]:
+def _capability_catalog_snapshot(workspace: Path, *, include_live_mcp: bool = False) -> dict[str, Any]:
     """
     Return a compact CapabilityCatalog snapshot for read-only Web consumers.
 
@@ -312,7 +319,7 @@ def _capability_catalog_snapshot(workspace: Path) -> dict[str, Any]:
     catalog entries describe discovered runtime capabilities, not just the
     configuration files that produced them.
     """
-    catalog = bootstrap.create_capability_catalog(workspace)
+    catalog = bootstrap.create_capability_catalog(workspace, include_mcp=include_live_mcp)
     items = [item.model_dump(mode="json") for item in catalog.list()]
     by_kind: dict[str, int] = {}
     for item in items:
@@ -337,25 +344,38 @@ def _safe_memory_settings(workspace: Path):
     return settings
 
 
-def _skill_payload(descriptor: Any, config: Any) -> dict[str, Any]:
+def _skill_payload(descriptor: Any, config: Any, *, include_body: bool = False) -> dict[str, Any]:
     body = ""
-    try:
-        raw = Path(descriptor.path).read_text(encoding="utf-8")
-        if raw.startswith("---"):
-            body = raw.split("---", 2)[2].strip()
-    except OSError:
-        body = ""
+    if include_body:
+        try:
+            raw = Path(descriptor.path).read_text(encoding="utf-8")
+            if raw.startswith("---"):
+                body = raw.split("---", 2)[2].strip()
+        except OSError:
+            body = ""
     return {
         "name": descriptor.name,
         "description": descriptor.description,
         "path": str(descriptor.path),
         "body": body,
+        "body_materialized": include_body,
         "origin_type": descriptor.origin_type,
         "root_name": descriptor.root_name,
         "precedence": descriptor.precedence,
         "enabled": config.includes_name(descriptor.name),
         "filtered": not config.includes_name(descriptor.name),
     }
+
+
+def _skill_detail(workspace: Path, name: str) -> dict[str, Any]:
+    name = _validate_name(name, "skills.name")
+    settings = bootstrap.load_settings(workspace)
+    skill_roots = skill_search_roots(workspace, settings.global_dir, config=settings.capabilities.skills)
+    skills = load_skills(workspace, settings.global_dir, config=settings.capabilities.skills, search_roots=skill_roots)
+    descriptor = skills.get(name)
+    if descriptor is None:
+        raise ConfigValidationError([config_error("name", "not_found", f"Skill not found: {name}")])
+    return _skill_payload(descriptor, settings.capabilities.skills, include_body=True)
 
 
 def _plugin_payload(descriptor: Any, config: Any) -> dict[str, Any]:

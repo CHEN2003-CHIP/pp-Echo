@@ -23,8 +23,9 @@ class BotRegistry:
             self._write_config_snapshot(configs["qq-main"])
         return configs["qq-main"]
 
-    def list_configs(self) -> list[BotConfig]:
-        self.ensure_default()
+    def list_configs(self, *, readonly: bool = False) -> list[BotConfig]:
+        if not readonly:
+            self.ensure_default()
         return list(self._load_configs().values())
 
     def get_config(self, bot_id: str) -> BotConfig:

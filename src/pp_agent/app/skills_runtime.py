@@ -54,6 +54,7 @@ class SkillRuntime:
     search_roots: Optional[list[object]] = None
     _skills: Optional[dict[str, object]] = field(default=None, init=False, repr=False)
     _manual_active: list[str] = field(default_factory=list, init=False, repr=False)
+    _level1_active: set[str] = field(default_factory=set, init=False, repr=False)
     _last_auto_active: list[str] = field(default_factory=list, init=False, repr=False)
     _last_match_sources: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
@@ -70,10 +71,11 @@ class SkillRuntime:
     def reload(self) -> None:
         self._skills = None
         self._manual_active = []
+        self._level1_active = set()
         self._last_auto_active = []
         self._last_match_sources = {}
 
-    def use_skill(self, name: str, *, source: str = "manual"):
+    def use_skill(self, name: str, *, source: str = "manual", level: int = 1):
         policy = _skill_policy(self)
         if not _policy_allows_skill(policy, name):
             logger.debug("skill use denied by policy", extra={"skill": name})
@@ -81,11 +83,14 @@ class SkillRuntime:
         descriptor = self.available_skills()[name]
         if name not in self._manual_active:
             self._manual_active.append(name)
+        if int(level) >= 1:
+            self._level1_active.add(name)
         self._last_match_sources[name] = source
         return descriptor
 
     def clear_active(self) -> None:
         self._manual_active = []
+        self._level1_active = set()
         self._last_auto_active = []
         self._last_match_sources = {}
 
@@ -104,7 +109,7 @@ class SkillRuntime:
                     name=name,
                     description=descriptor.description,
                     source=self._last_match_sources.get(name, "manual" if name in self._manual_active else "automatic"),
-                    body_loaded=getattr(descriptor, "_body_cache", None) is not None,
+                    body_loaded=name in self._level1_active and getattr(descriptor, "_body_cache", None) is not None,
                     origin_type=descriptor.origin_type,
                     discovery_root=getattr(descriptor, "discovery_root", None),
                     discovery_mode=getattr(descriptor, "discovery_mode", "workspace_directory"),
@@ -127,11 +132,18 @@ class SkillRuntime:
         lines = ["Active skills loaded for this turn:"]
         for descriptor in descriptors:
             source = self._last_match_sources.get(descriptor.name, "automatic")
-            lines.append(f"- {descriptor.name} ({source})")
+            level = 1 if descriptor.name in self._level1_active else 0
+            lines.append(f"- {descriptor.name} ({source}, level={level})")
         for descriptor in descriptors:
             lines.append("")
-            lines.append(f"[Skill: {descriptor.name}]")
-            lines.append(_materialize_skill(descriptor))
+            if descriptor.name in self._level1_active:
+                lines.append(f"[Skill: {descriptor.name}]")
+                lines.append(_materialize_skill(descriptor))
+            else:
+                lines.append(f"[Skill metadata: {descriptor.name}]")
+                lines.append(f"Description: {descriptor.description}")
+                lines.append(f"Origin: {descriptor.origin_type}")
+                lines.append(f"Discovery mode: {getattr(descriptor, 'discovery_mode', 'workspace_directory')}")
 
         skill_message = ChatMessage(
             role="system",

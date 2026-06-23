@@ -24,10 +24,10 @@ class BotRuntimeManager:
         self.registry.ensure_default()
 
     def list_bots(self) -> list[dict[str, Any]]:
-        return [self._summary(config) for config in self.registry.list_configs()]
+        return [self._summary(config, persist_status=False) for config in self.registry.list_configs()]
 
     def get_bot(self, bot_id: str) -> dict[str, Any]:
-        return self._summary(self.registry.get_config(bot_id))
+        return self._summary(self.registry.get_config(bot_id), persist_status=False)
 
     def get_detail(self, bot_id: str) -> dict[str, Any]:
         config = self.registry.get_config(bot_id)
@@ -127,8 +127,8 @@ class BotRuntimeManager:
 
         task.add_done_callback(cleanup)
 
-    def _summary(self, config: BotConfig) -> dict[str, Any]:
-        status = self._status(config)
+    def _summary(self, config: BotConfig, *, persist_status: bool = True) -> dict[str, Any]:
+        status = self._status(config, persist=persist_status)
         return {
             "id": config.id,
             "type": config.type,
@@ -151,7 +151,14 @@ class BotRuntimeManager:
             "status_text": _status_text(status),
         }
 
-    def _status(self, config: BotConfig, *, process_state: str | None = None, bot_state: str | None = None) -> BotStatus:
+    def _status(
+        self,
+        config: BotConfig,
+        *,
+        process_state: str | None = None,
+        bot_state: str | None = None,
+        persist: bool = True,
+    ) -> BotStatus:
         saved = self.event_store.read_status(config.platform, config.id) or {}
         qq_config = load_qqbot_config() if config.platform == "qq" else None
         local_host = str(config.ingress.get("local_host") or "127.0.0.1")
@@ -186,7 +193,8 @@ class BotRuntimeManager:
             queued_count=int(saved.get("queued_count") or 0),
             effective_policy=_effective_policy(config),
         )
-        self.event_store.write_status(status)
+        if persist:
+            self.event_store.write_status(status)
         return status
 
     def _publish(self, config: BotConfig, event_type: str, summary: str, *, level: str = "info", metadata: dict[str, Any] | None = None) -> None:

@@ -74,13 +74,38 @@ def test_mcp_discovery_returns_metadata_only_and_does_not_execute(tmp_path: Path
 
 def test_mcp_discovery_order_is_stable(tmp_path: Path) -> None:
     _write_config(tmp_path)
-    manager = create_mcp_manager(tmp_path, transport_factory=lambda _config: TrackingClient())
+    client = TrackingClient()
+    manager = create_mcp_manager(tmp_path, transport_factory=lambda _config: client)
 
     first = [item.name for item in manager.list_mcp_tools("demo")]
     second = [item.name for item in manager.list_mcp_tools("demo")]
 
     assert first == ["alpha", "beta"]
     assert second == ["alpha", "beta"]
+    assert client.initialize_count == 1
+    assert client.list_tools_count == 1
+
+
+def test_mcp_descriptor_cache_is_per_kind_and_cleared_on_close(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    client = TrackingClient()
+    manager = create_mcp_manager(tmp_path, transport_factory=lambda _config: client)
+
+    manager.list_mcp_tools("demo")
+    manager.list_mcp_resources("demo")
+    manager.list_mcp_prompts("demo")
+    manager.list_mcp_tools("demo")
+    manager.list_mcp_resources("demo")
+    manager.list_mcp_prompts("demo")
+
+    assert client.list_tools_count == 1
+    assert client.list_resources_count == 1
+    assert client.list_prompts_count == 1
+
+    manager.close_all_sessions()
+    manager.list_mcp_tools("demo")
+
+    assert client.list_tools_count == 2
 
 
 def test_load_mcp_config_supports_legacy_and_extended_shapes(tmp_path: Path, monkeypatch) -> None:

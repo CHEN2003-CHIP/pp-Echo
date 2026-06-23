@@ -10,7 +10,7 @@ from pp_agent.llm.models import ModelConfig
 from pp_agent.llm.registry import infer_model_profile
 from pp_agent.observability.recorder import TraceRecorder
 from pp_agent.observability.store import TraceStore
-from pp_agent.runtime.resolver import resolve_model_profile
+from pp_agent.runtime.resolver import resolve_model_profile, resolve_runtime_profile
 from pp_agent.runtime.registry import RuntimeRegistry
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.storage.sessions import SessionStore
@@ -68,6 +68,13 @@ def test_runtime_registry_get_default() -> None:
 
     assert registry.get_default().id == "pp_echo_native"
     assert registry.get("pp_echo_native").kind == "native"
+
+
+def test_resolve_runtime_profile_rejects_unknown_runtime_id() -> None:
+    config = type("Config", (), {"runtime_id": "missing-runtime"})()
+
+    with pytest.raises(ValueError, match="Unknown runtime_id 'missing-runtime'"):
+        resolve_runtime_profile(config)
 
 
 def test_trace_contains_model_runtime_metadata(tmp_path: Path) -> None:

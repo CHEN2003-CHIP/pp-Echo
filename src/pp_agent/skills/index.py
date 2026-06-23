@@ -62,6 +62,7 @@ class _DefaultSkillConfig:
 
 
 DEFAULT_SKILL_CONFIG = _DefaultSkillConfig()
+_SKILL_METADATA_CACHE: dict[str, dict[str, SkillDescriptor]] = {}
 
 
 def skill_search_paths(
@@ -274,6 +275,10 @@ def load_skills(
 ) -> dict[str, SkillDescriptor]:
     config = config or DEFAULT_SKILL_CONFIG
     roots = search_roots or skill_search_roots(workspace, user_root, config=config)
+    cache_key = _load_skills_cache_key(workspace, user_root, config, roots)
+    cached = _SKILL_METADATA_CACHE.get(cache_key)
+    if cached is not None:
+        return {name: descriptor.model_copy(deep=True) for name, descriptor in cached.items()}
     skills: dict[str, SkillDescriptor] = {}
     for root in reversed(roots):
         if not root.path.exists():
@@ -283,7 +288,14 @@ def load_skills(
             if not _skill_is_enabled(descriptor.name, config):
                 continue
             skills[descriptor.name] = descriptor
+    _SKILL_METADATA_CACHE[cache_key] = {name: descriptor.model_copy(deep=True) for name, descriptor in skills.items()}
     return skills
+
+
+def clear_skill_metadata_cache() -> None:
+    """Clear metadata-only skill discovery cache after config or filesystem edits."""
+
+    _SKILL_METADATA_CACHE.clear()
 
 
 def _safe_resolve(path: Path) -> Path:
@@ -358,3 +370,46 @@ def _ancestor_directories(path: Path) -> list[Path]:
     ancestors = [current]
     ancestors.extend(current.parents)
     return ancestors
+
+
+def _load_skills_cache_key(workspace: Path, user_root: Path, config: Any, roots: list[SkillSearchRoot]) -> str:
+    payload = {
+        "workspace": str(_safe_resolve(workspace)),
+        "user_root": str(_safe_resolve(user_root)),
+        "config": _config_fingerprint(config),
+        "roots": [
+            {
+                "path": str(root.path),
+                "origin_type": root.origin_type,
+                "root_name": root.root_name,
+                "precedence": root.precedence,
+                "declared_by_manifest": root.declared_by_manifest,
+                "discovery_root": getattr(root, "discovery_root", str(root.path)),
+                "discovery_mode": getattr(root, "discovery_mode", "workspace_directory"),
+                "mtime_ns": _path_mtime_ns(root.path),
+            }
+            for root in roots
+        ],
+    }
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+def _config_fingerprint(config: Any) -> dict[str, Any]:
+    model_dump = getattr(config, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    return {
+        "enable_project": bool(getattr(config, "enable_project", True)),
+        "enable_user": bool(getattr(config, "enable_user", True)),
+        "enable_builtin": bool(getattr(config, "enable_builtin", True)),
+        "custom_directories": list(getattr(config, "custom_directories", []) or []),
+        "ignored": list(getattr(config, "ignored", []) or []),
+        "include": list(getattr(config, "include", []) or []),
+    }
+
+
+def _path_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None

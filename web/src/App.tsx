@@ -2865,6 +2865,26 @@ function CapabilityWorkbench({
     setDraft(capabilityItemToDraft(selected, tab));
   }, [selectedName, tab, inventory]);
 
+  useEffect(() => {
+    if (tab !== "skills" || !selectedName || !selected || selected.body_materialized) return;
+    let cancelled = false;
+    api.getSkill(selectedName)
+      .then((detail) => {
+        if (cancelled) return;
+        setInventory((current) => current ? {
+          ...current,
+          skills: {
+            ...current.skills,
+            items: current.skills.items.map((item) => String(item.name || "") === selectedName ? { ...item, ...detail } : item)
+          }
+        } : current);
+      })
+      .catch((nextError) => setError(nextError instanceof Error ? nextError.message : String(nextError)));
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedName, tab, selected]);
+
   async function applySettings() {
     try {
       setError("");
@@ -3037,7 +3057,9 @@ function capabilityGovernanceSummary(inventory: CapabilityInventory | null, tab:
   const items = snapshot?.items || [];
   const total = Number(snapshot?.count || items.length || 0);
   const kinds = capabilityGovernanceKinds(tab);
-  const currentTab = kinds.reduce((count, kind) => count + Number(snapshot?.by_kind?.[kind] || 0), 0);
+  const discoveredCount = kinds.reduce((count, kind) => count + Number(snapshot?.by_kind?.[kind] || 0), 0);
+  const staticMcpCount = tab === "mcp" ? Number(inventory?.mcp?.servers?.length || 0) : 0;
+  const currentTab = discoveredCount || staticMcpCount;
   const riskCounts = items.reduce<Record<string, number>>((counts, item) => {
     const kind = String(item.kind || "");
     if (!kinds.includes(kind)) return counts;
@@ -3049,7 +3071,7 @@ function capabilityGovernanceSummary(inventory: CapabilityInventory | null, tab:
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .slice(0, 2)
     .map(([name, count]) => `${count} ${name}`)
-    .join(", ") || "no catalog risk";
+    .join(", ") || (tab === "mcp" && staticMcpCount ? "live descriptors deferred" : "no catalog risk");
   return { total, currentTab, label: capabilityGovernanceLabel(tab), risk };
 }
 

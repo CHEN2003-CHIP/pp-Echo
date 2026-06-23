@@ -100,6 +100,7 @@ def context_pack_to_trace_details(pack: ContextPack) -> dict[str, object]:
             "core_memory_budget_error": any(
                 item.reason == "core_memory_budget_exceeded_not_truncated" for item in pack.budget_report.dropped_items
             ),
+            **_memory_recall_trace(pack),
         },
     }
 
@@ -310,6 +311,16 @@ def _pack_sections(pack: ContextPack) -> Iterable[list[ContextItem]]:
     """Iterate item sections in ContextPack order."""
 
     return _pack_section_map(pack).values()
+
+
+def _memory_recall_trace(pack: ContextPack) -> dict[str, object]:
+    """Expose episodic memory recall only through the canonical context payload."""
+
+    for item in pack.episodic_memory_items:
+        metadata = item.source_ref.metadata or {}
+        if metadata:
+            return {"memory_recall": metadata}
+    return {}
 
 
 def _unique_source_refs(refs: Iterable[SourceRef]) -> List[SourceRef]:

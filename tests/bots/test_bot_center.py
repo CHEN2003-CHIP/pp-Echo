@@ -14,6 +14,7 @@ from pp_agent.bots.paths import (
     get_bot_messages_path,
     get_bot_root,
     get_bot_runs_dir,
+    get_bot_status_path,
     get_bot_traces_dir,
 )
 from pp_agent.bots.registry import BotRegistry
@@ -50,6 +51,20 @@ def test_registry_creates_default_and_strips_secrets(tmp_path: Path) -> None:
     text = get_bot_config_path(workspace, "qq", "qq-main").read_text(encoding="utf-8")
     assert "app_secret" not in text
     assert updated.ingress["public_url"] == "https://example.test/"
+
+
+def test_registry_readonly_listing_does_not_create_default_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = BotRegistry(workspace)
+
+    assert registry.list_configs(readonly=True) == []
+    assert not get_bot_config_path(workspace, "qq", "qq-main").exists()
+
+    config = registry.ensure_default()
+
+    assert config.id == "qq-main"
+    assert get_bot_config_path(workspace, "qq", "qq-main").exists()
 
 
 def test_event_store_writes_events_messages_and_status(tmp_path: Path) -> None:
@@ -95,6 +110,20 @@ def test_manager_start_stop_and_public_url(tmp_path: Path) -> None:
     assert stopped["status"]["desired_state"] == "disabled"
     assert stopped["status"]["process_state"] == "not_managed"
     assert any(event["type"] == "tunnel_url_updated" for event in manager.event_store.list_events("qq", "qq-main"))
+
+
+def test_manager_list_bots_does_not_write_status_snapshot(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manager = BotRuntimeManager(workspace)
+    status_path = get_bot_status_path(workspace, "qq", "qq-main")
+    if status_path.exists():
+        status_path.unlink()
+
+    listed = manager.list_bots()
+
+    assert listed[0]["id"] == "qq-main"
+    assert not status_path.exists()
 
 
 def test_manager_rejects_non_https_public_url_except_localhost(tmp_path: Path) -> None:

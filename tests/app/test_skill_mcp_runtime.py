@@ -92,13 +92,29 @@ def test_skill_runtime_is_lazy_until_match(monkeypatch: pytest.MonkeyPatch, tmp_
         [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
     )
 
-    assert calls == ["review-helper"]
+    assert calls == []
     assert len(messages) == 2
     assert "review-helper" in messages[1].content[0].text
+    assert "Detailed review instructions" not in messages[1].content[0].text
     active = runtime.active_skills()
     assert active[0].name == "review-helper"
     assert active[0].source == "explicit_name"
-    assert active[0].body_loaded is True
+    assert active[0].body_loaded is False
+
+    runtime.use_skill("review-helper")
+    messages = runtime.transform_context(
+        type(
+            "State",
+            (),
+            {
+                "messages": [ChatMessage(role="user", content=[TextPart(text="continue")], timestamp=0)],
+            },
+        )(),
+        [ChatMessage(role="system", content=[TextPart(text="base")], timestamp=0)],
+    )
+    assert calls == ["review-helper"]
+    assert "Detailed review instructions" in messages[1].content[0].text
+    assert runtime.active_skills()[0].body_loaded is True
 
 
 def test_skill_runtime_description_match_and_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,7 +229,7 @@ def test_mcp_runtime_is_lazy_until_list_call_or_natural_language_match(tmp_path:
 
     assert len(messages) == 2
     assert "demo.echo" in messages[1].content[0].text
-    assert events == ["initialize", "list_tools", "list_resources", "list_prompts"]
+    assert events == ["initialize", "list_tools"]
     result = tool_registry.execute("demo.echo", {"message": "hi"})
     assert result.is_error is True
     assert result.details["approval_unavailable"] is True
@@ -334,7 +350,7 @@ def test_mcp_runtime_matches_chinese_web_request_to_fetch_server(tmp_path: Path,
     assert "Do not say you cannot access the internet" in system_text
     assert runtime.mcp_runtime.status()["last_match"]["matched_server"] == "fetch"
     assert runtime.mcp_runtime.status()["last_match"]["matched_by"] in {"tags", "url_intent"}
-    assert events == ["initialize", "list_tools", "list_resources", "list_prompts"]
+    assert events == ["initialize", "list_tools"]
 
 
 def test_mcp_runtime_matches_url_only_and_does_not_match_local_file_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

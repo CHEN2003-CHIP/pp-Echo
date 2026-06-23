@@ -22,6 +22,7 @@ class MCPManager:
     ) -> None:
         self._servers = {server.name: server for server in servers}
         self._session_manager = MCPSessionManager(transport_factory=transport_factory, time_fn=time_fn)
+        self._descriptor_cache: dict[tuple[str, str], list[Any]] = {}
 
     @classmethod
     def from_workspace(
@@ -37,16 +38,13 @@ class MCPManager:
         return cls(load_mcp_server_configs(project_dir, config_paths=config_paths), transport_factory=transport_factory, time_fn=time_fn)
 
     def list_mcp_tools(self, server_name: str) -> list[MCPToolDescriptor]:
-        server, session = self._server_session(server_name)
-        return discover_mcp_tools(server, session)
+        return self._cached_descriptors(server_name, "tools", discover_mcp_tools)
 
     def list_mcp_resources(self, server_name: str) -> list[MCPResourceDescriptor]:
-        server, session = self._server_session(server_name)
-        return discover_mcp_resources(server, session)
+        return self._cached_descriptors(server_name, "resources", discover_mcp_resources)
 
     def list_mcp_prompts(self, server_name: str) -> list[MCPPromptDescriptor]:
-        server, session = self._server_session(server_name)
-        return discover_mcp_prompts(server, session)
+        return self._cached_descriptors(server_name, "prompts", discover_mcp_prompts)
 
     def call_mcp_tool(self, server_name: str, name: str, args: dict[str, Any]) -> MCPResult:
         _server, session = self._server_session(server_name)
@@ -94,7 +92,17 @@ class MCPManager:
         return self._session_manager.close_idle_sessions()
 
     def close_all_sessions(self) -> list[str]:
+        self.clear_descriptor_cache()
         return self._session_manager.close_all_sessions()
+
+    def clear_descriptor_cache(self, server_name: str | None = None) -> None:
+        """Clear cached descriptor snapshots after config/session invalidation."""
+        if server_name is None:
+            self._descriptor_cache.clear()
+            return
+        for key in list(self._descriptor_cache):
+            if key[0] == server_name:
+                self._descriptor_cache.pop(key, None)
 
     def active_session_names(self) -> list[str]:
         return self._session_manager.active_session_names()
@@ -109,3 +117,10 @@ class MCPManager:
         server = self._servers[server_name]
         session = self._session_manager.get_or_create(server)
         return server, session
+
+    def _cached_descriptors(self, server_name: str, kind: str, discover) -> list[Any]:
+        key = (server_name, kind)
+        if key not in self._descriptor_cache:
+            server, session = self._server_session(server_name)
+            self._descriptor_cache[key] = list(discover(server, session))
+        return [item.model_copy(deep=True) if hasattr(item, "model_copy") else item for item in self._descriptor_cache[key]]

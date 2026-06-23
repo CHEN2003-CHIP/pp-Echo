@@ -22,10 +22,11 @@ def resolve_model_profile(config: Any) -> ModelCapabilityProfile:
 
 def resolve_runtime_profile(config: Any) -> RuntimeProfile:
     """
-    Resolve runtime selection into a RuntimeProfile, defaulting to pp_echo_native.
+    Resolve runtime selection into a RuntimeProfile, defaulting only when omitted.
 
-    Unknown runtime ids fall back to the native runtime and are tagged in metadata so
-    callers can surface the migration issue without breaking existing chat flows.
+    Unknown runtime ids are configuration errors. Runtime no longer silently
+    tolerates misspelled or removed adapters because that hides broken profiles
+    until execution time.
     """
     runtime_id = _first_text(
         getattr(config, "runtime_id", None),
@@ -36,15 +37,9 @@ def resolve_runtime_profile(config: Any) -> RuntimeProfile:
         return DEFAULT_RUNTIME_REGISTRY.get_default()
     try:
         return DEFAULT_RUNTIME_REGISTRY.get(runtime_id)
-    except KeyError:
-        fallback = DEFAULT_RUNTIME_REGISTRY.get_default().model_copy(deep=True)
-        fallback.metadata = {
-            **fallback.metadata,
-            "source": "inferred",
-            "requested_runtime_id": runtime_id,
-            "fallback_reason": "unknown_runtime",
-        }
-        return fallback
+    except KeyError as exc:
+        available = ", ".join(sorted(profile.id for profile in DEFAULT_RUNTIME_REGISTRY.list()))
+        raise ValueError(f"Unknown runtime_id {runtime_id!r}. Available runtimes: {available}") from exc
 
 
 def _provider_model_from_config(config: Any) -> tuple[str, str]:

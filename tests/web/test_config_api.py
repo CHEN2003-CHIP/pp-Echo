@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -119,3 +120,39 @@ def test_capability_config_includes_catalog_snapshot(tmp_path: Path) -> None:
     assert payload["capabilities"]["count"] > 0
     assert payload["capabilities"]["by_kind"]["builtin_tool"] > 0
     assert any(item["id"] == "run_shell" for item in payload["capabilities"]["items"])
+
+
+def test_capability_config_uses_fast_static_mcp_snapshot_by_default(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project_dir = workspace / ".pp-agent"
+    project_dir.mkdir()
+    (project_dir / "config.json").write_text(json.dumps({"capabilities": {"mcp": {"enable": True}}}), encoding="utf-8")
+    (project_dir / "mcp.json").write_text(json.dumps({"servers": [{"name": "demo", "transport": "memory"}]}), encoding="utf-8")
+    client = TestClient(create_app(workspace))
+
+    response = client.get("/api/capability-config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mcp"]["servers"][0]["name"] == "demo"
+    assert payload["capabilities"]["by_kind"].get("mcp_tool", 0) == 0
+
+
+def test_capability_config_skills_are_metadata_only_and_detail_loads_body(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    skill_path = workspace / "skills" / "repo-helper" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("---\nname: repo-helper\ndescription: Repository helper\n---\nUse rg first.", encoding="utf-8")
+    client = TestClient(create_app(workspace))
+
+    inventory = client.get("/api/capability-config").json()
+    detail = client.get("/api/skills/repo-helper").json()
+
+    item = next(item for item in inventory["skills"]["items"] if item["name"] == "repo-helper")
+    assert item["name"] == "repo-helper"
+    assert item["body"] == ""
+    assert item["body_materialized"] is False
+    assert detail["body"] == "Use rg first."
+    assert detail["body_materialized"] is True

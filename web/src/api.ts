@@ -934,6 +934,7 @@ export const api = {
   deleteMcpServer: (name: string) => request<CapabilityInventory>(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" }),
   createSkill: (payload: Record<string, unknown>) =>
     request<CapabilityInventory>("/api/skills", { method: "POST", body: JSON.stringify(payload) }),
+  getSkill: (name: string) => request<Record<string, unknown>>(`/api/skills/${encodeURIComponent(name)}`),
   updateSkill: (name: string, payload: Record<string, unknown>) =>
     request<CapabilityInventory>(`/api/skills/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(payload) }),
   createPlugin: (payload: Record<string, unknown>) =>

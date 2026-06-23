@@ -217,8 +217,8 @@ class MCPRuntime:
         if not self.settings.capabilities.mcp.includes_server(server_name):
             raise ValueError(f"MCP server is filtered out: {server_name}")
         tools = manager.list_mcp_tools(server_name)
-        resources = manager.list_mcp_resources(server_name)
-        prompts = manager.list_mcp_prompts(server_name)
+        resources = manager.list_mcp_resources(server_name) if self.settings.capabilities.mcp.expose_resources else []
+        prompts = manager.list_mcp_prompts(server_name) if self.settings.capabilities.mcp.expose_prompts else []
         for tool in tools:
             qualified_name = f"{server_name}.{tool.name}"
             if not _settings_allows_tool(self.settings, server_name, tool.name):
@@ -256,16 +256,14 @@ class MCPRuntime:
                 risk_overrides={"destructive_hint": True} if tool.is_destructive else {},
                 replace=True,
             )
-        if self.settings.capabilities.mcp.expose_resources:
-            for item in resources:
-                qualified = f"{server_name}.{item.name or item.uri}"
-                if qualified not in self._resource_names:
-                    self._resource_names.append(qualified)
-        if self.settings.capabilities.mcp.expose_prompts:
-            for item in prompts:
-                qualified = f"{server_name}.{item.name}"
-                if qualified not in self._resource_names:
-                    self._resource_names.append(qualified)
+        for item in resources:
+            qualified = f"{server_name}.{item.name or item.uri}"
+            if qualified not in self._resource_names:
+                self._resource_names.append(qualified)
+        for item in prompts:
+            qualified = f"{server_name}.{item.name}"
+            if qualified not in self._resource_names:
+                self._resource_names.append(qualified)
         visible_tools = [
             f"{server_name}.{tool.name}"
             for tool in tools

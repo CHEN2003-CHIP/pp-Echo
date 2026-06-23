@@ -216,6 +216,8 @@ class AgentRuntime:
         self._run_sequence = 0
         self._current_run_id: str | None = None
         self._activity_starts: dict[str, float] = {}
+        self._capability_catalog_cache: CapabilityCatalog | None = None
+        self._capability_catalog_fingerprint: tuple[str, ...] = ()
         self.lifecycle.subscribe(self._observe_runtime_event)
         self._attach_runtime_context_to_tool_registry()
 
@@ -1335,7 +1337,7 @@ class AgentRuntime:
         path or the provider request tool list.
         """
         try:
-            catalog = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(self.tool_registry)])
+            catalog = self._builtin_capability_catalog()
             context = CapabilityRouteContext(
                 workspace_id=str(self.tool_registry.workspace),
                 session_id=self.session_id,
@@ -1361,7 +1363,7 @@ class AgentRuntime:
         old preview-only risk check from planner metadata.
         """
         try:
-            catalog = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(self.tool_registry)])
+            catalog = self._builtin_capability_catalog()
             descriptor = catalog.get("builtin_tool", tool_name)
         except Exception:  # noqa: BLE001
             return self.tool_registry.get_spec(tool_name).requires_confirmation
@@ -1375,6 +1377,15 @@ class AgentRuntime:
         in-process runs report ``local``.
         """
         return "local"
+
+    def _builtin_capability_catalog(self) -> CapabilityCatalog:
+        """Return a cached governance snapshot for current ToolRegistry names."""
+
+        fingerprint = tuple(sorted(self.tool_registry.metadata()))
+        if self._capability_catalog_cache is None or fingerprint != self._capability_catalog_fingerprint:
+            self._capability_catalog_cache = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(self.tool_registry)])
+            self._capability_catalog_fingerprint = fingerprint
+        return self._capability_catalog_cache
 
     def _latest_user_text_for_capability_routing(self) -> str:
         """Return the latest user text for deterministic capability keyword routing."""
@@ -1424,10 +1435,6 @@ class AgentRuntime:
         context_event.details.update(context_decision.details)
         final_messages = context_decision.messages or messages
         context_event.details.update(self._context_pack_trace_details(final_messages))
-        recall_metadata = self.state.memory_context.get("memory_recall")
-        context_payload = context_event.details.get("context")
-        if isinstance(recall_metadata, dict) and isinstance(context_payload, dict):
-            context_payload["memory_recall"] = recall_metadata
         list(self._emit(context_event))
         return final_messages
 
@@ -1788,7 +1795,10 @@ class AgentRuntime:
         recall = context.get("memory_recall") if isinstance(context, dict) else None
         if not isinstance(recall, dict):
             return 0
-        return int(recall.get("returned_count") or len(recall.get("hits") or recall.get("snippets") or []))
+        return int(
+            recall.get("returned_count")
+            or len(recall.get("recalled_chunk_ids") or recall.get("hits") or recall.get("snippets") or [])
+        )
 
     @staticmethod
     def _attachment_trace_event_output(details: dict[str, object]) -> dict[str, object]:
@@ -1830,10 +1840,11 @@ class AgentRuntime:
                 "mode": recall.get("mode"),
             },
             output={
-                "returned_count": recall.get("returned_count") or len(recall.get("hits") or recall.get("snippets") or []),
+                "returned_count": recall.get("returned_count")
+                or len(recall.get("recalled_chunk_ids") or recall.get("hits") or recall.get("snippets") or []),
                 "injected_count": recall.get("injected_count"),
                 "injected_tokens": recall.get("injected_tokens"),
-                "hits": recall.get("hits") or recall.get("snippets") or [],
+                "hits": recall.get("hits") or recall.get("snippets") or recall.get("recalled_chunk_ids") or [],
                 "warnings": recall.get("warnings") or [],
             },
         )

@@ -196,7 +196,7 @@ class BotConnectorCapabilityDiscoveryProvider:
     def discover(self) -> list[CapabilityDescriptor]:
         """Expose Bot Center connector configs as governance capabilities."""
         descriptors: list[CapabilityDescriptor] = []
-        for config in BotRegistry(self.workspace).list_configs():
+        for config in BotRegistry(self.workspace).list_configs(readonly=True):
             descriptors.append(
                 CapabilityDescriptor(
                     id=f"connector.{config.id}",

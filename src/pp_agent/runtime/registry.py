@@ -23,7 +23,7 @@ class RuntimeRegistry:
         return self._profiles[runtime_id]
 
     def list(self) -> list[RuntimeProfile]:
-        return list(self._profiles.values())
+        return [*self._profiles.values()]
 
     def get_default(self) -> RuntimeProfile:
         return self.get("pp_echo_native")
