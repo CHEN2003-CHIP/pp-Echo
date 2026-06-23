@@ -98,7 +98,7 @@ class ContextBudgeter:
                 selected.append(item)
                 self.report.record_included(section, item)
                 continue
-            reason = drop_reason or ("section_budget_exceeded" if droppable else "core_memory_budget_exceeded_not_truncated")
+            reason = drop_reason or _drop_reason_for(item, droppable=bool(droppable))
             self.report.record_dropped(section, item, reason)
             if not droppable:
                 raise ContextBudgetExceeded(
@@ -121,4 +121,14 @@ def _summary_for(section: str, item: ContextItem, *, reason: Optional[str] = Non
         source_ref=item.source_ref.summary(),
         reason=reason,
     )
+
+
+def _drop_reason_for(item: ContextItem, *, droppable: bool) -> str:
+    """Choose a trace reason for an item dropped by budget."""
+
+    if not droppable:
+        return "core_memory_budget_exceeded_not_truncated"
+    if item.metadata.get("context_provider") in {"mcp", "skill"}:
+        return "context_budget_exceeded"
+    return "section_budget_exceeded"
 

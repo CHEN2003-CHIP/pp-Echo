@@ -240,8 +240,13 @@ class _MCPExtensionBackend:
         for server_name in manager.server_names():
             if not self._includes_server(server_name):
                 continue
+            server_config = manager.server_config(server_name)
             # 处理MCP工具
             for tool in manager.list_mcp_tools(server_name):
+                if self._mcp_tool_denied(server_config, tool.name):
+                    continue
+                risk_level = server_config.tool_risk_overrides.get(tool.name, tool.risk_level)
+                approval_mode = server_config.tool_approval_overrides.get(tool.name, tool.approval_mode)
                 qualified = self._qualified_name(server_name, tool.name)
                 loaded_tools.append(qualified)
                 descriptors.append(
@@ -255,7 +260,7 @@ class _MCPExtensionBackend:
                         source=f"extension:mcp_adapter:{server_name}:tool:{tool.name}",
                         source_kind="mcp",
                         status="loaded",
-                        risk_level=tool.risk_level,
+                        risk_level=risk_level,
                         permissions_required=["network"] if tool.is_remote else [],
                         effects=["remote_tool_call"] if tool.is_remote else ["tool_call"],
                         tags=["mcp", "tool", server_name],
@@ -270,7 +275,8 @@ class _MCPExtensionBackend:
                             "is_remote": tool.is_remote,
                             "requires_auth": tool.requires_auth,
                             "is_destructive": tool.is_destructive,
-                            "approval_mode": tool.approval_mode,
+                            "approval_mode": approval_mode,
+                            "risk_level": risk_level,
                             "input_schema": tool.input_schema,
                         },
                     )
@@ -391,6 +397,16 @@ class _MCPExtensionBackend:
 
     def _includes_server(self, server_name: str) -> bool:
         return getattr(self.mcp_config, "includes_server")(server_name)
+
+    @staticmethod
+    def _mcp_tool_denied(server, tool_name: str) -> bool:
+        """Apply MCP allowed/denied tool overlay to capability exposure."""
+
+        denied = set(getattr(server, "denied_tools", []) or [])
+        if tool_name in denied:
+            return True
+        allowed = set(getattr(server, "allowed_tools", []) or [])
+        return bool(allowed) and tool_name not in allowed
 
     @staticmethod
     def _qualified_name(server_name: str, name: str) -> str:

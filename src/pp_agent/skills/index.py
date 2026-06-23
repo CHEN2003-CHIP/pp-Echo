@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import fnmatch
 from pathlib import Path
+import json
 from typing import Any, Optional
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent
@@ -23,6 +24,7 @@ class SkillDescriptor(BaseModel):
     declared_by_manifest: bool = False
     discovery_root: Optional[str] = None
     discovery_mode: str = "workspace_directory"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     _body_cache: Optional[str] = PrivateAttr(default=None)
 
@@ -129,17 +131,17 @@ def skill_search_roots(
     return roots
 
 
-def _parse_frontmatter(raw: str) -> dict[str, str]:
-    data: dict[str, str] = {}
+def _parse_frontmatter(raw: str) -> dict[str, Any]:
+    data: dict[str, Any] = {}
     for line in raw.splitlines():
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
-        data[key.strip()] = value.strip()
+        data[key.strip()] = _parse_manifest_value(value.strip())
     return data
 
 
-def _read_frontmatter(path: Path) -> dict[str, str]:
+def _read_frontmatter(path: Path) -> dict[str, Any]:
     raw = path.read_text(encoding="utf-8-sig")
     rows = raw.splitlines()
     if not rows or rows[0].strip() != "---":
@@ -152,7 +154,7 @@ def _read_frontmatter(path: Path) -> dict[str, str]:
     raise ValueError(f"Skill frontmatter must include name and description: {path}")
 
 
-def _fallback_metadata(path: Path, rows: list[str]) -> dict[str, str]:
+def _fallback_metadata(path: Path, rows: list[str]) -> dict[str, Any]:
     description = ""
     for row in rows:
         value = row.strip()
@@ -168,10 +170,11 @@ def _fallback_metadata(path: Path, rows: list[str]) -> dict[str, str]:
 
 def _parse_skill_metadata(path: Path, root: SkillSearchRoot) -> SkillDescriptor:
     frontmatter = _read_frontmatter(path)
-    name = frontmatter.get("name", "")
-    description = frontmatter.get("description", "")
+    name = str(frontmatter.get("name", "")).strip()
+    description = str(frontmatter.get("description", "")).strip()
     if not name or not description:
         raise ValueError(f"Skill frontmatter must include name and description: {path}")
+    manifest_metadata = _manifest_metadata(frontmatter)
     return SkillDescriptor(
         name=name,
         description=description,
@@ -182,7 +185,75 @@ def _parse_skill_metadata(path: Path, root: SkillSearchRoot) -> SkillDescriptor:
         declared_by_manifest=root.declared_by_manifest,
         discovery_root=getattr(root, "discovery_root", str(root.path)),
         discovery_mode=getattr(root, "discovery_mode", "workspace_directory"),
+        metadata=manifest_metadata,
     )
+
+
+def _parse_manifest_value(value: str) -> Any:
+    """Parse lightweight SKILL.md frontmatter values without requiring YAML."""
+
+    if not value:
+        return ""
+    lowered = value.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    if value.startswith("[") and value.endswith("]"):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            return [item.strip() for item in value.strip("[]").split(",") if item.strip()]
+    if "," in value:
+        return [item.strip() for item in value.split(",") if item.strip()]
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def _manifest_metadata(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    """Return trace-safe optional skill manifest metadata."""
+
+    allowed = {
+        "version",
+        "category",
+        "tags",
+        "requires_capabilities",
+        "optional_capabilities",
+        "permissions",
+        "context.default_level",
+        "context.activation_level",
+        "context.max_artifacts",
+        "evals",
+    }
+    metadata: dict[str, Any] = {}
+    for key in allowed:
+        if key in frontmatter:
+            metadata[key] = _safe_manifest_value(frontmatter[key])
+    return metadata
+
+
+def _safe_manifest_value(value: Any) -> Any:
+    """Keep manifest metadata JSON-safe and free of secret-like keys."""
+
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, item in value.items():
+            if _secret_key(str(key)):
+                continue
+            safe[str(key)] = _safe_manifest_value(item)
+        return safe
+    if isinstance(value, list):
+        return [_safe_manifest_value(item) for item in value[:50]]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _secret_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(marker in lowered for marker in ("secret", "token", "password", "api_key"))
 
 
 def _skill_is_enabled(name: str, config: Any) -> bool:

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Mapping, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from pp_agent.context.budget import ContextBudgeter
+from pp_agent.context.budget import ContextBudgetSectionUsage, ContextBudgeter, ContextItemSummary
 from pp_agent.context.item import ContextItem
 from pp_agent.context.pack import ContextPack
 from pp_agent.context.source_ref import SourceRef
@@ -55,6 +55,7 @@ class ContextPipeline:
         system_instructions: Optional[Union[Iterable[ContextItem], ContextProvider, str]] = None,
         runtime_notes: Optional[Union[Iterable[ContextItem], ContextProvider]] = None,
         strict_core_memory: bool = True,
+        pre_dropped_items: Optional[Iterable[ContextItemSummary]] = None,
     ) -> ContextPack:
         """Assemble a ContextPack without changing AgentRuntime execution semantics."""
 
@@ -87,6 +88,11 @@ class ContextPipeline:
                 droppable=section != "core_memory_snapshot" or not strict_core_memory,
                 drop_reason="core_memory_budget_exceeded_not_truncated" if section == "core_memory_snapshot" else None,
             )
+        for summary in pre_dropped_items or []:
+            budgeter.report.dropped_items.append(summary)
+            budgeter.report.drop_reasons[summary.id] = summary.reason or "dropped"
+            usage = budgeter.report.per_section.setdefault(summary.section, ContextBudgetSectionUsage(budget=0))
+            usage.dropped_count += 1
 
         source_refs = _unique_source_refs(item.source_ref for items in selected.values() for item in items)
         return ContextPack(

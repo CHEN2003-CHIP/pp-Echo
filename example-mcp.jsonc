@@ -85,6 +85,19 @@
       // 审批模式，当前示例保持 default。
       "approval_mode": "default",
 
+      // Optional pp-Echo context/capability overlay.
+      // denied_tools wins first; allowed_tools, when non-empty, exposes only listed tools.
+      // Overrides affect pp-Echo ContextItem / Capability exposure only and do not mutate
+      // the MCP server's original descriptors.
+      "allowed_tools": [],
+      "denied_tools": [],
+      "tool_approval_overrides": {
+        // "fetch_markdown": "always"
+      },
+      "tool_risk_overrides": {
+        // "fetch_markdown": "read"
+      },
+
       // 单服务空闲超时，单位秒。
       "idle_timeout_seconds": 300,
 

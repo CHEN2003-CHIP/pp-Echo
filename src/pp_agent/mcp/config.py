@@ -35,6 +35,10 @@ class MCPServerConfig(BaseModel):
     is_remote: bool = False
     requires_auth: bool = False
     approval_mode: str = "default"
+    allowed_tools: list[str] = Field(default_factory=list)
+    denied_tools: list[str] = Field(default_factory=list)
+    tool_approval_overrides: dict[str, str] = Field(default_factory=dict)
+    tool_risk_overrides: dict[str, str] = Field(default_factory=dict)
     idle_timeout_seconds: int = 300
     timeout_seconds: int = 30
 

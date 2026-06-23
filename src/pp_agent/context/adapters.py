@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, List, Optional
 
+from pp_agent.context.budget import ContextItemSummary
 from pp_agent.context.item import ContextItem
 from pp_agent.context.pack import ContextPack
 from pp_agent.context.pipeline import ContextPipeline, ContextPipelineConfig
@@ -101,6 +102,86 @@ def context_pack_to_trace_details(pack: ContextPack) -> dict[str, object]:
             ),
         },
     }
+
+
+class SkillContextAdapter:
+    """Adapts Skill progressive disclosure providers into ContextPipeline inputs."""
+
+    def __init__(self, provider: Any) -> None:
+        self.provider = provider
+        self.dropped_items: list[ContextItemSummary] = []
+
+    def level0_items(self) -> list[ContextItem]:
+        """Return metadata-only skill cards for selected capabilities or project context."""
+
+        return self.provider.list_level0()
+
+    def level1_items(self, skill_names: Iterable[str]) -> list[ContextItem]:
+        """Return explicitly selected level 1 skill bodies."""
+
+        return [self.provider.load_level1(name) for name in skill_names]
+
+    def level2_items(self, artifacts: Iterable[tuple[str, str]]) -> list[ContextItem]:
+        """Return explicitly selected level 2 artifacts and record denied paths as drops."""
+
+        items: list[ContextItem] = []
+        for skill_name, relative_path in artifacts:
+            try:
+                items.append(self.provider.load_level2(skill_name, relative_path))
+            except ValueError:
+                item_id = f"skill:{skill_name}:level2:{relative_path}"
+                self.dropped_items.append(
+                    ContextItemSummary(
+                        id=item_id,
+                        type="project_context",
+                        title=f"Skill {skill_name} artifact {relative_path}",
+                        section="project_context",
+                        priority=75,
+                        estimated_chars=0,
+                        source_ref={
+                            "source_type": "project_map",
+                            "source_id": f"skill:{skill_name}",
+                            "relative_path": relative_path,
+                        },
+                        reason="skill_artifact_path_denied",
+                    )
+                )
+        return items
+
+
+class MCPContextAdapter:
+    """Adapts MCP descriptor cards and policy drops into ContextPipeline inputs."""
+
+    def __init__(self, provider: Any) -> None:
+        self.provider = provider
+        self._dropped_items: list[ContextItemSummary] = []
+
+    @property
+    def dropped_items(self) -> list[ContextItemSummary]:
+        """Return BudgetReport-compatible drops from the underlying MCP provider."""
+
+        return list(self._dropped_items)
+
+    def tool_items(self, server_name: str) -> list[ContextItem]:
+        """Return model-facing MCP tool cards that passed overlay and metadata scan."""
+
+        items = self.provider.tool_cards(server_name)
+        self._dropped_items.extend(getattr(self.provider, "dropped_items", []))
+        return items
+
+    def resource_items(self, server_name: str) -> list[ContextItem]:
+        """Return model-facing MCP resource cards that passed metadata scan."""
+
+        items = self.provider.resource_cards(server_name)
+        self._dropped_items.extend(getattr(self.provider, "dropped_items", []))
+        return items
+
+    def prompt_items(self, server_name: str) -> list[ContextItem]:
+        """Return model-facing MCP prompt cards that passed metadata scan."""
+
+        items = self.provider.prompt_cards(server_name)
+        self._dropped_items.extend(getattr(self.provider, "dropped_items", []))
+        return items
 
 
 def _items_from_messages(messages: list[ChatMessage], *, state: Any, hook_metadata: dict[str, object]) -> dict[str, list[ContextItem]]:

@@ -99,6 +99,10 @@ def test_load_mcp_config_supports_legacy_and_extended_shapes(tmp_path: Path, mon
                         "name": "extended",
                         "url": "https://example.com/mcp",
                         "bearer_token_env": "DEMO_MCP_TOKEN",
+                        "allowed_tools": ["search"],
+                        "denied_tools": ["danger"],
+                        "tool_approval_overrides": {"search": "always"},
+                        "tool_risk_overrides": {"search": "read"},
                     }
                 ],
             }
@@ -114,6 +118,10 @@ def test_load_mcp_config_supports_legacy_and_extended_shapes(tmp_path: Path, mon
     assert document.servers[1].resolved_transport() == "http"
     assert document.servers[1].resolved_headers()["Authorization"] == "Bearer secret-token"
     assert document.servers[-1].idle_timeout_seconds == 12
+    assert document.servers[-1].allowed_tools == ["search"]
+    assert document.servers[-1].denied_tools == ["danger"]
+    assert document.servers[-1].tool_approval_overrides == {"search": "always"}
+    assert document.servers[-1].tool_risk_overrides == {"search": "read"}
 
 
 def test_load_mcp_server_configs_supports_mcp_servers_mapping(tmp_path: Path) -> None:

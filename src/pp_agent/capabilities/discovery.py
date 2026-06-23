@@ -66,6 +66,7 @@ class SkillCapabilityDiscoveryProvider:
                         "declared_by_manifest": skill.declared_by_manifest,
                         "discovery_root": skill.discovery_root,
                         "discovery_mode": skill.discovery_mode,
+                        "manifest": dict(skill.metadata),
                     },
                 )
             )
