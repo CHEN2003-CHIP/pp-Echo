@@ -153,8 +153,13 @@ def test_core_memory_service_records_audit_for_lifecycle(tmp_path: Path) -> None
     actions = [record.action for record in service.audit(memory_id=proposed.memory.id)]
 
     assert approved.memory.status == "active"
+    assert approved.immediate_effect is True
+    assert approved.markdown["applied"] is True
     assert archived.memory.status == "archived"
-    assert actions[:3] == ["archive", "approve", "propose"]
+    assert actions[0] == "archive"
+    assert "approve" in actions
+    assert "markdown_apply" in actions
+    assert "propose" in actions
 
 
 def test_core_memory_service_respects_require_approval_toggle(tmp_path: Path) -> None:

@@ -318,6 +318,21 @@ class AgentRuntime:
             return
         if result is None:
             return
+        self.state.memory_context.setdefault("explicit_core_memory_by_turn", {})[context.turn_id] = {
+            "memory_id": result.memory.id,
+            "status": result.memory.status,
+            "section": result.memory.section,
+            "type": result.memory.type,
+            "content": result.memory.content,
+        }
+        try:
+            user_message = self.state.messages[context.new_message_start_index]
+            user_message.metadata["explicit_core_memory_detected"] = True
+            user_message.metadata["core_memory_candidate_id"] = result.memory.id
+            user_message.metadata["core_memory_candidate_created"] = True
+            user_message.metadata["core_memory_candidate_status"] = result.memory.status
+        except (IndexError, AttributeError):
+            pass
         self._queue_lifecycle_event(
             self._event(
                 "core_memory_candidate_created",

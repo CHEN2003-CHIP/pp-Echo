@@ -104,6 +104,8 @@ def memory_propose_main(
             "conflicts_with": result.conflicts_with,
             "budget": result.budget,
             "audit": result.audit,
+            "markdown": result.markdown,
+            "immediate_effect": result.immediate_effect,
         },
         json_mode=json_mode,
     )
@@ -190,6 +192,12 @@ def memory_provider_status_main(workspace: Path, *, json_mode: bool = False) -> 
     _print_payload(payload, json_mode=json_mode)
 
 
+def memory_export_to_markdown_main(workspace: Path, *, reason: str = "manual_export", json_mode: bool = False) -> None:
+    settings = load_settings(workspace)
+    payload = service_for_workspace(workspace, settings).export_active_core_memories_to_markdown(actor="cli", reason=reason)
+    _print_payload(payload, json_mode=json_mode)
+
+
 def _memory_status_main(workspace: Path, memory_id: str, action: str, *, json_mode: bool) -> None:
     settings = load_settings(workspace)
     service = service_for_workspace(workspace, settings)
@@ -201,7 +209,17 @@ def _memory_status_main(workspace: Path, memory_id: str, action: str, *, json_mo
         result = service.archive(memory_id, actor="cli")
     else:
         raise ValueError(action)
-    _print_payload({"memory": result.memory.model_dump(mode="python"), "warnings": result.warnings, "budget": result.budget, "audit": result.audit}, json_mode=json_mode)
+    _print_payload(
+        {
+            "memory": result.memory.model_dump(mode="python"),
+            "warnings": result.warnings,
+            "budget": result.budget,
+            "audit": result.audit,
+            "markdown": result.markdown,
+            "immediate_effect": result.immediate_effect,
+        },
+        json_mode=json_mode,
+    )
 
 
 def _print_payload(payload: dict[str, object], *, json_mode: bool) -> None:
@@ -218,6 +236,7 @@ __all__ = [
     "memory_audit_main",
     "memory_compact_apply_main",
     "memory_compact_preview_main",
+    "memory_export_to_markdown_main",
     "memory_get_main",
     "memory_merge_apply_main",
     "memory_merge_preview_main",

@@ -120,6 +120,7 @@ class CoreMemoryContextHook:
     workspace_id: str
     renderer: CoreMemoryRenderer = field(default_factory=CoreMemoryRenderer)
     enabled: bool = True
+    inject_prompt: bool = False
     service: "CoreMemoryService | None" = None
     _frozen_snapshot: str | None = field(default=None, init=False, repr=False)
     _frozen_result: object | None = field(default=None, init=False, repr=False)
@@ -128,22 +129,24 @@ class CoreMemoryContextHook:
         if not self.enabled:
             return messages
         snapshot = self.snapshot()
-        if not snapshot:
-            return messages
         if state is not None:
             result = self.snapshot_result()
             state.memory_context[CORE_MEMORY_METADATA_KEY] = {
                 "workspace_id": self.workspace_id,
                 "chars": len(snapshot),
                 "frozen": True,
+                "debug_only": not self.inject_prompt,
+                "prompt_injection_disabled": not self.inject_prompt,
                 "included_ids": getattr(result, "included_ids", []),
                 "skipped_ids": getattr(result, "skipped_ids", []),
                 "snapshot_hash": getattr(result, "snapshot_hash", ""),
             }
+        if not self.inject_prompt or not snapshot:
+            return messages
         message = ChatMessage(
             role="system",
             content=[TextPart(text=snapshot)],
-            metadata={CORE_MEMORY_METADATA_KEY: {"workspace_id": self.workspace_id, "frozen": True}},
+            metadata={CORE_MEMORY_METADATA_KEY: {"workspace_id": self.workspace_id, "frozen": True, "debug_only": False}},
             timestamp=0.0,
         )
         return [*messages[:1], message, *messages[1:]] if messages and messages[0].role == "system" else [message, *messages]

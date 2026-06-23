@@ -95,6 +95,8 @@ class CoreMemoryWriteResult(BaseModel):
     conflicts_with: List[str] = Field(default_factory=list)
     budget: Dict[str, object] = Field(default_factory=dict)
     audit: List[Dict[str, object]] = Field(default_factory=list)
+    markdown: Dict[str, object] = Field(default_factory=dict)
+    immediate_effect: bool = False
 
 
 class CoreMemoryAuditRecord(BaseModel):

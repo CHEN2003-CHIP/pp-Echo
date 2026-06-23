@@ -543,6 +543,7 @@ def core_memory_context_hook_for(workspace: Path) -> CoreMemoryContextHook | Non
             )
         ),
         service=service,
+        inject_prompt=False,
     )
 
 

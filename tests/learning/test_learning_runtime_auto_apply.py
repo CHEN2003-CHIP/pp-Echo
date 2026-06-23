@@ -9,8 +9,10 @@ from pp_agent.learning.store import LearningStore
 class FakeExtractor:
     def __init__(self, candidates: list[LearningCandidate]) -> None:
         self.candidates = candidates
+        self.calls = 0
 
     def extract(self, *, session_id: str, turn_id: str, messages: list[ChatMessage]) -> list[LearningCandidate]:
+        self.calls += 1
         return self.candidates
 
 
@@ -106,3 +108,40 @@ def test_learning_runtime_auto_write_failure_does_not_abort(tmp_path: Path) -> N
 
     assert result == [candidate]
     assert store.get("learn-1").status == "pending"
+
+
+def test_learning_skips_same_turn_explicit_memory_candidate(tmp_path: Path) -> None:
+    store = LearningStore(tmp_path / ".pp-agent" / "learning")
+    candidate = LearningCandidate(
+        id="learn-1",
+        kind="user_preference",
+        title="Concise answers",
+        content="以后回答高效简洁。",
+        suggested_target="global_bootstrap",
+    )
+    extractor = FakeExtractor([candidate])
+    runtime = LearningRuntime(
+        workspace=tmp_path,
+        llm_client=None,
+        settings=LearningSettings(detailed_memory_sync_index_after_write=False),
+        store=store,
+        extractor=extractor,
+    )
+    messages = [
+        ChatMessage(
+            role="user",
+            content=[],
+            timestamp=0,
+            metadata={
+                "explicit_core_memory_detected": True,
+                "core_memory_candidate_id": "core-1",
+            },
+        )
+    ]
+
+    result = runtime.on_turn_persisted(session_id="s", turn_id="t", new_messages=messages)
+
+    assert result == []
+    assert extractor.calls == 0
+    assert store.list_candidates() == []
+    assert not (tmp_path / "MEMORY.md").exists()

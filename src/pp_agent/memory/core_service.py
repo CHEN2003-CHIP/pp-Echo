@@ -26,6 +26,8 @@ from pp_agent.memory.core_types import (
     CoreMemorySource,
     CoreMemoryWriteResult,
 )
+from pp_agent.memory.markdown_router import route_core_memory_to_markdown
+from pp_agent.memory.markdown_writer import MarkdownMemoryApplyError, apply_markdown_patch, build_markdown_patch
 
 
 @dataclass
@@ -90,13 +92,15 @@ class CoreMemoryService:
                 source=candidate.source,
                 metadata={"candidate": candidate.model_dump(mode="python")},
             )
-            return CoreMemoryWriteResult(
+            result = CoreMemoryWriteResult(
                 memory=duplicate,
                 duplicate_of=duplicate.id,
                 warnings=["duplicate_core_memory"],
                 safety=safety.to_dict(),
                 audit=[audit.model_dump(mode="python")],
             )
+            result.markdown = self._markdown_payload_for_memory(duplicate, applied=False)
+            return result
         status = self._initial_status(safety=safety, explicit_user_memory=explicit_user_memory)
         memory = candidate.to_memory(status=status)
         metadata = dict(memory.metadata)
@@ -128,7 +132,7 @@ class CoreMemoryService:
             },
         )
         self.provider.mirror_core_write(memory=memory, action="propose")
-        return CoreMemoryWriteResult(
+        result = CoreMemoryWriteResult(
             memory=memory,
             warnings=warnings,
             safety=safety.to_dict(),
@@ -136,9 +140,19 @@ class CoreMemoryService:
             budget=budget.model_dump(mode="python"),
             audit=[audit.model_dump(mode="python")],
         )
+        result.markdown = self._markdown_payload_for_memory(memory, applied=False)
+        return result
 
-    def approve(self, memory_id: str, *, actor: str = "user", reason: str = "") -> CoreMemoryWriteResult:
-        """Activate a candidate after re-checking safety and projected budget."""
+    def approve(
+        self,
+        memory_id: str,
+        *,
+        actor: str = "user",
+        reason: str = "",
+        apply_to_markdown: bool = True,
+        immediate_effect: bool = True,
+    ) -> CoreMemoryWriteResult:
+        """Approve a candidate and, by default, apply it to Markdown memory."""
         before = self.store.get(memory_id)
         if before is None:
             raise KeyError(memory_id)
@@ -158,8 +172,88 @@ class CoreMemoryService:
             return CoreMemoryWriteResult(memory=rejected, warnings=["rejected_by_safety_scan"], safety=safety.to_dict(), audit=[audit.model_dump(mode="python")])
         budget = self._budget_for_candidate(before.model_copy(update={"status": "active"}, deep=True))
         metadata = {**before.metadata, "budget": budget.model_dump(mode="python")}
+        markdown_payload: dict[str, object] = {}
+        markdown_audits: list[CoreMemoryAuditRecord] = []
+        markdown_warnings: list[str] = []
+        if apply_to_markdown:
+            preview = self.markdown_preview(memory_id)
+            markdown_payload = preview.model_dump(mode="python")
+            try:
+                applied = apply_markdown_patch(
+                    preview,
+                    workspace=self.workspace,
+                    global_root=self.settings.global_dir,
+                    settings=self.settings,
+                )
+                markdown_payload = applied.patch.model_dump(mode="python")
+                markdown_warnings.extend(applied.warnings)
+                metadata.update(
+                    {
+                        "markdown_applied": True,
+                        "markdown_target_path": applied.patch.target.path,
+                        "markdown_heading": applied.patch.target.heading,
+                        "markdown_marker_id": applied.patch.target.marker_id,
+                        "markdown_content_hash_after": applied.patch.content_hash_after,
+                        "immediate_effect": bool(immediate_effect),
+                    }
+                )
+                markdown_audits.append(
+                    self._audit(
+                        memory_id,
+                        "markdown_apply",
+                        actor=actor,
+                        before_status=before.status,
+                        after_status="active",
+                        reason=reason,
+                        source=before.source,
+                        metadata=self._markdown_audit_metadata(applied.patch, immediate_effect=immediate_effect),
+                    )
+                )
+                if immediate_effect:
+                    markdown_audits.append(
+                        self._audit(
+                            memory_id,
+                            "immediate_effect_enabled",
+                            actor=actor,
+                            before_status=before.status,
+                            after_status="active",
+                            reason=reason,
+                            source=before.source,
+                            metadata={"target_path": applied.patch.target.path, "marker_id": applied.patch.target.marker_id},
+                        )
+                    )
+            except MarkdownMemoryApplyError as exc:
+                action = "external_edit_detected" if exc.code == "external_edit_detected" else "markdown_apply_failed"
+                markdown_warnings.append(exc.code)
+                if exc.patch is not None:
+                    markdown_payload = exc.patch.model_dump(mode="python")
+                markdown_audits.append(
+                    self._audit(
+                        memory_id,
+                        action,
+                        actor=actor,
+                        before_status=before.status,
+                        after_status=before.status,
+                        reason=str(exc),
+                        source=before.source,
+                        metadata={"code": exc.code, **({"target_path": markdown_payload.get("target", {}).get("path")} if isinstance(markdown_payload.get("target"), dict) else {})},
+                    )
+                )
+                return CoreMemoryWriteResult(
+                    memory=before,
+                    warnings=markdown_warnings,
+                    safety=safety.to_dict(),
+                    budget=budget.model_dump(mode="python"),
+                    audit=[item.model_dump(mode="python") for item in markdown_audits],
+                    markdown=markdown_payload,
+                    immediate_effect=False,
+                )
+        else:
+            metadata["not_applied_to_markdown"] = True
         after = self.store.update(memory_id, {"status": "active", "metadata": metadata})
-        warnings = ["core_memory_budget_exceeded"] if budget.needs_compaction else []
+        warnings = [*markdown_warnings]
+        if budget.needs_compaction:
+            warnings.append("core_memory_budget_exceeded")
         audit = self._audit(
             memory_id,
             "approve",
@@ -168,7 +262,7 @@ class CoreMemoryService:
             after_status=after.status,
             reason=reason,
             source=after.source,
-            metadata={"budget": budget.model_dump(mode="python"), "warnings": warnings},
+            metadata={"budget": budget.model_dump(mode="python"), "warnings": warnings, "apply_to_markdown": apply_to_markdown},
         )
         self.provider.mirror_core_write(memory=after, action="approve")
         archive_audits = self._archive_sources_on_approve(after, actor=actor, reason=reason or "auto_replacement_approved")
@@ -177,8 +271,93 @@ class CoreMemoryService:
             warnings=warnings,
             safety=safety.to_dict(),
             budget=budget.model_dump(mode="python"),
-            audit=[audit.model_dump(mode="python"), *[item.model_dump(mode="python") for item in archive_audits]],
+            audit=[
+                audit.model_dump(mode="python"),
+                *[item.model_dump(mode="python") for item in markdown_audits],
+                *[item.model_dump(mode="python") for item in archive_audits],
+            ],
+            markdown=markdown_payload,
+            immediate_effect=bool(apply_to_markdown and immediate_effect and not markdown_warnings),
         )
+
+    def markdown_preview(self, memory_id: str):
+        memory = self.store.get(memory_id)
+        if memory is None:
+            raise KeyError(memory_id)
+        patch = build_markdown_patch(
+            memory,
+            route_core_memory_to_markdown(memory, workspace=self.workspace, global_root=self.settings.global_dir, marker_id=memory.id),
+            workspace=self.workspace,
+            global_root=self.settings.global_dir,
+        )
+        self._audit(
+            memory_id,
+            "markdown_preview",
+            actor="system",
+            before_status=memory.status,
+            after_status=memory.status,
+            reason="markdown_first_governance_preview",
+            source=memory.source,
+            metadata=self._markdown_audit_metadata(patch, immediate_effect=False),
+        )
+        return patch
+
+    def markdown_apply(self, memory_id: str, *, actor: str = "user", reason: str = "") -> CoreMemoryWriteResult:
+        memory = self.store.get(memory_id)
+        if memory is None:
+            raise KeyError(memory_id)
+        patch = self.markdown_preview(memory_id)
+        applied = apply_markdown_patch(patch, workspace=self.workspace, global_root=self.settings.global_dir, settings=self.settings)
+        metadata = {
+            **memory.metadata,
+            "markdown_applied": True,
+            "markdown_target_path": applied.patch.target.path,
+            "markdown_heading": applied.patch.target.heading,
+            "markdown_marker_id": applied.patch.target.marker_id,
+            "markdown_content_hash_after": applied.patch.content_hash_after,
+            "immediate_effect": True,
+        }
+        after = self.store.update(memory_id, {"metadata": metadata})
+        audit = self._audit(
+            memory_id,
+            "markdown_apply",
+            actor=actor,
+            before_status=memory.status,
+            after_status=after.status,
+            reason=reason,
+            source=after.source,
+            metadata=self._markdown_audit_metadata(applied.patch, immediate_effect=True),
+        )
+        return CoreMemoryWriteResult(
+            memory=after,
+            warnings=applied.warnings,
+            audit=[audit.model_dump(mode="python")],
+            markdown=applied.patch.model_dump(mode="python"),
+            immediate_effect=True,
+        )
+
+    def export_active_core_memories_to_markdown(self, *, actor: str = "user", reason: str = "export_active_core_memories_to_markdown") -> dict[str, object]:
+        exported: list[dict[str, object]] = []
+        skipped: list[str] = []
+        warnings: list[str] = []
+        for memory in self.store.list_active(workspace_id=self.workspace_id):
+            if memory.metadata.get("markdown_marker_id") or memory.metadata.get("markdown_applied"):
+                skipped.append(memory.id)
+                continue
+            result = self.markdown_apply(memory.id, actor=actor, reason=reason)
+            exported.append({"id": memory.id, "markdown": result.markdown})
+            warnings.extend(result.warnings)
+            self._audit(
+                memory.id,
+                "exported_to_markdown",
+                actor=actor,
+                before_status=memory.status,
+                after_status="active",
+                reason=reason,
+                source=memory.source,
+                metadata=result.markdown,
+            )
+        return {"exported": exported, "skipped": skipped, "warnings": warnings}
 
     def reject(self, memory_id: str, *, actor: str = "user", reason: str = "") -> CoreMemoryWriteResult:
         return self._status_transition(memory_id, "rejected", "reject", actor=actor, reason=reason)
@@ -226,11 +405,10 @@ class CoreMemoryService:
         )
 
     def snapshot(self, *, workspace_id: Optional[str] = None, session_id: Optional[str] = None) -> CoreMemorySnapshotResult:
-        """Render an immutable prompt snapshot from active memory only.
+        """Render a debug governance snapshot from active memory only.
 
-        Snapshot generation performs a defensive safety pass so a memory that
-        was once active but later matches a stricter rule can be skipped and
-        audited instead of silently entering the model context.
+        Markdown memory is now the prompt fact source. This snapshot is kept for
+        debugging, budget reports, and compatibility with management surfaces.
         """
         workspace_id = workspace_id or self.workspace_id
         memories = []
@@ -266,6 +444,34 @@ class CoreMemoryService:
             snapshot_hash=snapshot_hash,
             budget=budget,
         )
+
+    def _markdown_payload_for_memory(self, memory: CoreMemory, *, applied: bool) -> dict[str, object]:
+        try:
+            patch = build_markdown_patch(
+                memory,
+                route_core_memory_to_markdown(memory, workspace=self.workspace, global_root=self.settings.global_dir, marker_id=memory.id),
+                workspace=self.workspace,
+                global_root=self.settings.global_dir,
+            )
+            if applied:
+                patch = patch.model_copy(update={"applied": True}, deep=True)
+            return patch.model_dump(mode="python")
+        except Exception as exc:  # noqa: BLE001
+            return {"warning": f"markdown_preview_failed: {exc}"}
+
+    @staticmethod
+    def _markdown_audit_metadata(patch, *, immediate_effect: bool) -> dict[str, object]:
+        import hashlib
+
+        return {
+            "target_path": patch.target.path,
+            "heading": patch.target.heading,
+            "marker_id": patch.target.marker_id,
+            "content_hash_before": patch.content_hash_before,
+            "content_hash_after": patch.content_hash_after,
+            "diff_hash": hashlib.sha256(patch.diff.encode("utf-8")).hexdigest(),
+            "immediate_effect": immediate_effect,
+        }
 
     def search(self, query: str, *, scope: Optional[str] = None, workspace_id: Optional[str] = None) -> list[CoreMemory]:
         return self.store.search_core_memory(query, scope=scope, workspace_id=workspace_id or self.workspace_id)

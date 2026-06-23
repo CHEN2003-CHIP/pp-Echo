@@ -638,6 +638,16 @@ if app:
 
         memory_provider_status_main(workspace, json_mode=json_mode)
 
+    @memory_app.command("export-to-markdown")
+    def memory_export_to_markdown(
+        reason: str = typer.Option("manual_export", "--reason"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.memory import memory_export_to_markdown_main
+
+        memory_export_to_markdown_main(workspace, reason=reason, json_mode=json_mode)
+
 
     @app.command("rewind-safe")
     def rewind_safe(
@@ -857,6 +867,10 @@ def main() -> None:
     memory_provider_status_parser = memory_subparsers.add_parser("provider-status")
     memory_provider_status_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     memory_provider_status_parser.add_argument("--json", action="store_true")
+    memory_export_parser = memory_subparsers.add_parser("export-to-markdown")
+    memory_export_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    memory_export_parser.add_argument("--reason", default="manual_export")
+    memory_export_parser.add_argument("--json", action="store_true")
     rewind_safe_parser = subparsers.add_parser("rewind-safe")
     rewind_safe_parser.add_argument("--session", required=True)
     rewind_safe_parser.add_argument("--checkpoint", default=None)
@@ -1083,6 +1097,10 @@ def main() -> None:
         from pp_agent.cli.commands.memory import memory_provider_status_main
 
         memory_provider_status_main(Path(args.workspace), json_mode=args.json)
+    elif command == "memory" and args.memory_command == "export-to-markdown":
+        from pp_agent.cli.commands.memory import memory_export_to_markdown_main
+
+        memory_export_to_markdown_main(Path(args.workspace), reason=args.reason, json_mode=args.json)
     elif command == "rewind-safe":
         from pp_agent.cli.commands.checkpoint import rewind_safe_main
 

@@ -51,6 +51,13 @@ class LearningRuntime:
     ) -> list[LearningCandidate]:
         if not self.settings.enable or not self.settings.auto_extract:
             return []
+        if self._explicit_core_memory_handled(new_messages):
+            logger.debug(
+                "Skipping learning extraction for session=%s turn=%s because explicit memory was handled by Core Memory",
+                session_id,
+                turn_id,
+            )
+            return []
         if self._extraction_disabled:
             logger.debug(
                 "Learning extraction is disabled for session=%s turn=%s; skipping extraction",
@@ -83,6 +90,14 @@ class LearningRuntime:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Automatic file memory write failed for session=%s turn=%s: %s", session_id, turn_id, exc)
         return candidates
+
+    @staticmethod
+    def _explicit_core_memory_handled(messages: list[ChatMessage]) -> bool:
+        for message in messages:
+            metadata = getattr(message, "metadata", {}) or {}
+            if metadata.get("explicit_core_memory_detected") and metadata.get("core_memory_candidate_id"):
+                return True
+        return False
 
     @staticmethod
     def _is_quota_exhausted_error(exc: Exception) -> bool:

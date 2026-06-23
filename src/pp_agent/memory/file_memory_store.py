@@ -48,7 +48,7 @@ class FileMemoryIndexStore:
     ) -> None:
         self.workspace = workspace.resolve()
         self.memory_root = (memory_root or workspace).resolve()
-        self.global_root = global_root.resolve() if global_root is not None else None
+        self.global_root = self._safe_resolve(global_root) if global_root is not None else None
         self.index_path = Path(index_path).expanduser()
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         self.extra_paths = list(extra_paths or [])
@@ -62,8 +62,11 @@ class FileMemoryIndexStore:
             candidates.append(root_memory)
         if self.global_root is not None:
             global_memory = self.global_root / "MEMORY.md"
-            if global_memory.exists():
-                candidates.append(global_memory)
+            try:
+                if global_memory.exists():
+                    candidates.append(global_memory)
+            except OSError:
+                pass
         memory_dir = self.memory_root / "memory"
         if memory_dir.exists():
             candidates.extend(path for path in memory_dir.rglob("*.md") if path.is_file())
@@ -325,6 +328,13 @@ class FileMemoryIndexStore:
         if self.global_root is None:
             return False
         return resolved == self.global_root or self.global_root in resolved.parents
+
+    @staticmethod
+    def _safe_resolve(path: Path) -> Path:
+        try:
+            return path.resolve(strict=False)
+        except OSError:
+            return path.absolute()
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection, connection:

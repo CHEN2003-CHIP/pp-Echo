@@ -37,16 +37,16 @@ class CoreMemoryBaseTool(BaseTool):
     def __init__(self, workspace: Path, policy_evaluator=None, *, settings=None) -> None:
         super().__init__(workspace, policy_evaluator)
         if settings is None:
-            from pp_agent.app.bootstrap import load_settings
+            from pp_agent.storage.settings import Settings
 
-            settings = load_settings(workspace)
+            settings = Settings.load(workspace)
         self.settings = settings
         self.store = core_memory_store_for_settings(settings)
         self.service = service_for_workspace(self.workspace, settings)
         self.workspace_id = workspace_id_for_path(workspace)
 
     def _result(self, content: str, details: dict[str, object], *, is_error: bool = False) -> ToolExecutionResult:
-        return ToolExecutionResult(tool_name=self.spec.name, content=content, is_error=is_error, details=details)
+        return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=content, is_error=is_error, details=details)
 
 
 class MemoryProposeTool(CoreMemoryBaseTool):
@@ -54,7 +54,7 @@ class MemoryProposeTool(CoreMemoryBaseTool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="memory_propose",
-            description="Create a pending curated core memory candidate. Long-term memory must be approved before injection.",
+            description="Create a pending governed memory candidate and preview the Markdown patch that approval would apply.",
             parameters=_candidate_schema(required=("content",)),
             permission_domain=PermissionDomain.READ,
         )
@@ -78,6 +78,8 @@ class MemoryProposeTool(CoreMemoryBaseTool):
                 "conflicts_with": result.conflicts_with,
                 "budget": result.budget,
                 "audit": result.audit,
+                "markdown": result.markdown,
+                "immediate_effect": result.immediate_effect,
             },
         )
 
@@ -109,17 +111,48 @@ class MemoryApproveTool(CoreMemoryBaseTool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="memory_approve",
-            description="Approve a pending core memory so it can appear in the next session snapshot.",
-            parameters={"type": "object", "properties": {"memory_id": {"type": "string"}}, "required": ["memory_id"]},
+            description="Approve a pending governed memory and write it to Markdown memory by default for the next model turn.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "apply_to_markdown": {"type": "boolean", "default": True},
+                    "reason": {"type": "string"},
+                },
+                "required": ["memory_id"],
+            },
             requires_confirmation=True,
             permission_domain=PermissionDomain.APPROVAL,
             model_callable=False,
         )
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
-        result = self.service.approve(str(arguments["memory_id"]), actor="tool")
+        result = self.service.approve(
+            str(arguments["memory_id"]),
+            actor="tool",
+            reason=str(arguments.get("reason") or ""),
+            apply_to_markdown=bool(arguments.get("apply_to_markdown", True)),
+            immediate_effect=True,
+        )
         memory = result.memory
-        return self._result(f"approved: {memory.id} [{memory.scope}/{memory.section}] {memory.content}", {"memory": memory.model_dump(mode="python"), "warnings": result.warnings, "budget": result.budget, "audit": result.audit})
+        target = result.markdown.get("target", {}) if isinstance(result.markdown, dict) else {}
+        path = target.get("path") if isinstance(target, dict) else None
+        heading = target.get("heading") if isinstance(target, dict) else None
+        message = "This memory has been written to Markdown memory and will affect the next model turn." if result.immediate_effect else "Memory approved as governance record."
+        return self._result(
+            f"approved/applied: {memory.id} [{memory.scope}/{memory.section}] {memory.content}\n{message}",
+            {
+                "memory": memory.model_dump(mode="python"),
+                "warnings": result.warnings,
+                "budget": result.budget,
+                "audit": result.audit,
+                "markdown": result.markdown,
+                "target_file": path,
+                "heading": heading,
+                "immediate_effect": result.immediate_effect,
+                "message": message,
+            },
+        )
 
 
 class MemoryRejectTool(CoreMemoryBaseTool):
@@ -184,7 +217,7 @@ class MemorySnapshotTool(CoreMemoryBaseTool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="memory_snapshot",
-            description="Preview the active Core Memory Snapshot that will be injected at session start.",
+            description="Preview the debug-only SQLite governance snapshot. Markdown memory is the default prompt fact source.",
             parameters={"type": "object", "properties": {"workspace_id": {"type": "string"}}},
             permission_domain=PermissionDomain.READ,
             model_callable=False,
@@ -193,7 +226,10 @@ class MemorySnapshotTool(CoreMemoryBaseTool):
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         workspace_id = str(arguments.get("workspace_id") or self.workspace_id)
         result = self.service.snapshot(workspace_id=workspace_id)
-        return self._result(result.snapshot or "No active core memory.", result.model_dump(mode="python"))
+        payload = result.model_dump(mode="python")
+        payload["debug_only"] = True
+        payload["sqlite_governance_snapshot"] = True
+        return self._result(result.snapshot or "No active governed core memory.", payload)
 
 
 class MemoryAuditTool(CoreMemoryBaseTool):
@@ -295,6 +331,23 @@ class MemoryProviderStatusTool(CoreMemoryBaseTool):
         return self._result(str(payload), payload)
 
 
+class MemoryExportToMarkdownTool(CoreMemoryBaseTool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="memory_export_to_markdown",
+            description="Export active SQLite governed memories that have not yet been written to Markdown memory.",
+            parameters={"type": "object", "properties": {"reason": {"type": "string"}}},
+            requires_confirmation=True,
+            permission_domain=PermissionDomain.APPROVAL,
+            model_callable=False,
+        )
+
+    def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        payload = self.service.export_active_core_memories_to_markdown(actor="tool", reason=str(arguments.get("reason") or "manual_export"))
+        return self._result(f"Exported {len(payload.get('exported', []))} active memory item(s) to Markdown.", payload)
+
+
 def register_core_memory_tools(registry, *, settings) -> None:
     from pp_agent.tools.metadata import ToolMetadata
     from pp_agent.tools.registry import ToolRegistration
@@ -313,6 +366,7 @@ def register_core_memory_tools(registry, *, settings) -> None:
         MemoryMergePreviewTool,
         MemoryMergeApplyTool,
         MemoryProviderStatusTool,
+        MemoryExportToMarkdownTool,
     ]
     for cls in tool_classes:
         factory = lambda cls=cls: cls(registry.workspace, registry.policy_evaluator, settings=settings)

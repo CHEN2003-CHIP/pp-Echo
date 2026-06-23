@@ -30,7 +30,10 @@ def test_core_memory_routes_lifecycle_and_audit(tmp_path) -> None:
 
     audit = client.get("/api/memory/core/audit", params={"memory_id": memory["id"]})
     assert audit.status_code == 200
-    assert [entry["action"] for entry in audit.json()["audit"]][:2] == ["approve", "propose"]
+    actions = [entry["action"] for entry in audit.json()["audit"]]
+    assert "approve" in actions
+    assert "markdown_apply" in actions
+    assert "propose" in actions
 
 
 def test_core_memory_reject_route_keeps_memory_out_of_snapshot(tmp_path) -> None:
