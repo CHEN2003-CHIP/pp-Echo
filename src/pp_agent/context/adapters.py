@@ -340,9 +340,20 @@ def _trace_safe_metadata(metadata: object) -> dict[str, object]:
 def _conversation_message_json(message: ChatMessage) -> dict[str, object] | None:
     """Keep original conversation role/content for rendering, while tool text stays preview-bounded elsewhere."""
 
-    if message.role not in {"user", "assistant"}:
+    if message.role in {"user", "assistant"}:
+        return message.model_dump(mode="json")
+    if message.role == "tool":
+        return ChatMessage(
+            role="tool",
+            content=[TextPart(text=_message_text(message))],
+            tool_call_id=message.tool_call_id,
+            tool_name=message.tool_name,
+            metadata=dict(message.metadata or {}),
+            timestamp=message.timestamp,
+        ).model_dump(mode="json")
+    if message.role != "system":
         return None
-    return message.model_dump(mode="json")
+    return None
 
 
 def _pack_section_map(pack: ContextPack) -> dict[str, list[ContextItem]]:

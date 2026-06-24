@@ -4,7 +4,7 @@
 
 ContextPipeline is pp-Echo's context engine. Retrieval tools find information; ContextPipeline decides what the model sees, how it is ordered, why it fits budget, and what was dropped.
 
-The current runtime keeps the new rendered-message path behind `use_context_pipeline_messages=false` by default. Even with the flag off, runtime builds the canonical `ContextPack` for trace and audit. Tests can enable the flag to verify the new provider -> item -> pack -> final messages path without a broad AgentRuntime rewrite.
+The current default is `context_pipeline_mode=on`. Runtime still builds the canonical `ContextPack` for trace and audit in every mode, but provider messages are selected by the rollout mode rather than by ad hoc Runtime branching.
 
 ## Separation
 
@@ -85,6 +85,17 @@ Runtime emits `context_payload_version=3` in `context_built`. The nested `contex
 - capability, MCP, and skill counts
 - warnings
 
+The grey-rollout fields beside `context` are stable for TraceInspect:
+
+- `pipeline_mode`: `off`, `shadow`, `auto`, or `on`
+- `pipeline_used`: whether `ContextPack.final_messages` went to the provider
+- `fallback_reason`: why `auto` or failed rendering kept legacy messages
+- `legacy_message_count` and `pipeline_message_count`
+- `diff_summary`: secret-safe shape comparison with hashes, counts, dropped reasons, and source-ref counts
+- `context_pack_v3`: per-section usage, included and dropped items, source refs, markdown paths/hash, core governance status, and MCP/Skill compact summaries
+
+TraceInspect can also read the latest context payload for a run from `GET /api/traces/{run_id}/context-pack`.
+
 This lets TraceInspect answer four questions for a turn:
 
 - What did the model see?
@@ -101,7 +112,18 @@ The orchestrated path is:
 3. `ContextPipeline.build_pack()` applies policy, dedupe, and budget.
 4. `ContextPack` stores included items, dropped items, source refs, warnings, and budget report.
 5. `ContextPipeline.render_messages()` produces final `ChatMessage` objects.
-6. AgentRuntime uses rendered messages only when `use_context_pipeline_messages=true`.
+6. AgentRuntime selects legacy or rendered messages according to `context_pipeline_mode`.
 7. Runtime emits the v3 `context_built` trace either way.
 
 `build_context_pack_from_messages()` remains as a legacy observer/fallback for already-rendered runtime messages.
+
+## Grey Rollout Modes
+
+- `off`: only legacy hook messages go to the provider; pipeline still emits trace when available.
+- `shadow`: legacy hook messages go to the provider; pipeline builds pack, diff summary, and trace for comparison.
+- `auto`: pipeline messages are used only when safety checks pass; otherwise Runtime falls back to legacy messages and records `fallback_reason`.
+- `on`: pipeline messages are forced by default; render failures surface instead of silently hiding production issues.
+
+Auto fallback reasons include `context_render_exception`, `protected_current_user_message_missing`, `system_instruction_missing`, `critical_budget_warning`, `unsupported_connector_context`, `attachment_render_mismatch`, and `tool_capability_visibility_mismatch`.
+
+Use `python -m pp_agent.cli.main context compare-messages --json` for a one-off legacy-vs-pipeline diff, `python -m pp_agent.cli.main context replay-trace --json` for the latest recorded `context_built` payload, and `python -m pp_agent.cli.main context grey-report --json` to regenerate `docs/context-pipeline-grey-rollout-report.md`.

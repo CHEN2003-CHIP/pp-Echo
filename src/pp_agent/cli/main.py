@@ -100,6 +100,7 @@ if app:
     skills_app = typer.Typer(help="Inspect discovered skills.")
     eval_app = typer.Typer(help="Run and report agent evaluations.")
     memory_app = typer.Typer(help="Inspect and query Markdown file memory.")
+    context_app = typer.Typer(help="Compare and replay ContextPipeline output.")
 
     app.add_typer(sessions_app, name="sessions")
     app.add_typer(approvals_app, name="approvals")
@@ -111,6 +112,7 @@ if app:
     app.add_typer(skills_app, name="skills")
     app.add_typer(eval_app, name="eval")
     app.add_typer(memory_app, name="memory")
+    app.add_typer(context_app, name="context")
 
     @sessions_app.command("list")
     def sessions_list(workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w")) -> None:
@@ -436,6 +438,38 @@ if app:
         from pp_agent.cli.commands.eval import eval_report_main
 
         eval_report_main(workspace, output_dir=output_dir, json_mode=json_mode)
+
+    @context_app.command("compare-messages")
+    def context_compare_messages(
+        prompt: Optional[str] = typer.Option(None, "--prompt"),
+        session_id: Optional[str] = typer.Option(None, "--session"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.context import context_compare_messages_main
+
+        context_compare_messages_main(workspace, prompt=prompt, session_id=session_id, json_mode=json_mode)
+
+    @context_app.command("replay-trace")
+    def context_replay_trace(
+        run_id: Optional[str] = typer.Option(None, "--run-id"),
+        session_id: Optional[str] = typer.Option(None, "--session"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.context import context_replay_trace_main
+
+        context_replay_trace_main(workspace, run_id=run_id, session_id=session_id, json_mode=json_mode)
+
+    @context_app.command("grey-report")
+    def context_grey_report(
+        output: Optional[Path] = typer.Option(None, "--output"),
+        json_mode: bool = typer.Option(False, "--json"),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+    ) -> None:
+        from pp_agent.cli.commands.context import context_grey_rollout_report_main
+
+        context_grey_rollout_report_main(workspace, output=output, json_mode=json_mode)
 
     @memory_app.command("sync")
     def memory_sync(

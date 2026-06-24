@@ -20,7 +20,7 @@ def context_pipeline_config_from_settings(settings: Any) -> ContextPipelineConfi
 
     context_settings = settings.context_pipeline
     return ContextPipelineConfig(
-        use_context_pipeline_messages=bool(context_settings.use_context_pipeline_messages),
+        use_context_pipeline_messages=_mode_from_settings(context_settings) in {"auto", "on"},
         debug_include_core_governance=bool(context_settings.debug_include_core_governance),
         total_budget=int(context_settings.total_budget),
         section_budgets=dict(context_settings.section_budgets or {}),
@@ -83,6 +83,13 @@ def _latest_user_text(messages: list[ChatMessage]) -> str:
             continue
         return "\n".join(part.text for part in message.content if isinstance(part, TextPart)).strip()
     return ""
+
+
+def _mode_from_settings(context_settings: Any) -> str:
+    mode = str(getattr(context_settings, "context_pipeline_mode", "") or "").strip().lower()
+    if mode in {"off", "shadow", "auto", "on"}:
+        return mode
+    return "on" if bool(getattr(context_settings, "use_context_pipeline_messages", False)) else "shadow"
 
 
 def _core_governance_items_from_state(state: Any) -> list[ContextItem]:

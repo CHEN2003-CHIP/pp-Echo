@@ -263,6 +263,7 @@ class SubAgentSettings(BaseModel):
 class ContextPipelineSettings(BaseModel):
     """Runtime-facing controls for the auditable ContextPipeline path."""
 
+    context_pipeline_mode: str = "on"
     use_context_pipeline_messages: bool = False
     debug_include_core_governance: bool = False
     total_budget: int = 30900

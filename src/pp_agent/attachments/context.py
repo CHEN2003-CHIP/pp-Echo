@@ -23,7 +23,10 @@ class AttachmentContextProvider:
         self.limit = limit
 
     def list_items(self) -> list[ContextItem]:
-        records = AttachmentService(self.workspace).list(self.session_id)[: self.limit]
+        try:
+            records = AttachmentService(self.workspace).list(self.session_id)[: self.limit]
+        except OSError:
+            return []
         return [_record_to_context_item(record) for record in records]
 
     def __call__(self, **_: object) -> list[ContextItem]:

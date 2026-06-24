@@ -80,6 +80,7 @@ _FIELDS: tuple[ConfigField, ...] = (
     ConfigField("subagents.max_turns", "object", "subagents", "next_turn"),
     ConfigField("subagents.enforce_orchestrated_edit_contract", "boolean", "subagents", "next_turn"),
     ConfigField("subagents.require_patch_artifact_for_code_change", "boolean", "subagents", "next_turn"),
+    ConfigField("context_pipeline.context_pipeline_mode", "string", "context", "next_turn"),
     ConfigField("context_pipeline.use_context_pipeline_messages", "boolean", "context", "next_turn"),
     ConfigField("context_pipeline.debug_include_core_governance", "boolean", "context", "next_turn"),
     ConfigField("context_pipeline.total_budget", "integer", "context", "next_turn", minimum=1),

@@ -116,6 +116,20 @@ def _context_runtime_bridge():
     return importlib.import_module("pp_agent.context.runtime_bridge")
 
 
+def _context_compare():
+    """Load ContextPipeline grey-rollout comparison helpers lazily."""
+
+    return importlib.import_module("pp_agent.context.compare")
+
+
+def _context_pipeline_mode(settings: object) -> str:
+    context_settings = getattr(settings, "context_pipeline", None)
+    mode = str(getattr(context_settings, "context_pipeline_mode", "") or "").strip().lower()
+    if mode in {"off", "shadow", "auto", "on"}:
+        return mode
+    return "on" if bool(getattr(context_settings, "use_context_pipeline_messages", False)) else "shadow"
+
+
 @dataclass(frozen=True)
 class _TurnPersistContext:
     new_message_start_index: int
@@ -242,6 +256,7 @@ class AgentRuntime:
         self._current_capability_selection = None
         self.context_pipeline_config = _context_runtime_bridge().context_pipeline_config_from_settings(config_snapshot.settings)
         self.use_context_pipeline_messages = self.context_pipeline_config.use_context_pipeline_messages
+        self.context_pipeline_mode = _context_pipeline_mode(config_snapshot.settings)
         self.lifecycle.subscribe(self._observe_runtime_event)
         self._attach_runtime_context_to_tool_registry()
 
@@ -1481,15 +1496,77 @@ class AgentRuntime:
         # 9. 更新事件细节、发射事件用于监测
         context_event.details.update(context_decision.details)
         hook_messages = context_decision.messages or messages
-        pack = self._build_context_pack_for_messages(hook_messages)
-        final_messages = list(pack.final_messages) if self.use_context_pipeline_messages and pack.final_messages else hook_messages
-        context_event.details.update(_context_adapters().context_pack_to_trace_details(pack))
+        pack = None
+        diff_summary: dict[str, object] = {}
+        render_error: Exception | None = None
+        try:
+            pack = self._build_context_pack_for_messages(hook_messages)
+            diff_summary = _context_compare().compare_legacy_and_pipeline_messages(legacy_messages=hook_messages, pack=pack)
+        except Exception as exc:  # noqa: BLE001
+            render_error = exc
+            logger.warning("context pipeline build failed: %s", exc)
+        final_messages, rollout_details = self._select_context_pipeline_messages(
+            hook_messages,
+            pack=pack,
+            diff_summary=diff_summary,
+            render_error=render_error,
+        )
+        if pack is not None:
+            context_event.details.update(_context_adapters().context_pack_to_trace_details(pack))
+            context_event.details.update(_context_compare().trace_context_pack_payload(pack, diff_summary=diff_summary))
+        else:
+            context_event.details.update({"context_payload_version": 3, "context": {}, "context_error": safe_preview(str(render_error), 500)})
         context_event.details["model_id"] = self._model_trace_id()
         context_event.details["runtime_id"] = self._runtime_trace_id()
-        context_event.details["rendered_message_count"] = len(pack.final_messages)
-        context_event.details["pipeline_messages_enabled"] = bool(self.use_context_pipeline_messages)
+        context_event.details.update(rollout_details)
         list(self._emit(context_event))
         return final_messages
+
+    def _select_context_pipeline_messages(
+        self,
+        legacy_messages: list[ChatMessage],
+        *,
+        pack,
+        diff_summary: dict[str, object],
+        render_error: Exception | None,
+    ) -> tuple[list[ChatMessage], dict[str, object]]:
+        """Choose provider messages for the configured grey-rollout mode."""
+
+        mode = self.context_pipeline_mode
+        fallback_reason = _context_compare().fallback_reason_for_auto(
+            legacy_messages=legacy_messages,
+            pack=pack,
+            diff_summary=diff_summary,
+            render_error=render_error,
+        )
+        pipeline_messages = list(getattr(pack, "final_messages", []) or []) if pack is not None else []
+        if mode == "off":
+            used = False
+            selected = legacy_messages
+            fallback_reason = "mode_off"
+        elif mode == "shadow":
+            used = False
+            selected = legacy_messages
+            fallback_reason = None
+        elif mode == "on":
+            if render_error is not None:
+                raise render_error
+            used = bool(pipeline_messages)
+            selected = pipeline_messages or legacy_messages
+            fallback_reason = None if pipeline_messages else "context_render_exception"
+        else:
+            used = fallback_reason is None and bool(pipeline_messages)
+            selected = pipeline_messages if used else legacy_messages
+        return selected, {
+            "pipeline_mode": mode,
+            "pipeline_used": used,
+            "fallback_reason": fallback_reason,
+            "legacy_message_count": len(legacy_messages),
+            "pipeline_message_count": len(pipeline_messages),
+            "rendered_message_count": len(pipeline_messages),
+            "pipeline_messages_enabled": used,
+            "diff_summary": diff_summary,
+        }
 
     def _context_pack_trace_details(self, messages: list[ChatMessage]) -> dict[str, object]:
         """Build trace-safe ContextPack details without changing provider messages."""
@@ -2984,6 +3061,7 @@ class AgentRuntime:
             self.require_patch_artifact_for_code_change = bool(settings.subagents.require_patch_artifact_for_code_change)
             self.context_pipeline_config = _context_runtime_bridge().context_pipeline_config_from_settings(settings)
             self.use_context_pipeline_messages = self.context_pipeline_config.use_context_pipeline_messages
+            self.context_pipeline_mode = _context_pipeline_mode(settings)
             self._refresh_model_runtime_profiles()
         reload_policy = str(getattr(snapshot, "reload_policy", "hot"))
         changed = previous_version is not None and previous_version != self.config_version

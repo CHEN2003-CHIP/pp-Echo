@@ -188,6 +188,11 @@ class ContextPipeline:
             items, duplicate_drops = _dedupe_items(section, items)
             for duplicate in duplicate_drops:
                 budgeter.report.record_dropped(section, duplicate, "duplicate_context")
+            if section == "system":
+                selected[section] = items
+                for item in items:
+                    budgeter.report.record_included(section, item)
+                continue
             if section == "core_governance" and not self.config.debug_include_core_governance:
                 for item in items:
                     budgeter.report.record_dropped(section, item, "core_memory_prompt_injection_disabled")

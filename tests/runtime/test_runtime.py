@@ -390,6 +390,8 @@ def test_ordinary_write_file_approval_round_trip_persists_result_and_resumes(tmp
 
 def test_context_built_event_includes_budget_report(tmp_path: Path) -> None:
     agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    agent.config_snapshot.settings.context_pipeline.context_pipeline_mode = "shadow"
+    agent.context_pipeline_mode = "shadow"
 
     events = agent.prompt("hello context")
     context_events = [event for event in events if event.type == "context_built"]
@@ -414,6 +416,8 @@ def test_context_pipeline_messages_disabled_keeps_hook_messages_for_provider(tmp
     (tmp_path / "MEMORY.md").write_text("# Project Memory\n\nPipeline-only fact.\n", encoding="utf-8")
     llm = RecordingContextLLMClient()
     agent = build_agent(tmp_path, llm, require_plan_approval=False)
+    agent.config_snapshot.settings.context_pipeline.context_pipeline_mode = "shadow"
+    agent.context_pipeline_mode = "shadow"
 
     events = agent.prompt("hello")
     system_text = "\n".join(part.text for message in llm.seen_messages[-1] if message.role == "system" for part in message.content)
@@ -426,9 +430,11 @@ def test_context_pipeline_messages_enabled_uses_rendered_messages_for_provider(t
     (tmp_path / "MEMORY.md").write_text("# Project Memory\n\nPipeline-rendered fact.\n", encoding="utf-8")
     llm = RecordingContextLLMClient()
     agent = build_agent(tmp_path, llm, require_plan_approval=False)
+    agent.config_snapshot.settings.context_pipeline.context_pipeline_mode = "on"
     agent.config_snapshot.settings.context_pipeline.use_context_pipeline_messages = True
     agent.context_pipeline_config.use_context_pipeline_messages = True
     agent.use_context_pipeline_messages = True
+    agent.context_pipeline_mode = "on"
 
     events = agent.prompt("hello")
     system_text = "\n".join(part.text for message in llm.seen_messages[-1] if message.role == "system" for part in message.content)

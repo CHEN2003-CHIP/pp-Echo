@@ -37,6 +37,22 @@ pp-Echo 现在首先是一个教学向 Agent 工程项目：它不是把 LangCha
 
 ## 🗞️ 最近更新
 
+### ContextPipeline v3 默认开启
+
+ContextPipeline v3 已从灰度观测路径收口为默认 provider 输入路径：`context_pipeline_mode=on`。Runtime 会把 providers 产出的 `ContextItem` 统一编排为 `ContextPack`，经过预算、drop reason、source refs 和稳定顺序后渲染为 `final_messages` 发给模型；同时在 `context_built` trace 中保留 v3 payload、legacy/pipeline diff summary、per-section usage、included/dropped items 和 `fallback_reason`，便于 TraceInspect 和 eval replay 审计。
+
+如果需要回退或灰度观测，可以在配置中切换 `context_pipeline_mode`：
+
+- `off`：只使用 legacy hook messages。
+- `shadow`：legacy 发给模型，pipeline 只生成 pack/report/trace。
+- `auto`：安全检查通过时使用 pipeline，否则记录原因并回退 legacy。
+- `on`：默认模式，强制使用 pipeline messages。
+
+推荐阅读：
+
+- [ContextPipeline 设计说明](docs/context-pipeline.md)
+- [ContextPipeline 灰度报告](docs/context-pipeline-grey-rollout-report.md)
+
 ### Memory 分层收口
 
 Memory 状态和文档已收口为 Core / Episodic / File / Learning 四层；`memory.enable` 保留为 Episodic/history 的稳定配置入口，不再作为全局 Memory 开关表述。

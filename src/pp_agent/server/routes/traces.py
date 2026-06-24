@@ -68,6 +68,27 @@ def mount_trace_routes(app, active_workspace: Callable[[], Path]) -> None:
     def trace_events(run_id: str) -> dict:
         return {"events": dump_detail(run_id)["events"]}
 
+    @app.get("/api/traces/{run_id}/context-pack")
+    def trace_context_pack(run_id: str) -> dict:
+        events = dump_detail(run_id)["events"]
+        context_events = [
+            event
+            for event in events
+            if event.get("name") == "context_built" and isinstance(event.get("payload", {}).get("details"), dict)
+        ]
+        if not context_events:
+            raise HTTPException(status_code=404, detail="ContextPack v3 payload not found")
+        details = context_events[-1]["payload"]["details"]
+        return {
+            "context_payload_version": details.get("context_payload_version"),
+            "pipeline_mode": details.get("pipeline_mode"),
+            "pipeline_used": details.get("pipeline_used"),
+            "fallback_reason": details.get("fallback_reason"),
+            "diff_summary": details.get("diff_summary") or {},
+            "context": details.get("context") or {},
+            "context_pack_v3": details.get("context_pack_v3") or {},
+        }
+
     @app.get("/api/sessions/{session_id}/traces")
     def session_traces(session_id: str, limit: int = 20) -> dict:
         runs = store().list_runs(limit=clamp_limit(limit), session_id=clean_session_id(session_id))

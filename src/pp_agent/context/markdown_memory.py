@@ -26,8 +26,12 @@ def read_global_memory(global_root: Path, settings: Any = None) -> MarkdownMemor
     """Read global MEMORY.md as bootstrap markdown memory."""
 
     char_limit = _char_limit(settings, default=2400)
+    try:
+        path = Path(global_root).resolve() / "MEMORY.md"
+    except OSError as exc:
+        return MarkdownMemoryReadResult(None, warnings=[f"markdown_memory_read_error:global/MEMORY.md:{exc}"])
     return _read_memory_file(
-        path=Path(global_root).resolve() / "MEMORY.md",
+        path=path,
         item_id="markdown-memory:global",
         title="Global memory",
         display_path="global/MEMORY.md",
@@ -39,8 +43,12 @@ def read_workspace_memory(workspace: Path, settings: Any = None) -> MarkdownMemo
     """Read workspace MEMORY.md as bootstrap markdown memory."""
 
     char_limit = _char_limit(settings, default=4000)
+    try:
+        path = Path(workspace).resolve() / "MEMORY.md"
+    except OSError as exc:
+        return MarkdownMemoryReadResult(None, warnings=[f"markdown_memory_read_error:MEMORY.md:{exc}"])
     return _read_memory_file(
-        path=Path(workspace).resolve() / "MEMORY.md",
+        path=path,
         item_id="markdown-memory:workspace",
         title="Workspace memory",
         display_path="MEMORY.md",
