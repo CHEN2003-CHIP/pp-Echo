@@ -1,4 +1,4 @@
-﻿# 🦇pp-Echo：会规划、会审批、会回退的本地 Agent 工程课
+﻿# 🦇pp-Echo：Make agents powerful, but no longer mysterious.让 Agent 足够强大，也足够透明。
 
 ## Release
 
