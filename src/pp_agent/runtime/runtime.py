@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import importlib
 import logging
 import re
 import threading
@@ -13,12 +14,6 @@ from types import SimpleNamespace
 from typing import Optional
 
 from pp_agent.llm.provider.openai_compatible import LLMClient, LLMClientError
-from pp_agent.capabilities.catalog import CapabilityCatalog
-from pp_agent.capabilities.discovery import BuiltinToolCapabilityDiscoveryProvider
-from pp_agent.capabilities.policy import CapabilityRouteContext
-from pp_agent.capabilities.router import CapabilityRouter
-from pp_agent.capabilities.trace import build_capability_selected_event_payload
-from pp_agent.context.adapters import build_context_pack_from_messages, context_pack_to_trace_details
 from pp_agent.runtime.resolver import resolve_model_profile, resolve_runtime_profile
 from pp_agent.llm.usage import LLMUsageStats, estimate_cost_usd, normalize_usage
 from pp_agent.memory.auto_index import AutoIndexScheduler, NoopAutoIndexScheduler
@@ -89,6 +84,7 @@ from pp_agent.domain import PlanStep, QueuedMessage
 from pp_agent.runtime.state import AgentEvent, AgentState
 from pp_agent.domain import ChatMessage, TextPart, ToolCall, ToolCallPart
 from pp_agent.storage.sessions import SessionRecord, SessionStore
+from pp_agent.storage.settings import Settings
 from pp_agent.subagents.contract import explicit_orchestrated_edit_request
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.storage.approvals import PendingActionStore
@@ -106,6 +102,32 @@ TEXT_TOOL_CALL_FALLBACK_ALLOWLIST = {"list_files", "search_text", "grep_code", "
 TEXT_TOOL_CALL_FALLBACK_DENYLIST = {"spawn_subagent", "read_file", "write_file", "edit_file", "run_shell"}
 WEB_TOOL_NAMES = {"web.search", "web.news", "web.github_trending", "web.fetch"}
 WEB_LOOKUP_ATTEMPT_LIMIT = 2
+
+
+def _context_adapters():
+    """Load ContextPipeline trace helpers without making runtime a static context-layer importer."""
+
+    return importlib.import_module("pp_agent.context.adapters")
+
+
+def _context_runtime_bridge():
+    """Load the ContextPipeline runtime bridge lazily to keep import graph boundaries stable."""
+
+    return importlib.import_module("pp_agent.context.runtime_bridge")
+
+
+def _context_compare():
+    """Load ContextPipeline grey-rollout comparison helpers lazily."""
+
+    return importlib.import_module("pp_agent.context.compare")
+
+
+def _context_pipeline_mode(settings: object) -> str:
+    context_settings = getattr(settings, "context_pipeline", None)
+    mode = str(getattr(context_settings, "context_pipeline_mode", "") or "").strip().lower()
+    if mode in {"off", "shadow", "auto", "on"}:
+        return mode
+    return "on" if bool(getattr(context_settings, "use_context_pipeline_messages", False)) else "shadow"
 
 
 @dataclass(frozen=True)
@@ -203,6 +225,19 @@ class AgentRuntime:
         self.enforce_orchestrated_edit_contract = bool(enforce_orchestrated_edit_contract)
         self.require_patch_artifact_for_code_change = bool(require_patch_artifact_for_code_change)
         self.config_manager = config_manager
+        if config_snapshot is None:
+            fallback_settings = Settings.load(self.tool_registry.workspace)
+            fallback_settings.global_dir = Path(self.tool_registry.workspace) / ".pp-agent"
+            fallback_model = getattr(self.llm_client, "model", None)
+            if fallback_model is not None:
+                fallback_settings.model.provider = getattr(fallback_model, "provider", fallback_settings.model.provider)
+                fallback_settings.model.model = getattr(fallback_model, "model", fallback_settings.model.model)
+                fallback_settings.provider.name = getattr(fallback_model, "provider", fallback_settings.provider.name)
+            config_snapshot = SimpleNamespace(
+                settings=fallback_settings,
+                config_version=None,
+                reload_policy="hot",
+            )
         self.config_snapshot = config_snapshot
         self.config_version = getattr(config_snapshot, "config_version", None)
         self.pending_config_effects: list[str] = []
@@ -216,8 +251,12 @@ class AgentRuntime:
         self._run_sequence = 0
         self._current_run_id: str | None = None
         self._activity_starts: dict[str, float] = {}
-        self._capability_catalog_cache: CapabilityCatalog | None = None
+        self._capability_catalog_cache: object | None = None
         self._capability_catalog_fingerprint: tuple[str, ...] = ()
+        self._current_capability_selection = None
+        self.context_pipeline_config = _context_runtime_bridge().context_pipeline_config_from_settings(config_snapshot.settings)
+        self.use_context_pipeline_messages = self.context_pipeline_config.use_context_pipeline_messages
+        self.context_pipeline_mode = _context_pipeline_mode(config_snapshot.settings)
         self.lifecycle.subscribe(self._observe_runtime_event)
         self._attach_runtime_context_to_tool_registry()
 
@@ -1353,19 +1392,23 @@ class AgentRuntime:
         """
         try:
             catalog = self._builtin_capability_catalog()
-            context = CapabilityRouteContext(
+            capability_policy = importlib.import_module("pp_agent.capabilities.policy")
+            capability_router = importlib.import_module("pp_agent.capabilities.router")
+            capability_trace = importlib.import_module("pp_agent.capabilities.trace")
+            context = capability_policy.CapabilityRouteContext(
                 workspace_id=str(self.tool_registry.workspace),
                 session_id=self.session_id,
                 trust_level=self._capability_trust_level(),
             )
-            selection = CapabilityRouter().select(
+            selection = capability_router.CapabilityRouter().select(
                 self._latest_user_text_for_capability_routing(),
                 catalog,
                 [],
                 context,
                 max_capabilities=len(tools) or 16,
             )
-            payload = build_capability_selected_event_payload(selection, context, max_capabilities=len(tools) or 16)
+            self._current_capability_selection = selection
+            payload = capability_trace.build_capability_selected_event_payload(selection, context, max_capabilities=len(tools) or 16)
             list(self._emit(self._event(CAPABILITY_SELECTED, message="Capability selection snapshot", details=payload)))
         except Exception as exc:  # noqa: BLE001
             logger.debug("capability selection event failed: %s", exc)
@@ -1393,12 +1436,16 @@ class AgentRuntime:
         """
         return "local"
 
-    def _builtin_capability_catalog(self) -> CapabilityCatalog:
+    def _builtin_capability_catalog(self):
         """Return a cached governance snapshot for current ToolRegistry names."""
 
         fingerprint = tuple(sorted(self.tool_registry.metadata()))
         if self._capability_catalog_cache is None or fingerprint != self._capability_catalog_fingerprint:
-            self._capability_catalog_cache = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(self.tool_registry)])
+            capability_catalog = importlib.import_module("pp_agent.capabilities.catalog")
+            capability_discovery = importlib.import_module("pp_agent.capabilities.discovery")
+            self._capability_catalog_cache = capability_catalog.CapabilityCatalog(
+                [capability_discovery.BuiltinToolCapabilityDiscoveryProvider(self.tool_registry)]
+            )
             self._capability_catalog_fingerprint = fingerprint
         return self._capability_catalog_cache
 
@@ -1448,36 +1495,110 @@ class AgentRuntime:
         context_decision = self.lifecycle.emit_context_built(context_event, self.state, messages)
         # 9. 更新事件细节、发射事件用于监测
         context_event.details.update(context_decision.details)
-        final_messages = context_decision.messages or messages
-        context_event.details.update(self._context_pack_trace_details(final_messages))
+        hook_messages = context_decision.messages or messages
+        pack = None
+        diff_summary: dict[str, object] = {}
+        render_error: Exception | None = None
+        try:
+            pack = self._build_context_pack_for_messages(hook_messages)
+            diff_summary = _context_compare().compare_legacy_and_pipeline_messages(legacy_messages=hook_messages, pack=pack)
+        except Exception as exc:  # noqa: BLE001
+            render_error = exc
+            logger.warning("context pipeline build failed: %s", exc)
+        final_messages, rollout_details = self._select_context_pipeline_messages(
+            hook_messages,
+            pack=pack,
+            diff_summary=diff_summary,
+            render_error=render_error,
+        )
+        if pack is not None:
+            context_event.details.update(_context_adapters().context_pack_to_trace_details(pack))
+            context_event.details.update(_context_compare().trace_context_pack_payload(pack, diff_summary=diff_summary))
+        else:
+            context_event.details.update({"context_payload_version": 3, "context": {}, "context_error": safe_preview(str(render_error), 500)})
+        context_event.details["model_id"] = self._model_trace_id()
+        context_event.details["runtime_id"] = self._runtime_trace_id()
+        context_event.details.update(rollout_details)
         list(self._emit(context_event))
         return final_messages
+
+    def _select_context_pipeline_messages(
+        self,
+        legacy_messages: list[ChatMessage],
+        *,
+        pack,
+        diff_summary: dict[str, object],
+        render_error: Exception | None,
+    ) -> tuple[list[ChatMessage], dict[str, object]]:
+        """Choose provider messages for the configured grey-rollout mode."""
+
+        mode = self.context_pipeline_mode
+        fallback_reason = _context_compare().fallback_reason_for_auto(
+            legacy_messages=legacy_messages,
+            pack=pack,
+            diff_summary=diff_summary,
+            render_error=render_error,
+        )
+        pipeline_messages = list(getattr(pack, "final_messages", []) or []) if pack is not None else []
+        if mode == "off":
+            used = False
+            selected = legacy_messages
+            fallback_reason = "mode_off"
+        elif mode == "shadow":
+            used = False
+            selected = legacy_messages
+            fallback_reason = None
+        elif mode == "on":
+            if render_error is not None:
+                raise render_error
+            used = bool(pipeline_messages)
+            selected = pipeline_messages or legacy_messages
+            fallback_reason = None if pipeline_messages else "context_render_exception"
+        else:
+            used = fallback_reason is None and bool(pipeline_messages)
+            selected = pipeline_messages if used else legacy_messages
+        return selected, {
+            "pipeline_mode": mode,
+            "pipeline_used": used,
+            "fallback_reason": fallback_reason,
+            "legacy_message_count": len(legacy_messages),
+            "pipeline_message_count": len(pipeline_messages),
+            "rendered_message_count": len(pipeline_messages),
+            "pipeline_messages_enabled": used,
+            "diff_summary": diff_summary,
+        }
 
     def _context_pack_trace_details(self, messages: list[ChatMessage]) -> dict[str, object]:
         """Build trace-safe ContextPack details without changing provider messages."""
 
         try:
-            pack = build_context_pack_from_messages(
-                state=self.state,
-                messages=messages,
-                model_profile=self.model_profile,
-                runtime_profile=self.runtime_profile,
-                hook_metadata=dict(self.state.memory_context or {}),
-                strict_core_memory=False,
-            )
-            details = context_pack_to_trace_details(pack)
+            pack = self._build_context_pack_for_messages(messages)
+            details = _context_adapters().context_pack_to_trace_details(pack)
             details["model_id"] = self._model_trace_id()
             details["runtime_id"] = self._runtime_trace_id()
             return details
         except Exception as exc:  # noqa: BLE001
             logger.warning("context pack trace build failed: %s", exc)
             return {
-                "context_payload_version": 2,
+                "context_payload_version": 3,
                 "context": {},
                 "context_error": safe_preview(str(exc), 500),
                 "model_id": self._model_trace_id(),
                 "runtime_id": self._runtime_trace_id(),
             }
+
+    def _build_context_pack_for_messages(self, messages: list[ChatMessage]):
+        """Build the canonical ContextPack from transformed messages plus fresh bootstrap memory."""
+
+        return _context_runtime_bridge().build_runtime_context_pack(
+            state=self.state,
+            messages=messages,
+            settings=self.config_snapshot.settings,
+            session_id=self.session_id,
+            model_profile=self.model_profile,
+            runtime_profile=self.runtime_profile,
+            capability_selection=self._current_capability_selection,
+        )
 
     def _model_trace_id(self) -> str:
         """Return a stable model id for context trace metadata."""
@@ -2938,6 +3059,9 @@ class AgentRuntime:
             self.require_plan_approval = bool(settings.tool_policy.confirm_high_risk_plan)
             self.enforce_orchestrated_edit_contract = bool(settings.subagents.enforce_orchestrated_edit_contract)
             self.require_patch_artifact_for_code_change = bool(settings.subagents.require_patch_artifact_for_code_change)
+            self.context_pipeline_config = _context_runtime_bridge().context_pipeline_config_from_settings(settings)
+            self.use_context_pipeline_messages = self.context_pipeline_config.use_context_pipeline_messages
+            self.context_pipeline_mode = _context_pipeline_mode(settings)
             self._refresh_model_runtime_profiles()
         reload_policy = str(getattr(snapshot, "reload_policy", "hot"))
         changed = previous_version is not None and previous_version != self.config_version

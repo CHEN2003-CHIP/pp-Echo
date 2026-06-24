@@ -199,9 +199,9 @@ class MCPRuntime:
             return
         for server_name in self._manager_for_current_config().server_names():
             if self.settings.capabilities.mcp.includes_server(server_name) and _policy_allows_server(policy, server_name):
-                self.ensure_server_ready(server_name)
+                self.ensure_server_ready(server_name, include_inventory_counts=True)
 
-    def ensure_server_ready(self, server_name: str) -> None:
+    def ensure_server_ready(self, server_name: str, *, include_inventory_counts: bool = False) -> None:
         policy = _mcp_policy(self)
         if policy is not None and not bool(getattr(policy, "enabled", False)):
             logger.debug("MCP server denied because policy disabled", extra={"server": server_name})
@@ -217,8 +217,10 @@ class MCPRuntime:
         if not self.settings.capabilities.mcp.includes_server(server_name):
             raise ValueError(f"MCP server is filtered out: {server_name}")
         tools = manager.list_mcp_tools(server_name)
-        resources = manager.list_mcp_resources(server_name) if self.settings.capabilities.mcp.expose_resources else []
-        prompts = manager.list_mcp_prompts(server_name) if self.settings.capabilities.mcp.expose_prompts else []
+        all_resources = manager.list_mcp_resources(server_name) if include_inventory_counts else []
+        all_prompts = manager.list_mcp_prompts(server_name) if include_inventory_counts else []
+        resources = all_resources if self.settings.capabilities.mcp.expose_resources else []
+        prompts = all_prompts if self.settings.capabilities.mcp.expose_prompts else []
         for tool in tools:
             qualified_name = f"{server_name}.{tool.name}"
             if not _settings_allows_tool(self.settings, server_name, tool.name):
@@ -274,8 +276,8 @@ class MCPRuntime:
             "server": server_name,
             "description": manager.server_config(server_name).description,
             "tool_count": len(tools),
-            "resource_count": len(resources),
-            "prompt_count": len(prompts),
+            "resource_count": len(all_resources),
+            "prompt_count": len(all_prompts),
             "session_active": server_name in manager.active_session_names(),
             "tools": visible_tools,
         }

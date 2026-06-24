@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import importlib
 from pathlib import Path
 
 from pp_agent.domain import ChatMessage, TextPart
@@ -19,14 +20,16 @@ class ProjectMemoryContextHook:
     def transform_context(self, _state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
         if not self.settings.enable or not self.settings.project_memory_enable:
             return messages
-        content = self._read_bootstrap_memory().strip()
-        if not content:
+        result = _markdown_memory().read_workspace_memory(self.workspace, self.settings)
+        if result.item is None:
             return messages
+        content = result.item.content.strip()
         if len(content) > self.settings.project_memory_char_limit:
             content = content[-self.settings.project_memory_char_limit :]
         memory_message = ChatMessage(
             role="system",
             content=[TextPart(text=f"Workspace bootstrap memory learned by pp-Echo:\n{content}")],
+            metadata=_message_metadata(result.item),
             timestamp=time.time(),
         )
         if not messages:
@@ -48,21 +51,38 @@ class GlobalMemoryContextHook:
     def transform_context(self, _state: AgentState, messages: list[ChatMessage]) -> list[ChatMessage]:
         if not self.settings.enable:
             return messages
-        path = self.global_root / "MEMORY.md"
-        if not path.exists():
+        result = _markdown_memory().read_global_memory(self.global_root, self.settings)
+        if result.item is None:
             return messages
-        try:
-            content = path.read_text(encoding="utf-8-sig").strip()
-        except OSError:
-            return messages
-        if not content:
-            return messages
-        content = content[-min(self.settings.project_memory_char_limit, 2400) :]
+        content = result.item.content.strip()
         memory_message = ChatMessage(
             role="system",
             content=[TextPart(text=f"Global user memory learned by pp-Echo:\n{content}")],
+            metadata=_message_metadata(result.item),
             timestamp=time.time(),
         )
         if not messages:
             return [memory_message]
         return [messages[0], memory_message, *messages[1:]]
+
+
+def _message_metadata(item) -> dict[str, object]:
+    source = item.source_ref
+    return {
+        "context_section": "markdown_memory",
+        "context_type": "markdown_memory",
+        "context_item_id": item.id,
+        "source_type": "markdown_memory",
+        "source_id": source.source_id,
+        "path": source.path,
+        "line_start": source.line_start,
+        "line_end": source.line_end,
+        "heading": source.heading,
+        **item.metadata,
+    }
+
+
+def _markdown_memory():
+    """Load markdown memory helpers lazily so learning keeps its architecture boundary."""
+
+    return importlib.import_module("pp_agent.context.markdown_memory")

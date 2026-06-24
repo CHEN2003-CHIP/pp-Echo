@@ -36,10 +36,10 @@ class SkillContextProvider:
             items.append(
                 _context_item(
                     id=f"skill:{skill.name}:level0",
-                    type="capability",
+                    type="skill",
                     title=f"Skill {skill.name}",
                     content=content,
-                    source_ref=_source_ref(source_type="capability", source_id=f"skill:{skill.name}", path=str(skill.path)),
+                    source_ref=_source_ref(source_type="skill", source_id=f"skill:{skill.name}", path=str(skill.path)),
                     priority=55,
                     metadata={
                         "context_provider": "skill",
@@ -61,10 +61,10 @@ class SkillContextProvider:
         body = materialize_skill(skill)
         return _context_item(
             id=f"skill:{skill.name}:level1",
-            type="capability",
+            type="skill",
             title=f"Skill {skill.name} instructions",
             content=body,
-            source_ref=_source_ref(source_type="capability", source_id=f"skill:{skill.name}", path=str(skill.path)),
+            source_ref=_source_ref(source_type="skill", source_id=f"skill:{skill.name}", path=str(skill.path)),
             priority=80,
             metadata={
                 "context_provider": "skill",
@@ -83,10 +83,10 @@ class SkillContextProvider:
         content = path.read_text(encoding="utf-8-sig")
         return _context_item(
             id=f"skill:{skill.name}:level2:{path.relative_to(skill.path.parent).as_posix()}",
-            type="project_context",
+            type="skill",
             title=f"Skill {skill.name} artifact {relative_path}",
             content=content,
-            source_ref=_source_ref(source_type="project_map", source_id=f"skill:{skill.name}", path=str(path)),
+            source_ref=_source_ref(source_type="skill", source_id=f"skill:{skill.name}", path=str(path)),
             priority=75,
             metadata={
                 "context_provider": "skill",

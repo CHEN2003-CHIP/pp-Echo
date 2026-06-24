@@ -9,12 +9,17 @@ from pp_agent.context.source_ref import SourceRef
 
 ContextItemType = Literal[
     "system_instruction",
+    "markdown_memory",
+    "core_governance",
     "model_profile",
     "runtime_profile",
     "core_memory",
     "episodic_memory",
+    "file_memory_preview",
     "attachment_preview",
     "capability",
+    "mcp",
+    "skill",
     "project_context",
     "conversation",
     "runtime_note",
