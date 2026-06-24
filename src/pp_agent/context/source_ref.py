@@ -6,15 +6,25 @@ from pydantic import BaseModel, Field, field_validator
 
 
 SourceType = Literal[
+    "system",
+    "markdown_memory",
+    "core_governance",
     "core_memory",
     "episodic_memory",
+    "file_memory",
     "attachment",
+    "mcp",
+    "skill",
+    "runtime",
     "project_map",
     "module_doc",
     "adr",
     "capability",
+    "project_context",
     "conversation",
 ]
+
+SECRET_METADATA_MARKERS = ("api_key", "token", "secret", "password")
 
 
 class SourceRef(BaseModel):
@@ -49,4 +59,37 @@ class SourceRef(BaseModel):
     def summary(self) -> dict[str, object]:
         """Return a bounded source summary suitable for trace payloads."""
 
-        return self.model_dump(mode="json", exclude_none=True, exclude={"metadata"})
+        payload = self.model_dump(mode="json", exclude_none=True)
+        metadata = _trace_safe_metadata(self.metadata)
+        if metadata:
+            payload["metadata"] = metadata
+        return payload
+
+
+def _trace_safe_metadata(metadata: Dict[str, object]) -> dict[str, object]:
+    """Keep small provenance metadata while dropping secret-like keys."""
+
+    safe: dict[str, object] = {}
+    for key, value in metadata.items():
+        lowered = str(key).lower()
+        if any(marker in lowered for marker in SECRET_METADATA_MARKERS):
+            continue
+        if isinstance(value, dict):
+            nested = _trace_safe_metadata({str(k): v for k, v in value.items()})
+            if nested:
+                safe[str(key)] = nested
+        elif isinstance(value, list):
+            safe[str(key)] = [_safe_scalar(item) for item in value[:20]]
+        else:
+            safe[str(key)] = _safe_scalar(value)
+    return safe
+
+
+def _safe_scalar(value: object) -> object:
+    """Return a bounded JSON-safe scalar for trace metadata."""
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str):
+            return value[:500]
+        return value
+    return str(value)[:500]

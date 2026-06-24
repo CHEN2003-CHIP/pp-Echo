@@ -197,17 +197,17 @@ def test_context_budget_report_records_mcp_skill_drops(tmp_path: Path) -> None:
     mcp_items = mcp_adapter.tool_items("demo")
     budget_drop = ContextItemSummary(
         id="mcp:demo:tool:budgeted",
-        type="capability",
+        type="mcp",
         title="budgeted",
-        section="selected_capabilities",
+        section="mcp",
         priority=50,
         estimated_chars=0,
-        source_ref={"source_type": "capability", "source_id": "mcp:demo:tool:budgeted"},
-        reason="context_budget_exceeded",
+        source_ref={"source_type": "mcp", "source_id": "mcp:demo:tool:budgeted"},
+        reason="section_budget_exceeded",
     )
 
     pack = ContextPipeline(
-        ContextPipelineConfig(total_budget=2000, section_budgets={"selected_capabilities": 2000, "project_context": 2000})
+        ContextPipelineConfig(total_budget=2000, section_budgets={"mcp": 2000, "skills": 2000})
     ).build(
         user_message="hello",
         capability_selection=skill_items + mcp_items,
@@ -216,8 +216,8 @@ def test_context_budget_report_records_mcp_skill_drops(tmp_path: Path) -> None:
 
     reasons = {item.id: item.reason for item in pack.budget_report.dropped_items}
     assert reasons["skill:planner:level2:../secrets.txt"] == "skill_artifact_path_denied"
-    assert reasons["mcp:demo:tool:safe_search"] == "mcp_metadata_scan_high_risk"
+    assert reasons["mcp:demo:tool:safe_search"] == "mcp_metadata_high_risk"
     assert reasons["mcp:demo:tool:blocked"] == "mcp_tool_denied"
-    assert reasons["mcp:demo:tool:budgeted"] == "context_budget_exceeded"
+    assert reasons["mcp:demo:tool:budgeted"] == "section_budget_exceeded"
     scan_ref = next(item.source_ref for item in pack.budget_report.dropped_items if item.id == "mcp:demo:tool:safe_search")
     assert json.dumps(scan_ref)

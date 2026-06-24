@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
 from pp_agent.capabilities.descriptor import CapabilityDescriptor
-from pp_agent.bots.registry import BotRegistry
 from pp_agent.skills import load_skills
-from pp_agent.subagents.catalog import SubAgentCatalog
 from pp_agent.tools.registry import ToolRegistry
 
 
@@ -155,12 +154,13 @@ class BuiltinToolCapabilityDiscoveryProvider:
 class SubAgentCapabilityDiscoveryProvider:
     """Expose SubAgent catalog entries without changing delegated execution."""
 
-    catalog: Optional[SubAgentCatalog] = None
+    catalog: Optional[Any] = None
 
     def discover(self) -> list[CapabilityDescriptor]:
         """Expose configured SubAgent specs as delegated-run capabilities."""
         descriptors: list[CapabilityDescriptor] = []
-        for spec in (self.catalog or SubAgentCatalog()).list():
+        catalog_cls = importlib.import_module("pp_agent.subagents.catalog").SubAgentCatalog
+        for spec in (self.catalog or catalog_cls()).list():
             descriptors.append(
                 CapabilityDescriptor(
                     id=f"subagent.{spec.name}",
@@ -196,7 +196,8 @@ class BotConnectorCapabilityDiscoveryProvider:
     def discover(self) -> list[CapabilityDescriptor]:
         """Expose Bot Center connector configs as governance capabilities."""
         descriptors: list[CapabilityDescriptor] = []
-        for config in BotRegistry(self.workspace).list_configs(readonly=True):
+        bot_registry_cls = importlib.import_module("pp_agent.bots.registry").BotRegistry
+        for config in bot_registry_cls(self.workspace).list_configs(readonly=True):
             descriptors.append(
                 CapabilityDescriptor(
                     id=f"connector.{config.id}",

@@ -260,6 +260,15 @@ class SubAgentSettings(BaseModel):
         return max(1, int(configured))
 
 
+class ContextPipelineSettings(BaseModel):
+    """Runtime-facing controls for the auditable ContextPipeline path."""
+
+    use_context_pipeline_messages: bool = False
+    debug_include_core_governance: bool = False
+    total_budget: int = 30900
+    section_budgets: dict[str, int] = Field(default_factory=dict)
+
+
 class Settings(BaseModel):
     """
     【AI Agent 系统顶层总配置】
@@ -276,6 +285,7 @@ class Settings(BaseModel):
     capabilities: CapabilitySettings = Field(default_factory=CapabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     subagents: SubAgentSettings = Field(default_factory=SubAgentSettings)
+    context_pipeline: ContextPipelineSettings = Field(default_factory=ContextPipelineSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     learning: LearningSettings = Field(default_factory=LearningSettings)
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
@@ -383,6 +393,9 @@ class Settings(BaseModel):
             self.model.enable_thinking = bool(data["enable_thinking"])
         if "shell_timeout_seconds" in data:
             self.tool_policy.shell_timeout_seconds = int(data["shell_timeout_seconds"])
+        context_pipeline = data.get("context_pipeline", {})
+        if isinstance(context_pipeline, dict):
+            self.context_pipeline = self.context_pipeline.model_copy(update=context_pipeline, deep=True)
         tool_policy = data.get("tool_policy", {})
         if tool_policy:
             self._apply_tool_policy_config(tool_policy)

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
+import importlib
 from typing import Any
-
-from pp_agent.capabilities.catalog import CapabilityCatalog
-from pp_agent.capabilities.discovery import BuiltinToolCapabilityDiscoveryProvider
 
 
 def active_tool_surface(agent: Any) -> dict[str, Any]:
@@ -16,7 +14,9 @@ def active_tool_surface(agent: Any) -> dict[str, Any]:
     registry = getattr(agent, "tool_registry", None)
     if registry is None:
         return {"config_version": getattr(agent, "config_version", None), "tools": []}
-    catalog = CapabilityCatalog([BuiltinToolCapabilityDiscoveryProvider(registry)])
+    capability_catalog = importlib.import_module("pp_agent.capabilities.catalog")
+    capability_discovery = importlib.import_module("pp_agent.capabilities.discovery")
+    catalog = capability_catalog.CapabilityCatalog([capability_discovery.BuiltinToolCapabilityDiscoveryProvider(registry)])
     tools = []
     for descriptor in sorted(catalog.list(kind="builtin_tool"), key=lambda item: item.name):
         metadata = descriptor.metadata

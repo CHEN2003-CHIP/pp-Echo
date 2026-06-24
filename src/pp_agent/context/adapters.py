@@ -6,27 +6,20 @@ from pp_agent.context.budget import ContextItemSummary
 from pp_agent.context.item import ContextItem
 from pp_agent.context.pack import ContextPack
 from pp_agent.context.pipeline import ContextPipeline, ContextPipelineConfig
+from pp_agent.context.sections import (
+    SECTION_FIELDS,
+    SECTION_ITEM_TYPES,
+    SECTION_PRIORITIES,
+    SECTION_SOURCE_TYPES,
+    canonical_section,
+)
 from pp_agent.context.source_ref import SourceRef
 from pp_agent.domain import ChatMessage, TextPart, ToolCallPart
 
 
 CORE_MEMORY_METADATA_KEY = "core_memory_snapshot"
 RECALL_METADATA_KEY = "memory_recall"
-CONTEXT_TRACE_PAYLOAD_VERSION = 2
-
-
-SECTION_FIELDS = {
-    "system_instructions": "system_instructions",
-    "model_profile_summary": "model_profile_summary",
-    "runtime_profile_summary": "runtime_profile_summary",
-    "core_memory_snapshot": "core_memory_snapshot",
-    "episodic_memory_items": "episodic_memory_items",
-    "attachment_previews": "attachment_previews",
-    "selected_capabilities": "selected_capabilities",
-    "project_context": "project_context",
-    "recent_turns": "recent_turns",
-    "runtime_notes": "runtime_notes",
-}
+CONTEXT_TRACE_PAYLOAD_VERSION = 3
 
 
 def build_context_pack_from_messages(
@@ -42,20 +35,27 @@ def build_context_pack_from_messages(
     """Build a ContextPack from the final Runtime message list without changing provider input."""
 
     categorized = _items_from_messages(messages, state=state, hook_metadata=hook_metadata or {})
-    pipeline = ContextPipeline(config)
+    pipeline = ContextPipeline(config or ContextPipelineConfig(debug_include_core_governance=True))
     pack = pipeline.build(
         user_message=_latest_user_text(messages),
         session_state=None,
         model_profile=model_profile,
         runtime_profile=runtime_profile,
         memory_providers={
-            "core_memory_snapshot": categorized["core_memory_snapshot"],
-            "episodic_memory_items": categorized["episodic_memory_items"],
+            "core_governance": categorized["core_governance"] or categorized["core_memory_snapshot"],
+            "episodic_recall": categorized["episodic_recall"] or categorized["episodic_memory_items"],
+            "markdown_memory": categorized["markdown_memory"],
+            "file_memory_preview": categorized["file_memory_preview"],
         },
-        attachment_providers=categorized["attachment_previews"],
-        capability_selection=categorized["selected_capabilities"],
+        attachment_providers=categorized["attachments"] or categorized["attachment_previews"],
+        capability_selection=[
+            *categorized["capabilities"],
+            *categorized["selected_capabilities"],
+            *categorized["mcp"],
+            *categorized["skills"],
+        ],
         project_context_providers=categorized["project_context"],
-        system_instructions=categorized["system_instructions"],
+        system_instructions=categorized["system"] or categorized["system_instructions"],
         runtime_notes=categorized["runtime_notes"],
         strict_core_memory=strict_core_memory,
     )
@@ -66,7 +66,7 @@ def build_context_pack_from_messages(
         runtime_notes=[],
         strict_core_memory=False,
     )
-    pack.recent_turns = categorized["recent_turns"] or recent_pack.recent_turns
+    pack.recent_turns = categorized["conversation"] or categorized["recent_turns"] or recent_pack.recent_turns
     pack.source_refs = _unique_source_refs([item.source_ref for section in _pack_sections(pack) for item in section])
     return pack
 
@@ -84,11 +84,13 @@ def context_pack_to_trace_details(pack: ContextPack) -> dict[str, object]:
         for section, items in _pack_section_map(pack).items()
     }
     return {
-        "context_payload_version": CONTEXT_TRACE_PAYLOAD_VERSION,
+        "context_payload_version": 3,
         "context": {
             "budget_report": report,
             "included_sources": [item.model_dump(mode="json") for item in pack.budget_report.included_items],
             "dropped_sources": [item.model_dump(mode="json") for item in pack.budget_report.dropped_items],
+            "drop_reasons": dict(pack.budget_report.drop_reasons),
+            "source_refs": [ref.summary() for ref in pack.source_refs],
             "sections": sections,
             "pack_summary": {
                 "source_refs": [ref.summary() for ref in pack.source_refs],
@@ -100,6 +102,21 @@ def context_pack_to_trace_details(pack: ContextPack) -> dict[str, object]:
             "core_memory_budget_error": any(
                 item.reason == "core_memory_budget_exceeded_not_truncated" for item in pack.budget_report.dropped_items
             ),
+            "markdown_memory": _markdown_memory_trace(pack),
+            "core_governance": {"prompt_injection_disabled": True, "included_count": len(pack.core_governance)},
+            "capabilities": {
+                "selected": len(pack.capabilities),
+                "blocked": sum(1 for item in pack.budget_report.dropped_items if item.reason == "capability_blocked"),
+            },
+            "mcp": {
+                "included": len(pack.mcp),
+                "dropped": sum(1 for item in pack.budget_report.dropped_items if str(item.section) == "mcp"),
+            },
+            "skills": {
+                "level0_count": sum(1 for item in pack.skills if item.metadata.get("level") == 0),
+                "materialized_count": sum(1 for item in pack.skills if item.metadata.get("body_materialized")),
+            },
+            "warnings": list(pack.warnings),
             **_memory_recall_trace(pack),
         },
     }
@@ -134,13 +151,13 @@ class SkillContextAdapter:
                 self.dropped_items.append(
                     ContextItemSummary(
                         id=item_id,
-                        type="project_context",
+                        type="skill",
                         title=f"Skill {skill_name} artifact {relative_path}",
-                        section="project_context",
+                        section="skills",
                         priority=75,
                         estimated_chars=0,
                         source_ref={
-                            "source_type": "project_map",
+                            "source_type": "skill",
                             "source_id": f"skill:{skill_name}",
                             "relative_path": relative_path,
                         },
@@ -202,13 +219,14 @@ def _items_from_messages(messages: list[ChatMessage], *, state: Any, hook_metada
                 content=text,
                 source_ref=source_ref,
                 priority=priority,
-                metadata={
-                    "role": message.role,
-                    "message_index": index,
-                    "classification": "metadata" if message.metadata else "fallback",
-                    "hook_metadata_keys": sorted(hook_metadata.keys()),
-                    "preview": _safe_preview(text),
-                },
+        metadata={
+            "role": message.role,
+            "message_index": index,
+            "classification": "metadata" if message.metadata else "fallback",
+            "hook_metadata_keys": sorted(hook_metadata.keys()),
+            "preview": _safe_preview(text),
+            "message_json": _conversation_message_json(message) if section == "conversation" else None,
+        },
             )
         )
     return categorized
@@ -218,18 +236,36 @@ def _classify_message(message: ChatMessage, *, text: str, index: int) -> tuple[s
     """Map an injected or conversation message to a ContextPack section."""
 
     metadata = message.metadata or {}
+    explicit_section = canonical_section(str(metadata.get("context_section") or ""))
+    if explicit_section:
+        item_type = str(metadata.get("context_type") or SECTION_ITEM_TYPES.get(explicit_section, "project_context"))
+        source_type = str(metadata.get("source_type") or SECTION_SOURCE_TYPES.get(explicit_section, "project_context"))
+        return (
+            explicit_section,
+            item_type,
+            SourceRef(
+                source_type=source_type,  # type: ignore[arg-type]
+                source_id=str(metadata.get("source_id") or metadata.get("context_item_id") or explicit_section),
+                path=str(metadata.get("path")) if metadata.get("path") else None,
+                line_start=metadata.get("line_start") if isinstance(metadata.get("line_start"), int) else None,
+                line_end=metadata.get("line_end") if isinstance(metadata.get("line_end"), int) else None,
+                heading=str(metadata.get("heading")) if metadata.get("heading") else None,
+                metadata=_trace_safe_metadata(metadata),
+            ),
+            SECTION_PRIORITIES.get(explicit_section, 30),
+        )
     if CORE_MEMORY_METADATA_KEY in metadata:
         core = metadata.get(CORE_MEMORY_METADATA_KEY) if isinstance(metadata.get(CORE_MEMORY_METADATA_KEY), dict) else {}
         return (
-            "core_memory_snapshot",
-            "core_memory",
-            SourceRef(source_type="core_memory", source_id=str(core.get("snapshot_hash") or core.get("workspace_id") or "core_memory")),
+            "core_governance",
+            "core_governance",
+            SourceRef(source_type="core_governance", source_id=str(core.get("snapshot_hash") or core.get("workspace_id") or "core_memory")),
             95,
         )
     if RECALL_METADATA_KEY in metadata:
         recall = metadata.get(RECALL_METADATA_KEY) if isinstance(metadata.get(RECALL_METADATA_KEY), dict) else {}
         return (
-            "episodic_memory_items",
+            "episodic_recall",
             "episodic_memory",
             SourceRef(source_type="episodic_memory", source_id=str(recall.get("retrieval_version") or "memory_recall"), metadata=_trace_safe_metadata(recall)),
             70,
@@ -237,15 +273,15 @@ def _classify_message(message: ChatMessage, *, text: str, index: int) -> tuple[s
     if text.startswith("Runtime notes:"):
         return ("runtime_notes", "runtime_note", SourceRef(source_type="conversation", source_id="runtime_notes"), 85)
     if text.startswith("Current session attachments:"):
-        return ("attachment_previews", "attachment_preview", SourceRef(source_type="attachment", source_id="session_attachments"), 75)
+        return ("attachments", "attachment_preview", SourceRef(source_type="attachment", source_id="session_attachments"), 75)
     if text.startswith("Active skills loaded for this turn:"):
-        return ("selected_capabilities", "capability", SourceRef(source_type="capability", source_id="skill_runtime"), 65)
+        return ("skills", "skill", SourceRef(source_type="skill", source_id="skill_runtime"), 65)
     if message.role == "system" and index == 0:
-        return ("system_instructions", "system_instruction", SourceRef(source_type="conversation", source_id="system_prompt"), 100)
+        return ("system", "system_instruction", SourceRef(source_type="system", source_id="system_prompt"), 100)
     if message.role == "system":
         source_type = "project_map" if "project" in text.lower() else "conversation"
         return ("project_context", "project_context", SourceRef(source_type=source_type, source_id=f"system_context:{index}"), 45)
-    return ("recent_turns", "conversation", SourceRef(source_type="conversation", source_id=f"message:{index}"), 20)
+    return ("conversation", "conversation", SourceRef(source_type="conversation", source_id=f"message:{index}"), 20)
 
 
 def _message_text(message: ChatMessage) -> str:
@@ -301,6 +337,14 @@ def _trace_safe_metadata(metadata: object) -> dict[str, object]:
     return safe
 
 
+def _conversation_message_json(message: ChatMessage) -> dict[str, object] | None:
+    """Keep original conversation role/content for rendering, while tool text stays preview-bounded elsewhere."""
+
+    if message.role not in {"user", "assistant"}:
+        return None
+    return message.model_dump(mode="json")
+
+
 def _pack_section_map(pack: ContextPack) -> dict[str, list[ContextItem]]:
     """Return all ContextPack item sections by public section name."""
 
@@ -316,12 +360,20 @@ def _pack_sections(pack: ContextPack) -> Iterable[list[ContextItem]]:
 def _memory_recall_trace(pack: ContextPack) -> dict[str, object]:
     """Expose episodic memory recall only through the canonical context payload."""
 
-    for item in pack.episodic_memory_items:
+    for item in pack.episodic_recall:
         metadata = item.source_ref.metadata or {}
         if metadata:
             return {"memory_recall": metadata}
     return {}
 
+
+def _markdown_memory_trace(pack: ContextPack) -> dict[str, object]:
+    items = pack.markdown_memory
+    return {
+        "paths": [item.source_ref.path for item in items if item.source_ref.path],
+        "content_hash": [item.source_ref.metadata.get("content_hash") for item in items if item.source_ref.metadata.get("content_hash")],
+        "truncated": any(bool(item.source_ref.metadata.get("truncated")) for item in items),
+    }
 
 def _unique_source_refs(refs: Iterable[SourceRef]) -> List[SourceRef]:
     """Deduplicate source refs while preserving order."""

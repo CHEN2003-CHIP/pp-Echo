@@ -60,13 +60,13 @@ class MCPContextProvider:
 
         target_id = f"mcp:{server.name}:tool:{descriptor.name}"
         if self._tool_denied(server, descriptor.name):
-            self._record_drop(target_id, "capability", descriptor.name, "mcp_tool_denied", descriptor.risk_level)
+            self._record_drop(target_id, "mcp", descriptor.name, "mcp_tool_denied", descriptor.risk_level)
             return None
         risk_level = server.tool_risk_overrides.get(descriptor.name, descriptor.risk_level)
         approval_mode = server.tool_approval_overrides.get(descriptor.name, descriptor.approval_mode)
         scan = self._scan_descriptor(target_id, "mcp_tool", descriptor.description, descriptor.metadata, descriptor.input_schema)
         if not scan.safe_for_context:
-            self._record_drop(target_id, "capability", descriptor.name, "mcp_metadata_scan_high_risk", risk_level, scan)
+            self._record_drop(target_id, "mcp", descriptor.name, "mcp_metadata_high_risk", risk_level, scan)
             return None
         content = self._card_content(
             server_name=server.name,
@@ -87,8 +87,8 @@ class MCPContextProvider:
         target_id = f"mcp:{server.name}:resource:{descriptor.uri}"
         scan = self._scan_descriptor(target_id, "mcp_resource", descriptor.description, descriptor.metadata, {"mime_type": descriptor.mime_type})
         if not scan.safe_for_context:
-            self._record_drop(target_id, "capability", descriptor.name or descriptor.uri, "mcp_metadata_scan_high_risk", descriptor.risk_level, scan)
-            raise MCPContextDrop("mcp_metadata_scan_high_risk")
+            self._record_drop(target_id, "mcp", descriptor.name or descriptor.uri, "mcp_metadata_high_risk", descriptor.risk_level, scan)
+            raise MCPContextDrop("mcp_metadata_high_risk")
         content = self._card_content(
             server_name=server.name,
             kind="resource",
@@ -108,8 +108,8 @@ class MCPContextProvider:
         target_id = f"mcp:{server.name}:prompt:{descriptor.name}"
         scan = self._scan_descriptor(target_id, "mcp_prompt", descriptor.description, descriptor.metadata, descriptor.arguments_schema)
         if not scan.safe_for_context:
-            self._record_drop(target_id, "capability", descriptor.name, "mcp_metadata_scan_high_risk", descriptor.risk_level, scan)
-            raise MCPContextDrop("mcp_metadata_scan_high_risk")
+            self._record_drop(target_id, "mcp", descriptor.name, "mcp_metadata_high_risk", descriptor.risk_level, scan)
+            raise MCPContextDrop("mcp_metadata_high_risk")
         content = self._card_content(
             server_name=server.name,
             kind="prompt",
@@ -145,10 +145,10 @@ class MCPContextProvider:
 
         return _context_item(
             id=item_id,
-            type="capability",
+            type="mcp",
             title=title,
             content=content,
-            source_ref=_source_ref(source_type="capability", source_id=item_id),
+            source_ref=_source_ref(source_type="mcp", source_id=item_id),
             priority=50,
             metadata={
                 "context_provider": "mcp",
@@ -170,7 +170,7 @@ class MCPContextProvider:
     ) -> None:
         """Record a dropped MCP card in BudgetReport-compatible form."""
 
-        source_ref: dict[str, object] = {"source_type": "capability", "source_id": item_id, "risk_level": risk_level}
+        source_ref: dict[str, object] = {"source_type": "mcp", "source_id": item_id, "risk_level": risk_level}
         if scan is not None:
             source_ref["scan"] = {
                 "risk": scan.risk,
@@ -183,7 +183,7 @@ class MCPContextProvider:
                 id=item_id,
                 type=item_type,
                 title=title,
-                section="selected_capabilities",
+                section="mcp",
                 priority=50,
                 estimated_chars=0,
                 source_ref=source_ref,

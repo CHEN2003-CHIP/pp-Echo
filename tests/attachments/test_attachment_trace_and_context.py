@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pp_agent.attachments.context import AttachmentContextHook
+from pp_agent.attachments.context import AttachmentContextHook, AttachmentContextProvider
 from pp_agent.attachments.service import AttachmentService
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.observability import TraceRecorder, TraceStore
@@ -78,6 +78,19 @@ def test_attachment_context_injects_summary_not_full_content(tmp_path: Path) -> 
     assert "preview below is not full content" in system_text
     assert "context.txt" in system_text
     assert long_tail not in system_text
+
+
+def test_attachment_context_provider_uses_record_metadata(tmp_path: Path) -> None:
+    record = AttachmentService(tmp_path).upload_bytes("s1", "provider.txt", b"provider preview")
+
+    item = AttachmentContextProvider(tmp_path, "s1").list_items()[0]
+
+    assert item.id == f"attachment:{record.attachment_id}"
+    assert item.metadata["context_section"] == "attachments"
+    assert item.metadata["filename"] == "provider.txt"
+    assert item.source_ref.source_type == "attachment"
+    assert item.source_ref.source_id == record.attachment_id
+    assert not item.content.startswith("Current session attachments:")
 
 
 def test_runtime_attachment_trace_event_output_removes_full_text() -> None:

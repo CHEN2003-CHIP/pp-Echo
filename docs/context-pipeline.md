@@ -1,102 +1,107 @@
 # ContextPipeline
 
-## Why pp-Echo Needs This Layer
+## Position
 
-pp-Echo has separate ownership for model profiles, runtime orchestration, memory, attachments, capabilities, tools, MCP, skills, traces, and evals. Before ContextPipeline, model-facing context could be assembled by several nearby systems with limited shared accounting. ContextPipeline creates one auditable place to explain what entered the model call, where it came from, what budget it used, and what was dropped.
+ContextPipeline is pp-Echo's context engine. Retrieval tools find information; ContextPipeline decides what the model sees, how it is ordered, why it fits budget, and what was dropped.
 
-This layer is intentionally additive. It does not replace AgentRuntime, Memory, AttachmentService, ToolRegistry, or CapabilityPolicy. Runtime now builds a trace-safe `ContextPack` and `ContextBudgetReport` after existing context hooks have produced the final provider messages, without changing the messages sent to the model.
+The current runtime keeps the new rendered-message path behind `use_context_pipeline_messages=false` by default. Even with the flag off, runtime builds the canonical `ContextPack` for trace and audit. Tests can enable the flag to verify the new provider -> item -> pack -> final messages path without a broad AgentRuntime rewrite.
 
-## ContextPack Structure
+## Separation
 
-`ContextPack` is the serializable output of the pipeline. It groups included `ContextItem` objects into model-facing sections:
+OpenClaw-style memory separation is the boundary:
 
-- `system_instructions`
-- `model_profile_summary`
-- `runtime_profile_summary`
-- `core_memory_snapshot`
-- `episodic_memory_items`
-- `attachment_previews`
-- `selected_capabilities`
+- `memory_search` and `memory_get` are retrieval tools.
+- `global/MEMORY.md` and workspace `MEMORY.md` are bootstrap markdown memory sources.
+- `memory/**/*.md` is durable file memory, but it is not fully injected into prompts. It is read through retrieval tools or explicit compact previews.
+- Core Memory is governance, preview, approval, audit, and trace metadata. SQLite active core memories are not prompt facts by default.
+
+Hermes-style progressive disclosure is the capability boundary:
+
+- Skills enter context as level 0 metadata cards by default.
+- Full `SKILL.md` bodies are materialized only after explicit selection.
+- Skill artifacts under `references/`, `templates/`, or `scripts/` are read only after explicit request and path validation.
+- MCP tools/resources/prompts enter context as compact cards after permission overlay and metadata scan.
+- Denied, blocked, or high-risk capability cards are dropped and reported; they are not exposed to the model.
+
+## Sections
+
+Canonical sections are:
+
+- `system`
+- `markdown_memory`
+- `core_governance`
 - `project_context`
-- `recent_turns`
+- `episodic_recall`
+- `file_memory_preview`
+- `attachments`
+- `capabilities`
+- `mcp`
+- `skills`
+- `conversation`
 - `runtime_notes`
-- `source_refs`
-- `budget_report`
 
-The pack stores items rather than one flattened prompt string. This keeps source references, priorities, and budget accounting inspectable until the final model adapter chooses how to render messages.
+Legacy names are accepted as aliases: `system_instructions`, `core_memory_snapshot`, `episodic_memory_items`, `attachment_previews`, `selected_capabilities`, and `recent_turns`.
 
-## ContextItem
+## Markdown Memory
 
-`ContextItem` is the smallest independently budgeted unit. It contains:
+`pp_agent.context.markdown_memory` reads only:
 
-- `id`
-- `type`
-- `title`
-- `content`
-- `source_ref`
-- `priority`
-- `estimated_tokens`
-- `estimated_chars`
-- `metadata`
+- `global/MEMORY.md`
+- workspace `MEMORY.md`
 
-The current budget strategy uses `estimated_chars` and falls back to `len(content)`. Later tokenizer-aware accounting can fill `estimated_tokens` without changing the pack shape.
+Each read produces a `ContextItem` with `section=markdown_memory`, `type=markdown_memory`, the exact injected Markdown content, and a `SourceRef` containing path, line range, heading, `content_hash`, `truncated`, `char_limit`, and marker ids when present.
 
-## SourceRef Structure
+The files are read on every context build, so approved memory written to Markdown is visible on the next turn. If content exceeds the character limit, the provider truncates from the tail by a deterministic rule, marks `metadata.truncated=true`, and emits a warning/drop accounting rather than silently hiding the decision.
 
-`SourceRef` records trace-safe provenance:
+## Budget And Drops
 
-- `source_type`: `core_memory`, `episodic_memory`, `attachment`, `project_map`, `module_doc`, `adr`, `capability`, or `conversation`
-- `source_id`
-- `path`
-- `line_start`
-- `line_end`
-- `page`
-- `heading`
-- `confidence`
-- `metadata`
+Default section budgets protect system/context essentials while keeping large surfaces bounded:
 
-Trace summaries omit `metadata` by default so source references can remain useful without becoming a secret or prompt dump channel.
+- `system`: 4000
+- `markdown_memory`: 4000
+- `core_governance`: 800, debug only
+- `project_context`: 3000
+- `episodic_recall`: 3000
+- `file_memory_preview`: 1200
+- `attachments`: 3000
+- `capabilities`: 2500
+- `mcp`: 1500
+- `skills`: 1500
+- `conversation`: bounded by caller/runtime policy
+- `runtime_notes`: 1000
 
-## BudgetReport Structure
+Every dropped item must have a reason. Current reasons include section and total budget pressure, duplicate context, disabled policy, capability/MCP/skill denial, attachment preview size, markdown truncation, core prompt injection disabled, and legacy adapter classification failures.
 
-`ContextBudgetReport` explains the budgeting result:
+## Trace
 
-- `total_budget`
-- `used`
-- `per_section`
-- `included_items`
-- `dropped_items`
-- `drop_reasons`
+Runtime emits `context_payload_version=3` in `context_built`. The nested `context` payload includes:
 
-Each section has its own budget. When a droppable section exceeds budget, the pipeline drops whole `ContextItem` objects by priority and records every dropped item with `section_budget_exceeded`. Core memory is different: it is non-droppable in this first implementation, so an oversized core memory item raises `ContextBudgetExceeded` and records `core_memory_budget_exceeded_not_truncated`. That prevents silent truncation of durable memory.
+- total and per-section budget usage
+- included and dropped item summaries
+- drop reasons
+- source refs
+- markdown memory paths, hashes, and truncation status
+- core governance prompt-injection status
+- capability, MCP, and skill counts
+- warnings
 
-## Relationship To Existing Systems
+This lets TraceInspect answer four questions for a turn:
 
-`ModelProfile` and runtime profile inputs become bounded summary items. Provider secrets and token-like keys are excluded from simple mapping summaries.
+- What did the model see?
+- Why did it see those items?
+- What was dropped?
+- Why was each item dropped?
 
-Memory remains owned by `src/pp_agent/memory/`. ContextPipeline consumes memory provider output as `ContextItem` objects and does not retrieve, write, compact, or classify memory by itself.
+## Runtime Path
 
-Attachments remain owned by `src/pp_agent/attachments/`. The pipeline expects attachment previews or manifests, matching the existing "manifest and preview, read on demand" strategy.
+The orchestrated path is:
 
-Capability governance remains owned by `src/pp_agent/capabilities/`. ContextPipeline can include selected capability summaries, but it does not enable, approve, route, or execute capabilities.
+1. Providers produce `ContextItem`.
+2. `ContextPipeline.collect_items()` normalizes sections and aliases.
+3. `ContextPipeline.build_pack()` applies policy, dedupe, and budget.
+4. `ContextPack` stores included items, dropped items, source refs, warnings, and budget report.
+5. `ContextPipeline.render_messages()` produces final `ChatMessage` objects.
+6. AgentRuntime uses rendered messages only when `use_context_pipeline_messages=true`.
+7. Runtime emits the v3 `context_built` trace either way.
 
-AgentRuntime remains the execution owner. This layer can be wired in later as a pre-call builder or as a side-channel debug report without changing model invocation semantics.
-
-## Trace Event
-
-`build_context_built_event()` and Runtime use the v2 trace payload shape:
-
-- `name`: `context_built`
-- `attributes`: `model_id`, `runtime_id`, included count, dropped count
-- `payload.context_payload_version`: `2`
-- `payload.context`: `budget_report`, `included_sources`, `dropped_sources`, `sections`, `pack_summary`, and optional `memory_recall`
-
-Runtime emits these fields through the existing `context_built` lifecycle event and `context.build` trace span. TraceInspect reads the same trace detail API and displays the budget report without adding a separate debug page.
-
-Legacy flat fields such as `context_budget_report`, `context_included_sources`, `context_dropped_sources`, `context_sections`, and top-level `memory_recall` are no longer emitted by Runtime. Consumers should read `context_payload_version == 2` and then use the nested `context` object.
-
-## Future Integrations
-
-MCP Governance can contribute capability and project-context `ContextItem` providers after policy selection, while preserving MCPManager as the session and execution owner.
-
-Skill progressive disclosure can contribute only `SKILL.md` summaries at first, then add specific referenced files as separate `ContextItem` objects when a task needs them. The budget report will make those disclosure decisions visible in traces and evals.
+`build_context_pack_from_messages()` remains as a legacy observer/fallback for already-rendered runtime messages.

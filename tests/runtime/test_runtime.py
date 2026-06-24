@@ -98,6 +98,17 @@ class RecordingLLMClient:
         self.seen_user_messages.append(latest_user)
         yield {"text": f"ack:{latest_user}", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
+
+class RecordingContextLLMClient:
+    def __init__(self) -> None:
+        self.model = ModelConfig()
+        self.seen_messages: list[list[ChatMessage]] = []
+
+    def stream_chat(self, messages, tools=None) -> Iterator[dict]:
+        self.seen_messages.append(list(messages))
+        yield {"text": "ok", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
 class ToolThenRecordLLMClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -385,7 +396,7 @@ def test_context_built_event_includes_budget_report(tmp_path: Path) -> None:
 
     assert context_events
     details = context_events[-1].details
-    assert details["context_payload_version"] == 2
+    assert details["context_payload_version"] == 3
     assert "context" in details
     assert "budget_report" in details["context"]
     assert "included_sources" in details["context"]
@@ -395,9 +406,40 @@ def test_context_built_event_includes_budget_report(tmp_path: Path) -> None:
     assert "memory_recall" not in details
     assert details["model_id"]
     assert details["runtime_id"]
+    assert details["pipeline_messages_enabled"] is False
+    assert details["rendered_message_count"] > 0
 
 
-def test_context_v2_payload_is_written_to_trace(tmp_path: Path) -> None:
+def test_context_pipeline_messages_disabled_keeps_hook_messages_for_provider(tmp_path: Path) -> None:
+    (tmp_path / "MEMORY.md").write_text("# Project Memory\n\nPipeline-only fact.\n", encoding="utf-8")
+    llm = RecordingContextLLMClient()
+    agent = build_agent(tmp_path, llm, require_plan_approval=False)
+
+    events = agent.prompt("hello")
+    system_text = "\n".join(part.text for message in llm.seen_messages[-1] if message.role == "system" for part in message.content)
+
+    assert "Pipeline-only fact." not in system_text
+    assert [event for event in events if event.type == "context_built"][-1].details["pipeline_messages_enabled"] is False
+
+
+def test_context_pipeline_messages_enabled_uses_rendered_messages_for_provider(tmp_path: Path) -> None:
+    (tmp_path / "MEMORY.md").write_text("# Project Memory\n\nPipeline-rendered fact.\n", encoding="utf-8")
+    llm = RecordingContextLLMClient()
+    agent = build_agent(tmp_path, llm, require_plan_approval=False)
+    agent.config_snapshot.settings.context_pipeline.use_context_pipeline_messages = True
+    agent.context_pipeline_config.use_context_pipeline_messages = True
+    agent.use_context_pipeline_messages = True
+
+    events = agent.prompt("hello")
+    system_text = "\n".join(part.text for message in llm.seen_messages[-1] if message.role == "system" for part in message.content)
+    user_roles = [message.role for message in llm.seen_messages[-1] if message.role == "user"]
+
+    assert "Pipeline-rendered fact." in system_text
+    assert user_roles
+    assert [event for event in events if event.type == "context_built"][-1].details["pipeline_messages_enabled"] is True
+
+
+def test_context_v3_payload_is_written_to_trace(tmp_path: Path) -> None:
     from pp_agent.observability.recorder import TraceRecorder
     from pp_agent.observability.store import TraceStore
 
@@ -425,9 +467,9 @@ def test_context_v2_payload_is_written_to_trace(tmp_path: Path) -> None:
 
     assert context_events
     assert context_spans
-    assert context_events[-1].payload["details"]["context_payload_version"] == 2
+    assert context_events[-1].payload["details"]["context_payload_version"] == 3
     assert "budget_report" in context_events[-1].payload["details"]["context"]
-    assert context_spans[-1].output["context_payload_version"] == 2
+    assert context_spans[-1].output["context_payload_version"] == 3
     assert "budget_report" in context_spans[-1].output["context"]
 
 
