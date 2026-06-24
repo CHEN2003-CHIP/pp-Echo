@@ -6,7 +6,9 @@ import {
   BookOpen,
   Boxes,
   Check,
+  ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
   Clock3,
   Code2,
   Database,
@@ -22,6 +24,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -163,6 +166,16 @@ const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "监控", views: ["logs", "attachments", "bots", "traceInspect", "usage", "skills", "users"] }
 ];
 
+const sidebarNavSections: Array<{ title: string; views: ViewKey[] }> = [
+  { title: "Conversations", views: ["chat", "history", "group", "search"] },
+  { title: "Runtime", views: ["workspace", "tasks", "board", "channels"] },
+  { title: "Extensions", views: ["plugins", "memory", "model", "skills"] },
+  { title: "Observability", views: ["logs", "attachments", "traceInspect"] },
+  { title: "Bots", views: ["bots"] },
+  { title: "Usage", views: ["usage"] },
+  { title: "Settings", views: ["users"] }
+];
+
 const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
 
 const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activity }> = [
@@ -171,9 +184,25 @@ const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activ
   { id: "approvals", label: "审批", icon: ShieldCheck }
 ];
 
+function BrandLogo() {
+  return (
+    <div className="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 40 48" role="img">
+        <path d="m25.09 5.05-3.93-1.05-3.31 12.37-2.99-11.17-3.93 1.05 3.23 12.07-8.05-8.05-2.88 2.88 8.83 8.83-11-2.95-1.05 3.93 12.02 3.22a8.3 8.3 0 0 1-.21-1.85 8.14 8.14 0 1 1 16.08-.16l10.92 2.93 1.05-3.93-12.07-3.23 11-2.95-1.05-3.93-12.07 3.23 8.05-8.05-2.88-2.88-8.71 8.71z" />
+        <path d="m27.87 26.22c-.34 1.43-1.05 2.71-2.03 3.73l7.91 7.91 2.88-2.88z" />
+        <path d="m25.77 30.04c-.99 1.01-2.24 1.76-3.64 2.15l2.88 10.75 3.93-1.05z" />
+        <path d="m21.98 32.23a8.3 8.3 0 0 1-4.21-.04l-2.88 10.76 3.93 1.05z" />
+        <path d="m17.64 32.15a8.15 8.15 0 0 1-3.58-2.18l-7.93 7.93 2.88 2.88z" />
+        <path d="m14 29.9a8.1 8.1 0 0 1-1.98-3.69l-10.96 2.94 1.05 3.93z" />
+      </svg>
+    </div>
+  );
+}
+
 export function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => readTheme());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [openNavGroup, setOpenNavGroup] = useState("0");
   const [workspace, setWorkspace] = useState<WorkspacesState>({ active: { name: "pp-Echo", path: "", exists: true, is_dir: true }, recent: [] });
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null);
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
@@ -221,6 +250,11 @@ export function App() {
   useEffect(() => {
     if (!activeView) return;
     window.localStorage.setItem(STORAGE_ACTIVE_VIEW_KEY, activeView);
+  }, [activeView]);
+
+  useEffect(() => {
+    const groupIndex = sidebarNavSections.findIndex((group) => group.views.includes(activeView));
+    if (groupIndex >= 0) setOpenNavGroup(String(groupIndex));
   }, [activeView]);
 
   useEffect(() => {
@@ -733,9 +767,7 @@ export function App() {
       <aside className="app-nav">
         <div className="app-brand">
           <button className="brand-button" onClick={() => openView("startupGuide")} title="启动指引">
-            <div className="brand-mark">
-              <Sparkles size={17} />
-            </div>
+            <BrandLogo />
             <div className="brand-copy">
               <strong>pp-Echo</strong>
               <span>{workspace.active.path || "本地工作区"}</span>
@@ -754,10 +786,31 @@ export function App() {
         </div>
 
         <nav className="nav-groups">
-          {shellNavGroups.map((group) => (
-            <section className="nav-group" key={group.title}>
-              <div className="nav-group-label">{group.title}</div>
-              <div className="nav-group-items">
+          {sidebarNavSections.map((group, index) => {
+            const groupKey = String(index);
+            const isOpen = openNavGroup === groupKey;
+            const firstItem = navItems.find((entry) => entry.view === group.views[0])!;
+            const GroupIcon = firstItem.icon;
+            const groupActive = group.views.includes(activeView);
+            const isSingleItem = group.views.length === 1;
+            return (
+            <section className={groupActive ? "nav-group active" : "nav-group"} key={group.title}>
+              <button
+                className={isOpen || groupActive ? "nav-parent open" : "nav-parent"}
+                type="button"
+                onClick={() => {
+                  if (isSingleItem) {
+                    openView(group.views[0]);
+                    return;
+                  }
+                  setOpenNavGroup(isOpen ? "" : groupKey);
+                }}
+              >
+                <GroupIcon size={16} />
+                <span>{group.title}</span>
+                {isSingleItem ? <ChevronRight size={14} /> : isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+              {isOpen && !isSingleItem && !sidebarCollapsed ? <div className="nav-group-items">
                 {group.views.map((view) => {
                   const item = navItems.find((entry) => entry.view === view)!;
                   const Icon = item.icon;
@@ -774,12 +827,23 @@ export function App() {
                     </button>
                   );
                 })}
-              </div>
+              </div> : null}
             </section>
-          ))}
+            );
+          })}
         </nav>
 
         <div className="app-nav-footer">
+          <button className="team-switcher-card" onClick={() => openView("workspace")} type="button">
+            <div className="team-icon">
+              <FolderOpen size={15} />
+            </div>
+            <div className="team-copy">
+              <strong>{workspaceStatus?.name || workspace.active.name || "pp-Echo"}</strong>
+              <span>{workspaceStatus?.git_branch || "workspace"}</span>
+            </div>
+            <ChevronsUpDown size={14} />
+          </button>
           <button className="footer-line" onClick={refreshAll}>
             <RefreshCw size={15} />
             <span>刷新</span>
@@ -842,6 +906,7 @@ export function App() {
       </section>
 
       <main className="content-canvas">
+        {activeView === "chat" || activeView === "history" || activeView === "board" ? null : (
         <header className="canvas-header">
           <div className="canvas-header-copy">
             <div className="canvas-crumbs">
@@ -867,6 +932,7 @@ export function App() {
             </button>
           </div>
         </header>
+        )}
 
         <div className={`canvas-body canvas-body-${activeView}`}>
           {activeView === "startupGuide" ? (
@@ -1665,6 +1731,7 @@ function ChatWorkspace({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const nearBottomRef = useRef(true);
   const turnMarkers = useMemo(() => buildTurnMarkers(transcript), [transcript]);
   const transcriptTailKey = useMemo(() => {
@@ -1696,6 +1763,13 @@ function ChatWorkspace({
       target.scrollTo({ top: target.scrollHeight, behavior: "smooth" });
     });
   }, [transcriptRef, transcriptTailKey]);
+
+  useEffect(() => {
+    const target = textareaRef.current;
+    if (!target) return;
+    target.style.height = "auto";
+    target.style.height = `${target.scrollHeight}px`;
+  }, [prompt]);
 
   useEffect(() => {
     const target = transcriptRef.current;
@@ -1804,7 +1878,8 @@ function ChatWorkspace({
           </section>
         ) : null}
 
-        <footer className="composer">
+        <footer className="composer-shell">
+          <div className="composer-input-card">
           <input
             ref={fileInputRef}
             type="file"
@@ -1822,20 +1897,27 @@ function ChatWorkspace({
             title="Upload attachment"
             type="button"
           >
-            <Paperclip size={16} />
+            <Plus size={15} />
           </button>
           <button
-            className="composer-icon-button"
+            className="composer-pill-button"
             disabled={!activeSessionId}
             onClick={openAttachments}
             title="Open attachments"
             type="button"
           >
-            <FileText size={16} />
+            <FileText size={14} />
+            <span>Files</span>
           </button>
           <textarea
+            ref={textareaRef}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
+            onInput={(event) => {
+              const target = event.currentTarget;
+              target.style.height = "auto";
+              target.style.height = `${target.scrollHeight}px`;
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -1844,10 +1926,12 @@ function ChatWorkspace({
             }}
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
             disabled={!activeSessionId || busy || Boolean(activeApproval)}
+            rows={1}
           />
-          <button disabled={!activeSessionId || !prompt.trim() || Boolean(activeApproval) || busy || promptSubmitting} onClick={sendPrompt}>
-            <Plus size={16} />
+          <button className="composer-send-button" disabled={!activeSessionId || !prompt.trim() || Boolean(activeApproval) || busy || promptSubmitting} onClick={sendPrompt} title="Send message" type="button">
+            <Send size={14} />
           </button>
+          </div>
         </footer>
         <AttachmentStrip attachments={attachments} uploading={attachmentUploading} onDelete={deleteAttachment} />
         <div className="composer-statusbar">
@@ -1935,6 +2019,7 @@ function ComposerGitBranchButton({
         <GitBranch size={14} />
         <span>{label}</span>
         {dirty ? <em>{dirty}</em> : null}
+        <ChevronDown size={13} />
       </button>
       {open ? (
         <div className="composer-popover branch-popover">
@@ -2040,6 +2125,7 @@ function ComposerModelButton({
       <button className="composer-status-button" onClick={() => setOpen((current) => !current)} type="button">
         <Monitor size={14} />
         <span>{activeModel || "model pending"}</span>
+        <ChevronDown size={13} />
       </button>
       {open ? (
         <div className="composer-popover model-popover">
@@ -2985,15 +3071,19 @@ function CapabilityWorkbench({
               onClick={() => { setSelectedName(String(item.name || "")); setDrawerMode("edit"); }}
               type="button"
             >
-              <div className="capability-card-top">
-                <span>{tab.toUpperCase()}</span>
-                <em>{capabilityStatus(item, tab)}</em>
-              </div>
-              <strong>{String(item.name || "unnamed")}</strong>
-              <p>{String(item.description || item.path || item.entrypoint || item.command || "No description yet.")}</p>
-              <div className="capability-card-meta">
-                {capabilityMeta(item, tab).map((meta) => <span key={meta}>{meta}</span>)}
-              </div>
+              <span className={`capability-card-initials capability-card-initials-${tab}`}>{capabilityInitials(item, tab)}</span>
+              <span className="capability-card-body">
+                <span className="capability-card-top">
+                  <span>{tab.toUpperCase()}</span>
+                  <em>{capabilityStatus(item, tab)}</em>
+                </span>
+                <strong>{String(item.name || "unnamed")}</strong>
+                <p>{String(item.description || item.path || item.entrypoint || item.command || "No description yet.")}</p>
+                <span className="capability-card-meta">
+                  {capabilityMeta(item, tab).map((meta) => <span key={meta}>{meta}</span>)}
+                </span>
+              </span>
+              <span className="capability-card-menu" aria-hidden="true">⋮</span>
             </button>
           ))}
           {items.length === 0 ? <div className="capability-empty">No {tab} resources configured yet.</div> : null}
@@ -3107,6 +3197,15 @@ function capabilityStatus(item: Record<string, unknown>, tab: CapabilityTab) {
   if (tab === "mcp") return String(item.resolved_transport || item.transport || "server");
   if (tab === "skills") return String(item.source || "skill");
   return String(item.entrypoint ? "configured" : "plugin");
+}
+
+function capabilityInitials(item: Record<string, unknown>, tab: CapabilityTab) {
+  const fallback = tab === "mcp" ? "MC" : tab === "skills" ? "SK" : "PL";
+  const name = String(item.name || "").trim();
+  if (!name) return fallback;
+  const parts = name.split(/[\s._/-]+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return name.slice(0, 2).toUpperCase();
 }
 
 function capabilityMeta(item: Record<string, unknown>, tab: CapabilityTab) {
