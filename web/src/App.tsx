@@ -1116,6 +1116,7 @@ export function App() {
             setPendingWorkspace(null);
           }}
           onOpen={() => openWorkspace(workspaceDraft)}
+          onOpenPath={(path) => openWorkspace(path)}
           onConfirm={() => pendingWorkspace?.candidate?.path ? openWorkspace(pendingWorkspace.candidate.path, true) : undefined}
         />
       ) : null}
@@ -3452,6 +3453,7 @@ function WorkspaceDialog({
   onChange,
   onClose,
   onOpen,
+  onOpenPath,
   onConfirm
 }: {
   currentPath: string;
@@ -3460,12 +3462,33 @@ function WorkspaceDialog({
   onChange: (value: string) => void;
   onClose: () => void;
   onOpen: () => void;
+  onOpenPath: (path: string) => void | Promise<void>;
   onConfirm: () => void | Promise<void> | undefined;
 }) {
   const canPickDirectory = typeof (window as DirectoryPickerWindow).showDirectoryPicker === "function";
   const [pickerHint, setPickerHint] = useState("");
+  const [pickingDirectory, setPickingDirectory] = useState(false);
 
   async function pickDirectory() {
+    setPickingDirectory(true);
+    try {
+      const response = await api.pickWorkspaceDirectory();
+      if (response.path) {
+        setPickerHint("");
+        onChange(response.path);
+        await onOpenPath(response.path);
+        return;
+      }
+      if (response.cancelled) {
+        setPickerHint("Folder selection was cancelled.");
+        return;
+      }
+    } catch (error) {
+      setPickerHint(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPickingDirectory(false);
+    }
+
     const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
     if (!picker) return;
     const handle = await picker();
@@ -3473,6 +3496,7 @@ function WorkspaceDialog({
     if (pickedPath) {
       setPickerHint("");
       onChange(pickedPath);
+      await onOpenPath(pickedPath);
       return;
     }
     setPickerHint(`已选择「${handle.name}」，但浏览器没有暴露完整本地路径。请把文件夹的绝对路径粘贴到上方，例如 E:\\Projects\\my-app。`);
@@ -3509,9 +3533,9 @@ function WorkspaceDialog({
         </label>
 
         <div className="workspace-dialog-actions">
-          <button type="button" onClick={pickDirectory} disabled={!canPickDirectory} title={canPickDirectory ? "浏览器通常不会返回完整本地路径；选择后可能仍需粘贴绝对路径" : "当前浏览器不支持目录选择器"}>
+          <button type="button" onClick={pickDirectory} disabled={pickingDirectory} title="打开系统文件夹选择器">
             <FolderOpen size={16} />
-            选择文件夹
+            {pickingDirectory ? "选择中..." : "选择文件夹"}
           </button>
           <button type="button" onClick={onOpen}>
             <Check size={16} />

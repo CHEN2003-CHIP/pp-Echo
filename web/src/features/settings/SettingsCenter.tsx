@@ -386,10 +386,15 @@ function categoryMatches(field: ConfigField, category: SettingsCategory) {
 function renderInput(field: ConfigField, value: string, onChange: (value: string) => void, revealed = false, disabled = false) {
   if (field.type === "boolean") {
     return (
-      <div className="setting-switch" aria-disabled={disabled}>
-        <button className={value !== "true" ? "active" : ""} onClick={() => onChange("false")} disabled={disabled} type="button">Off</button>
-        <button className={value === "true" ? "active" : ""} onClick={() => onChange("true")} disabled={disabled} type="button">On</button>
-      </div>
+      <label className="setting-checkbox" aria-disabled={disabled}>
+        <input
+          checked={value === "true"}
+          disabled={disabled}
+          onChange={(event) => onChange(String(event.target.checked))}
+          type="checkbox"
+        />
+        <span>{value === "true" ? "Enabled" : "Disabled"}</span>
+      </label>
     );
   }
   if (field.options?.length) {

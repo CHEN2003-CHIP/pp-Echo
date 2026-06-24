@@ -43,6 +43,11 @@ class OpenWorkspaceRequest(BaseModel):
     confirmed: bool = False
 
 
+class PickDirectoryResponse(BaseModel):
+    path: Optional[str] = None
+    cancelled: bool = False
+
+
 class GitSwitchRequest(BaseModel):
     branch: str
 
@@ -178,6 +183,14 @@ def create_app(
             return workspace_manager.open_workspace(request.path, confirmed=request.confirmed)
         except (FileNotFoundError, NotADirectoryError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/workspaces/pick-directory")
+    def pick_workspace_directory() -> dict:
+        try:
+            path = _pick_directory_dialog(active_workspace())
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return PickDirectoryResponse(path=path or None, cancelled=not bool(path)).model_dump(mode="json")
 
     @app.get("/api/settings")
     def settings() -> dict:
@@ -390,6 +403,35 @@ def create_app(
         app.mount("/", StaticFiles(directory=static_root, html=True), name="web")
 
     return app
+
+
+def _pick_directory_dialog(initial_dir: Path) -> str:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:  # pragma: no cover - depends on local Python GUI support
+        raise RuntimeError("System folder picker is not available in this Python environment.") from exc
+
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(
+            parent=root,
+            initialdir=str(initial_dir),
+            title="Select pp-Echo workspace",
+            mustexist=True,
+        )
+        return str(Path(selected).expanduser().resolve()) if selected else ""
+    except Exception as exc:  # pragma: no cover - depends on host windowing system
+        raise RuntimeError(f"System folder picker failed: {exc}") from exc
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 def _git_branch(workspace: Path) -> str:

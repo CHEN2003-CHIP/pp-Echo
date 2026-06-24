@@ -578,6 +578,11 @@ export type OpenWorkspaceResponse = WorkspacesState & {
   candidate?: WorkspaceEntry | null;
 };
 
+export type PickDirectoryResponse = {
+  path?: string | null;
+  cancelled: boolean;
+};
+
 export type ConfigField = {
   path: string;
   type: string;
@@ -781,6 +786,10 @@ export const api = {
     request<OpenWorkspaceResponse>("/api/workspaces/open", {
       method: "POST",
       body: JSON.stringify({ path, confirmed })
+    }),
+  pickWorkspaceDirectory: () =>
+    request<PickDirectoryResponse>("/api/workspaces/pick-directory", {
+      method: "POST"
     }),
   sessions: () => request<{ sessions: SessionEntry[] }>("/api/sessions"),
   createSession: () => request<SessionSnapshot>("/api/sessions", { method: "POST" }),

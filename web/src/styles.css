@@ -7813,3 +7813,371 @@ html[data-theme="light"] .attachment-panel-detail {
     min-width: 54px;
   }
 }
+
+/* FormLayout03 reference pass for SettingsCenter. */
+.settings-center-main {
+  gap: 24px;
+  padding: 28px 32px;
+}
+
+.settings-center-header {
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.settings-center-header small {
+  display: none;
+}
+
+.settings-center-header h2 {
+  max-width: 760px;
+  margin: 0;
+  color: var(--app-text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.settings-toolbar,
+.settings-health-strip,
+.settings-pending,
+.model-provider-panel,
+.settings-json-editor.product {
+  max-width: 1040px;
+}
+
+.settings-group {
+  max-width: 1040px;
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(0, 2fr);
+  gap: 40px;
+  padding: 0 0 32px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.settings-group-head {
+  display: block;
+  padding: 0;
+}
+
+.settings-group-head > svg {
+  display: none;
+}
+
+.settings-group-head h3 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settings-group-head p {
+  margin: 6px 0 0;
+  color: var(--app-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.settings-field-grid {
+  grid-column: auto;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 18px 16px;
+  max-width: 760px;
+}
+
+.settings-product-field {
+  grid-column: span 3;
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.settings-product-field.wide {
+  grid-column: 1 / -1;
+}
+
+.settings-product-field.dirty,
+.settings-product-field.danger {
+  border: 0;
+  background: transparent;
+}
+
+.settings-product-field.disabled {
+  opacity: 0.62;
+}
+
+.setting-card-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.setting-card-copy strong {
+  color: var(--app-text);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.setting-card-copy span {
+  color: var(--app-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.setting-card-copy code,
+.setting-card-meta {
+  display: none;
+}
+
+.setting-card-control {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-product-field input,
+.settings-product-field select,
+.settings-product-field textarea,
+.settings-scope-card input,
+.settings-search input {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 11px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+  color: var(--app-text);
+  font-size: 14px;
+  line-height: 1.35;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.settings-product-field textarea {
+  min-height: 98px;
+  resize: vertical;
+}
+
+.settings-product-field input:focus,
+.settings-product-field select:focus,
+.settings-product-field textarea:focus,
+.settings-scope-card input:focus,
+.settings-search input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--app-accent) 48%, var(--app-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent-soft) 70%, transparent);
+}
+
+.setting-checkbox {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--app-text);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.setting-checkbox input {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  accent-color: var(--app-accent);
+  box-shadow: none;
+}
+
+.setting-checkbox[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.setting-card-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.setting-card-actions button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.setting-card-control small {
+  color: var(--app-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-center-footer {
+  min-height: 58px;
+  padding: 10px 32px;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-bg);
+}
+
+.settings-center-footer span {
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
+.settings-center-actions button,
+.settings-center-footer button,
+.settings-json-editor.product button {
+  min-height: 36px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.settings-center-footer button.primary {
+  border-color: var(--app-text);
+  background: var(--app-text);
+  color: var(--app-bg);
+}
+
+html[data-theme="light"] .settings-center-footer button.primary {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+}
+
+@media (max-width: 1180px) {
+  .settings-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .settings-field-grid {
+    max-width: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-center-main {
+    padding: 22px 18px;
+  }
+
+  .settings-field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-product-field,
+  .settings-product-field.wide {
+    grid-column: 1;
+  }
+
+  .settings-center-footer {
+    padding: 10px 18px;
+  }
+}
+
+/* Non-sidebar selection feedback and bot detail cleanup. */
+.content-canvas button:active:not(:disabled) {
+  transform: translateY(1px);
+  background: var(--app-panel-3);
+}
+
+.content-canvas button.active:not(:disabled),
+.content-canvas .segmented-actions button.active:not(:disabled),
+.content-canvas .bot-tabs button.active:not(:disabled),
+.content-canvas .bot-filter-row button.active:not(:disabled),
+.content-canvas .trace-inspect-run-list button.active,
+.content-canvas .trace-timeline-list button.active {
+  border-color: color-mix(in srgb, var(--app-text) 24%, var(--app-border));
+  background: var(--app-panel-3);
+  color: var(--app-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-text) 8%, transparent);
+}
+
+.content-canvas .trace-inspect-run-list button.active,
+.content-canvas .trace-timeline-list button.active {
+  position: relative;
+}
+
+.content-canvas .trace-inspect-run-list button.active::before,
+.content-canvas .trace-timeline-list button.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--app-text);
+}
+
+.content-canvas .trace-inspect-run-list button:hover:not(.active),
+.content-canvas .trace-timeline-list button:hover:not(.active) {
+  background: var(--app-panel-2);
+}
+
+.bot-detail-grid {
+  gap: 12px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.bot-info,
+.bot-security-note {
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: var(--app-panel);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+}
+
+.bot-info {
+  padding: 14px 16px;
+}
+
+.bot-info span {
+  color: var(--app-muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.bot-info strong {
+  margin-top: 8px;
+  color: var(--app-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bot-detail-scroll {
+  gap: 14px;
+}
+
+.bot-detail-panel {
+  background: var(--app-panel);
+}
+
+html[data-theme="light"] .content-canvas button.active:not(:disabled),
+html[data-theme="light"] .content-canvas .segmented-actions button.active:not(:disabled),
+html[data-theme="light"] .content-canvas .bot-tabs button.active:not(:disabled),
+html[data-theme="light"] .content-canvas .bot-filter-row button.active:not(:disabled),
+html[data-theme="light"] .content-canvas .trace-inspect-run-list button.active,
+html[data-theme="light"] .content-canvas .trace-timeline-list button.active {
+  background: #eef1f5;
+  border-color: #c7ced8;
+}
+
+html[data-theme="light"] .content-canvas .trace-inspect-run-list button.active::before,
+html[data-theme="light"] .content-canvas .trace-timeline-list button.active::before {
+  background: #111827;
+}
