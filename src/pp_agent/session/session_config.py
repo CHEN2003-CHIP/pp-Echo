@@ -66,6 +66,28 @@ class SessionConfigStore:
             payload = self.set_path(session_id, "model.provider", provider)
         return payload
 
+    def set_model_selection(
+        self,
+        session_id: str,
+        *,
+        provider_id: str,
+        model: str,
+        base_url: str,
+        api_key_env: str,
+    ) -> dict[str, Any]:
+        provider_id = provider_id.strip()
+        model = model.strip()
+        if not provider_id:
+            raise ValueError("Provider cannot be empty")
+        if not model:
+            raise ValueError("Model cannot be empty")
+        payload = self.set_path(session_id, "provider.name", provider_id)
+        payload = self.set_path(session_id, "provider.base_url", base_url)
+        payload = self.set_path(session_id, "provider.api_key_env", api_key_env)
+        payload = self.set_path(session_id, "model.provider", provider_id)
+        payload = self.set_path(session_id, "model.model", model)
+        return payload
+
     def _path(self, session_id: str) -> Path:
         """
         由 session_id 生成配置文件路径。

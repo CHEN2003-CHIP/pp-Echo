@@ -23,6 +23,7 @@ from pp_agent.config.schema import (
     validate_session_path,
     validate_settings,
 )
+from pp_agent.llm.providers import provider_preset
 from pp_agent.session.session_config import SessionConfigStore
 from pp_agent.storage.settings import (
     FILE_MEMORY_PROTOCOL_PROMPT,
@@ -158,8 +159,19 @@ class ConfigManager:
             self._write_project_config(updated)
             return self.get_effective_snapshot()
 
-    def set_session_model(self, session_id: str, model: str) -> ConfigSnapshot:
-        SessionConfigStore(self.workspace).set_model(session_id, model)
+    def set_session_model(self, session_id: str, model: str, *, provider_id: str | None = None) -> ConfigSnapshot:
+        store = SessionConfigStore(self.workspace)
+        if provider_id:
+            preset = provider_preset(provider_id)
+            store.set_model_selection(
+                session_id,
+                provider_id=preset.id,
+                model=model,
+                base_url=preset.default_base_url,
+                api_key_env=preset.default_api_key_env,
+            )
+        else:
+            store.set_model(session_id, model)
         return self.get_effective_snapshot(session_id=session_id)
 
     def set_profile_path(self, profile: str, path: str, value: Any, *, base_hash: str | None = None, session_id: str | None = None) -> ConfigSnapshot:

@@ -1,4 +1,4 @@
-﻿import type { TraceDetail, TraceSpan } from "../../api";
+import type { TraceDetail, TraceSpan } from "../../api";
 import { safeJsonStringify } from "./trace-utils";
 
 type SectionUsage = {
@@ -15,6 +15,8 @@ type BudgetReport = {
   included_items?: Array<Record<string, unknown>>;
   dropped_items?: Array<Record<string, unknown>>;
   drop_reasons?: Record<string, string>;
+  fallback_reason?: string;
+  warnings?: string[];
 };
 
 export function TraceContextBudgetPanel({ detail }: { detail: TraceDetail }) {
@@ -23,28 +25,76 @@ export function TraceContextBudgetPanel({ detail }: { detail: TraceDetail }) {
     return <section className="trace-inspect-section"><h3>Context Budget</h3><p className="muted">No context budget report.</p></section>;
   }
   const report = record.report;
+  const total = report.total_budget || 0;
+  const used = report.used || 0;
+  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
   const sections = Object.entries(report.per_section || {});
+  const included = report.included_items || [];
   const dropped = report.dropped_items || [];
+  const warnings = [...(report.warnings || []), ...(record.coreMemoryBudgetError ? ["Core memory budget warning"] : [])];
+
   return (
-    <section className="trace-inspect-section">
+    <section className="trace-inspect-section trace-context-budget">
       <h3>Context Budget</h3>
-      <p className="muted">
-        used {String(report.used || 0)} / {String(report.total_budget || 0)} chars
-        {record.coreMemoryBudgetError ? " | core memory budget warning" : ""}
-      </p>
-      <details open>
-        <summary>Sections ({sections.length})</summary>
-        <pre>{safeJsonStringify(sectionSummary(sections))}</pre>
-      </details>
+      <div className="trace-budget-overview">
+        <strong>{used.toLocaleString()} / {total.toLocaleString()}</strong>
+        <span>{pct}% used</span>
+      </div>
+      <BudgetBar value={used} total={total} />
+      <div className="trace-budget-sections">
+        {sections.map(([name, usage]) => (
+          <div key={name}>
+            <div><strong>{name}</strong><span>{Number(usage.used || 0).toLocaleString()} / {Number(usage.budget || 0).toLocaleString()}</span></div>
+            <BudgetBar value={usage.used || 0} total={usage.budget || total} />
+            <small>included {usage.included_count || 0} | dropped {usage.dropped_count || 0}</small>
+          </div>
+        ))}
+      </div>
+      {sections.length === 0 ? <p className="muted">No section usage records.</p> : null}
+      <SourceTable title="Included Sources" rows={included} />
+      <SourceTable title="Dropped Sources" rows={dropped} dropReasons={report.drop_reasons || {}} />
+      {report.fallback_reason || warnings.length ? (
+        <div className="trace-budget-warnings">
+          {report.fallback_reason ? <p><strong>Fallback</strong><span>{report.fallback_reason}</span></p> : null}
+          {warnings.map((warning) => <p key={warning}><strong>Warning</strong><span>{warning}</span></p>)}
+        </div>
+      ) : null}
       <details>
-        <summary>Included Sources ({(report.included_items || []).length})</summary>
-        <pre>{safeJsonStringify(report.included_items || [])}</pre>
-      </details>
-      <details open={dropped.length > 0}>
-        <summary>Dropped Sources ({dropped.length})</summary>
-        <pre>{safeJsonStringify(dropped)}</pre>
+        <summary>Raw budget report</summary>
+        <pre>{safeJsonStringify(report)}</pre>
       </details>
     </section>
+  );
+}
+
+function BudgetBar({ value, total }: { value: number; total: number }) {
+  const width = total > 0 ? Math.min(100, Math.max(0, (value / total) * 100)) : 0;
+  return <div className="trace-budget-bar" aria-label={`${Math.round(width)}%`}><span style={{ width: `${width}%` }} /></div>;
+}
+
+function SourceTable({ title, rows, dropReasons }: { title: string; rows: Array<Record<string, unknown>>; dropReasons?: Record<string, string> }) {
+  return (
+    <div className="trace-source-table">
+      <h4>{title}</h4>
+      {rows.length ? (
+        <table>
+          <thead><tr><th>Source</th><th>Section</th><th>Tokens/Chars</th><th>Reason</th></tr></thead>
+          <tbody>
+            {rows.map((row, index) => {
+              const source = textValue(row.source || row.name || row.path || row.id || `#${index + 1}`);
+              return (
+                <tr key={`${source}-${index}`}>
+                  <td>{source}</td>
+                  <td>{textValue(row.section ?? row.kind ?? row.type)}</td>
+                  <td>{textValue(row.used ?? row.tokens ?? row.chars ?? row.length)}</td>
+                  <td>{textValue(row.reason ?? dropReasons?.[source])}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : <p className="muted">No {title.toLowerCase()}.</p>}
+    </div>
   );
 }
 
@@ -62,16 +112,8 @@ function extractContextBudget(detail: TraceDetail): { report: BudgetReport; core
 function objectValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
-function sectionSummary(sections: Array<[string, SectionUsage]>) {
-  const summary: Record<string, Record<string, number>> = {};
-  sections.forEach(([name, usage]) => {
-    summary[name] = {
-      budget: usage.budget || 0,
-      used: usage.used || 0,
-      included: usage.included_count || 0,
-      dropped: usage.dropped_count || 0
-    };
-  });
-  return summary;
-}
 
+function textValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "-";
+  return String(value);
+}

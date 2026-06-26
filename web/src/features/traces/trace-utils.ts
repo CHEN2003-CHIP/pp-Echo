@@ -50,6 +50,11 @@ export function formatRelativeTime(timestamp?: number | null) {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
+export function formatOffset(startedAt?: number | null, baseStartedAt?: number | null) {
+  if (!startedAt || !baseStartedAt) return "-";
+  return `+${formatDuration(Math.max(0, Math.round((startedAt - baseStartedAt) * 1000)))}`;
+}
+
 export function safeJsonStringify(value: unknown) {
   try {
     return JSON.stringify(value, null, 2);

@@ -21,6 +21,7 @@ class ConfigSetRequest(BaseModel):
 
 class ModelOverrideRequest(BaseModel):
     model: str
+    provider_id: Optional[str] = None
 
 
 class ProfileSetRequest(BaseModel):
@@ -173,7 +174,7 @@ def mount_config_routes(app, active_workspace, session_manager) -> None:
     @app.post("/api/sessions/{session_id}/model")
     def set_session_model(session_id: str, request: ModelOverrideRequest) -> dict[str, Any]:
         try:
-            snapshot = manager().set_session_model(session_id, request.model)
+            snapshot = manager().set_session_model(session_id, request.model, provider_id=request.provider_id)
             handle = session_manager().get_active_handle(session_id)
             pending = bool(handle is not None and handle.is_busy())
             if handle is not None:

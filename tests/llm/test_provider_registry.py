@@ -17,6 +17,9 @@ def test_provider_presets_include_required_providers() -> None:
     assert {"openai", "deepseek", "qwen-dashscope", "xiaomi", "alibaba-bailian", "anthropic", "custom-openai-compatible"} <= ids
     assert provider_preset("anthropic").protocol == "anthropic"
     assert provider_preset("deepseek").protocol == "openai-compatible"
+    assert provider_preset("xiaomi").default_api_key_env == "MIMO_API_KEY"
+    assert provider_preset("xiaomi").default_base_url == "https://api.xiaomimimo.com/v1"
+    assert "mimo-v2.5-pro" in provider_preset("xiaomi").recommended_models
 
 
 def test_client_factory_dispatches_by_provider_protocol() -> None:

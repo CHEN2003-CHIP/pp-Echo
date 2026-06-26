@@ -29,7 +29,7 @@ _FIELDS: tuple[ConfigField, ...] = (
     ConfigField("runtime_id", "string|null", "general", "next_turn", "Agent turn runtime profile id."),
     ConfigField("provider.name", "string", "model", "next_turn", "Provider adapter name.", editor="select", options=("openai", "deepseek", "qwen-dashscope", "xiaomi", "alibaba-bailian", "anthropic", "custom-openai-compatible")),
     ConfigField("provider.base_url", "string", "model", "next_turn", "OpenAI-compatible base URL."),
-    ConfigField("provider.api_key_env", "string", "model", "restart_required", "Environment variable that stores the API key.", session_override=False),
+    ConfigField("provider.api_key_env", "string", "model", "next_turn", "Environment variable that stores the API key."),
     ConfigField("model.provider", "string", "model", "next_turn", session_override=True),
     ConfigField("model.model", "string", "model", "next_turn", session_override=True),
     ConfigField("model.temperature", "number", "model", "next_turn", session_override=True),

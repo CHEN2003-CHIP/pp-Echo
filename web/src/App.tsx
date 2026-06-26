@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, ModelProviderPreset, ModelUsageRow, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
@@ -176,7 +176,7 @@ const sidebarNavSections: Array<{ title: string; views: ViewKey[] }> = [
   { title: "Settings", views: ["users"] }
 ];
 
-const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks", "usage"]);
+const comingSoonViews = new Set<ViewKey>(["search", "group", "tasks"]);
 
 const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activity }> = [
   { id: "status", label: "状态", icon: Activity },
@@ -187,13 +187,14 @@ const inspectorTabs: Array<{ id: InspectorTab; label: string; icon: typeof Activ
 function BrandLogo() {
   return (
     <div className="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 40 48" role="img">
-        <path d="m25.09 5.05-3.93-1.05-3.31 12.37-2.99-11.17-3.93 1.05 3.23 12.07-8.05-8.05-2.88 2.88 8.83 8.83-11-2.95-1.05 3.93 12.02 3.22a8.3 8.3 0 0 1-.21-1.85 8.14 8.14 0 1 1 16.08-.16l10.92 2.93 1.05-3.93-12.07-3.23 11-2.95-1.05-3.93-12.07 3.23 8.05-8.05-2.88-2.88-8.71 8.71z" />
-        <path d="m27.87 26.22c-.34 1.43-1.05 2.71-2.03 3.73l7.91 7.91 2.88-2.88z" />
-        <path d="m25.77 30.04c-.99 1.01-2.24 1.76-3.64 2.15l2.88 10.75 3.93-1.05z" />
-        <path d="m21.98 32.23a8.3 8.3 0 0 1-4.21-.04l-2.88 10.76 3.93 1.05z" />
-        <path d="m17.64 32.15a8.15 8.15 0 0 1-3.58-2.18l-7.93 7.93 2.88 2.88z" />
-        <path d="m14 29.9a8.1 8.1 0 0 1-1.98-3.69l-10.96 2.94 1.05 3.93z" />
+      <svg viewBox="0 0 32 32" role="img">
+        <g fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M23.8 7.8A11.4 11.4 0 1 0 24.6 23.5" />
+          <path d="M22 11.3A7.4 7.4 0 1 0 20.4 22.1" />
+          <path d="M20.4 16H24.1" />
+          <circle cx="26.3" cy="16" r="2.2" />
+        </g>
+        <circle cx="16" cy="16" r="3" fill="currentColor" />
       </svg>
     </div>
   );
@@ -1013,6 +1014,8 @@ export function App() {
             />
           ) : activeView === "memory" ? (
             <MemoryWorkbench />
+          ) : activeView === "usage" ? (
+            <UsagePanel />
           ) : activeView === "users" ? (
             <SettingsCenter
               sessionId={activeSessionId}
@@ -1177,6 +1180,7 @@ function DynamicSettingsDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [jsonDraft, setJsonDraft] = useState("");
   const [notice, setNotice] = useState("");
+  const [providerPresets, setProviderPresets] = useState<ModelProviderPreset[]>([]);
 
   useEffect(() => {
     setCategory(initialCategory);
@@ -1192,8 +1196,12 @@ function DynamicSettingsDialog({
   }, [scope, profileDraft, snapshot]);
 
   async function loadConfig() {
-    const payload = await api.config(sessionId || undefined);
+    const [payload, providersPayload] = await Promise.all([
+      api.config(sessionId || undefined),
+      api.modelProviders()
+    ]);
     setSnapshot(payload);
+    setProviderPresets(providersPayload.providers);
     setProfileDraft(payload.active_profile || payload.profiles[0] || "default");
     setDrafts(buildConfigDrafts(payload));
     setJsonDraft(JSON.stringify(readScopeConfig(payload, scope), null, 2));
@@ -1292,6 +1300,26 @@ function DynamicSettingsDialog({
     setJsonDraft(JSON.stringify(readScopeConfig(snapshot, scope, profileDraft), null, 2));
     setError("");
     setFieldErrors({});
+  }
+
+  function updateFieldDraft(field: ConfigField, value: string) {
+    if (field.path !== "provider.name") {
+      setDrafts((current) => ({ ...current, [field.path]: value }));
+      return;
+    }
+    const preset = providerPresets.find((item) => item.id === value);
+    setDrafts((current) => ({
+      ...current,
+      [field.path]: value,
+      ...(preset ? {
+        "provider.base_url": preset.default_base_url,
+        "provider.api_key_env": preset.default_api_key_env,
+        "model.provider": preset.id,
+        "model.model": preset.recommended_models[0] || current["model.model"] || ""
+      } : {
+        "model.provider": value
+      })
+    }));
   }
 
   const savingPath = saving ? "__batch__" : "";
@@ -1397,7 +1425,7 @@ function DynamicSettingsDialog({
                     {field.description ? <em>{field.description}</em> : null}
                     {fieldError ? <b>{fieldError}</b> : null}
                   </div>
-                  {renderConfigInput(field, drafts[field.path] || "", (value) => setDrafts((current) => ({ ...current, [field.path]: value })))}
+                  {renderConfigInput(field, drafts[field.path] || "", (value) => updateFieldDraft(field, value))}
                   <span className="settings-field-state">{dirty ? "Changed" : "Synced"}</span>
                 </div>
               );
@@ -2070,29 +2098,54 @@ function ComposerModelButton({
 }) {
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
+  const [providerPresets, setProviderPresets] = useState<ModelProviderPreset[]>([]);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [displayModel, setDisplayModel] = useState(activeModel);
+
+  useEffect(() => {
+    setDisplayModel(activeModel);
+  }, [activeModel]);
 
   useEffect(() => {
     if (!open) return;
-    api.config(activeSessionId || undefined).then(setSnapshot).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    Promise.all([api.config(activeSessionId || undefined), api.modelProviders()])
+      .then(([configPayload, providersPayload]) => {
+        setSnapshot(configPayload);
+        setProviderPresets(providersPayload.providers);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, [open, activeSessionId]);
 
-  const models = useMemo(() => modelCandidates(snapshot, activeModel), [snapshot, activeModel]);
-  const filteredModels = models.filter((model) => model.toLowerCase().includes(query.trim().toLowerCase()));
+  const models = useMemo(() => modelCandidates(snapshot, displayModel, providerPresets), [snapshot, displayModel, providerPresets]);
+  const activeProvider = String(readConfigPath(snapshot?.effective_config || {}, "provider.name") || readConfigPath(snapshot?.effective_config || {}, "model.provider") || "");
+  const filteredModels = models.filter((candidate) => `${candidate.providerLabel} ${candidate.model}`.toLowerCase().includes(query.trim().toLowerCase()));
   const effortField = snapshot?.schema.fields.find((field) => /reasoning|effort|thinking/i.test(field.path) && field.options?.length);
 
-  async function chooseModel(model: string) {
-    setBusy(model);
+  async function chooseModel(candidate: ModelCandidate) {
+    setBusy(candidate.key);
     setError("");
     try {
+      const test = await api.modelTest(
+        { name: candidate.providerId, base_url: candidate.baseUrl, api_key_env: candidate.apiKeyEnv },
+        { provider: candidate.providerId, model: candidate.model, temperature: 0.2, enable_thinking: false }
+      );
+      if (test.status !== "ok") {
+        const detail = test.safe_detail ? ` ${test.safe_detail}` : "";
+        throw new Error(`${test.message}${detail}`);
+      }
       if (activeSessionId) {
-        await api.setSessionModel(activeSessionId, model);
+        await api.setSessionModel(activeSessionId, candidate.model, candidate.providerId || undefined);
       } else {
         const baseHash = snapshot?.config_hash;
-        await api.configSet("model.model", model, baseHash);
+        if (candidate.providerId) {
+          await api.applyModelPreset(candidate.providerId, candidate.model, baseHash);
+        } else {
+          await api.configSet("model.model", candidate.model, baseHash);
+        }
       }
+      setDisplayModel(candidate.model);
       onChanged();
       setOpen(false);
     } catch (err) {
@@ -2125,7 +2178,7 @@ function ComposerModelButton({
     <div className="composer-popover-wrap">
       <button className="composer-status-button" onClick={() => setOpen((current) => !current)} type="button">
         <Monitor size={14} />
-        <span>{activeModel || "model pending"}</span>
+        <span>{displayModel || "model pending"}</span>
         <ChevronDown size={13} />
       </button>
       {open ? (
@@ -2147,14 +2200,14 @@ function ComposerModelButton({
           ) : null}
           <div className="composer-popover-section">Models</div>
           <div className="composer-popover-list">
-            {filteredModels.map((model) => (
-              <button key={model} onClick={() => chooseModel(model)} disabled={Boolean(busy)} type="button">
+            {filteredModels.map((candidate) => (
+              <button key={candidate.key} onClick={() => chooseModel(candidate)} disabled={Boolean(busy)} type="button">
                 <Monitor size={14} />
                 <span>
-                  <strong>{model}</strong>
-                  <small>{modelProviderLabel(model)}</small>
+                  <strong>{candidate.model}</strong>
+                  <small>{candidate.providerLabel}</small>
                 </span>
-                {model === activeModel ? <Check size={15} /> : null}
+                {candidate.model === displayModel && (!candidate.providerId || candidate.providerId === activeProvider) ? <Check size={15} /> : null}
               </button>
             ))}
             {!filteredModels.length ? <div className="composer-popover-empty">No models match this search.</div> : null}
@@ -2165,19 +2218,143 @@ function ComposerModelButton({
   );
 }
 
-function modelCandidates(snapshot: ConfigSnapshot | null, activeModel: string) {
-  const values = new Set<string>();
+function UsagePanel() {
+  const [rows, setRows] = useState<ModelUsageRow[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadUsage().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  async function loadUsage() {
+    setLoading(true);
+    setError("");
+    try {
+      const payload = await api.modelUsage();
+      setRows(payload.models);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const totals = rows.reduce((acc, row) => ({
+    runs: acc.runs + row.runs,
+    calls: acc.calls + row.llm_calls,
+    tokens: acc.tokens + row.total_tokens,
+    cost: acc.cost + (row.total_cost_usd || 0)
+  }), { runs: 0, calls: 0, tokens: 0, cost: 0 });
+  const configuredCount = rows.filter((row) => row.api_key_configured).length;
+
+  return (
+    <section className="usage-panel">
+      <div className="usage-head">
+        <div>
+          <small>MODEL USAGE</small>
+          <h2>Configured models</h2>
+          <p>Provider presets with visible API key env status and trace usage totals.</p>
+        </div>
+        <button onClick={loadUsage} disabled={loading}><RefreshCw size={14} /> Refresh</button>
+      </div>
+      {error ? <p className="settings-error">{error}</p> : null}
+      <div className="usage-summary-grid">
+        <MetricCard label="Configured" value={`${configuredCount}/${rows.length}`} />
+        <MetricCard label="Runs" value={totals.runs} />
+        <MetricCard label="LLM Calls" value={totals.calls} />
+        <MetricCard label="Tokens" value={totals.tokens.toLocaleString()} />
+        <MetricCard label="Cost" value={totals.cost ? `$${totals.cost.toFixed(6)}` : "N/A"} />
+      </div>
+      <div className="usage-table-wrap">
+        <table className="usage-table">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Model</th>
+              <th>Configured</th>
+              <th>Active</th>
+              <th>Runs</th>
+              <th>Calls</th>
+              <th>Input</th>
+              <th>Output</th>
+              <th>Total</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${row.provider_id}:${row.model}`}>
+                <td><strong>{row.provider_label}</strong><small>{row.api_key_env || "-"}</small></td>
+                <td>{row.model}</td>
+                <td>{row.api_key_configured ? "Yes" : "Missing env"}</td>
+                <td>{row.current ? "Current" : "-"}</td>
+                <td>{row.runs}</td>
+                <td>{row.llm_calls}</td>
+                <td>{row.input_tokens.toLocaleString()}</td>
+                <td>{row.output_tokens.toLocaleString()}</td>
+                <td>{row.total_tokens.toLocaleString()}</td>
+                <td>{row.total_cost_usd == null ? "N/A" : `$${row.total_cost_usd.toFixed(6)}`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!rows.length && !loading ? <p className="muted">No model usage records.</p> : null}
+        {loading ? <p className="muted">Loading usage...</p> : null}
+      </div>
+    </section>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="usage-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+type ModelCandidate = {
+  key: string;
+  providerId: string;
+  providerLabel: string;
+  model: string;
+  baseUrl: string;
+  apiKeyEnv: string;
+};
+
+function modelCandidates(snapshot: ConfigSnapshot | null, activeModel: string, providerPresets: ModelProviderPreset[]): ModelCandidate[] {
+  const values = new Map<string, ModelCandidate>();
+  providerPresets.forEach((provider) => {
+    provider.recommended_models.forEach((model) => {
+      const key = `${provider.id}:${model}`;
+      values.set(key, { key, providerId: provider.id, providerLabel: provider.label, model, baseUrl: provider.default_base_url, apiKeyEnv: provider.default_api_key_env });
+    });
+  });
+  const configuredProvider = String(readConfigPath(snapshot?.effective_config || {}, "provider.name") || readConfigPath(snapshot?.effective_config || {}, "model.provider") || "");
+  const configuredProviderLabel = providerPresets.find((provider) => provider.id === configuredProvider)?.label || modelProviderLabel(configuredProvider);
   const modelField = snapshot?.schema.fields.find((field) => field.path === "model.model");
-  modelField?.options?.forEach((option) => values.add(option));
+  modelField?.options?.forEach((option) => {
+    const key = `${configuredProvider || "current"}:${option}`;
+    if (!values.has(key)) values.set(key, { key, providerId: configuredProvider, providerLabel: configuredProviderLabel, model: option, baseUrl: String(readConfigPath(snapshot?.effective_config || {}, "provider.base_url") || ""), apiKeyEnv: String(readConfigPath(snapshot?.effective_config || {}, "provider.api_key_env") || "") });
+  });
   const configured = snapshot ? readConfigPath(snapshot.effective_config, "model.model") : "";
-  if (typeof configured === "string" && configured.trim()) values.add(configured.trim());
-  if (activeModel.trim()) values.add(activeModel.trim());
-  return Array.from(values).filter(Boolean);
+  if (typeof configured === "string" && configured.trim()) {
+    const model = configured.trim();
+    const key = `${configuredProvider || "current"}:${model}`;
+    if (!values.has(key)) values.set(key, { key, providerId: configuredProvider, providerLabel: configuredProviderLabel, model, baseUrl: String(readConfigPath(snapshot?.effective_config || {}, "provider.base_url") || ""), apiKeyEnv: String(readConfigPath(snapshot?.effective_config || {}, "provider.api_key_env") || "") });
+  }
+  if (activeModel.trim()) {
+    const model = activeModel.trim();
+    const key = `${configuredProvider || "current"}:${model}`;
+    if (!values.has(key)) values.set(key, { key, providerId: configuredProvider, providerLabel: configuredProviderLabel, model, baseUrl: String(readConfigPath(snapshot?.effective_config || {}, "provider.base_url") || ""), apiKeyEnv: String(readConfigPath(snapshot?.effective_config || {}, "provider.api_key_env") || "") });
+  }
+  return Array.from(values.values()).filter((candidate) => candidate.model);
 }
 
 function modelProviderLabel(model: string) {
   const lower = model.toLowerCase();
   if (lower.includes("qwen")) return "Qwen";
+  if (lower.includes("mimo")) return "Xiaomi MiMo";
   if (lower.includes("deepseek")) return "DeepSeek";
   if (lower.includes("gpt") || lower.includes("o3") || lower.includes("o4")) return "OpenAI";
   if (lower.includes("claude")) return "Anthropic";

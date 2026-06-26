@@ -641,6 +641,22 @@ export type ModelConnectivityResult = {
   safe_detail: string;
 };
 
+export type ModelUsageRow = {
+  provider_id: string;
+  provider_label: string;
+  model: string;
+  base_url: string;
+  api_key_env: string;
+  api_key_configured: boolean;
+  current: boolean;
+  runs: number;
+  llm_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  total_cost_usd?: number | null;
+};
+
 export type BotSummary = {
   id: string;
   type: string;
@@ -755,6 +771,7 @@ export const api = {
   onboardingStatus: () => request<OnboardingStatus>("/api/onboarding/status"),
   onboardingCheckModel: () => request<OnboardingCheck>("/api/onboarding/check-model", { method: "POST" }),
   modelProviders: () => request<{ providers: ModelProviderPreset[] }>("/api/models/providers"),
+  modelUsage: () => request<{ models: ModelUsageRow[] }>("/api/models/usage"),
   modelTest: (provider?: Record<string, unknown>, model?: Record<string, unknown>) =>
     request<ModelConnectivityResult>("/api/models/test", {
       method: "POST",
@@ -983,10 +1000,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ profile })
     }),
-  setSessionModel: (sessionId: string, model: string) =>
+  setSessionModel: (sessionId: string, model: string, providerId?: string) =>
     request<ConfigSnapshot & { pending_next_turn?: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, {
       method: "POST",
-      body: JSON.stringify({ model })
+      body: JSON.stringify({ model, provider_id: providerId })
     }),
   debugSet: (path: string, value: unknown, sessionId?: string) =>
     request<ConfigSnapshot>("/api/debug/set", {
