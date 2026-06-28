@@ -59,12 +59,13 @@ def parse_incoming_message(payload: dict[str, Any]) -> QQIncomingMessage | None:
     if not event_id or not message_id or not group_openid:
         logger.warning("Ignoring malformed QQ group event: missing id/message/group_openid")
         return None
+    conversation_key = f"qq:group:{group_openid}:user:{user_openid}" if user_openid else f"qq:group:{group_openid}"
     return QQIncomingMessage(
         event_id=event_id,
         event_type=event_type,
         message_id=message_id,
         conversation_type="group",
-        conversation_key=f"qq:group:{group_openid}",
+        conversation_key=conversation_key,
         openid=None,
         group_openid=group_openid,
         user_openid=user_openid,

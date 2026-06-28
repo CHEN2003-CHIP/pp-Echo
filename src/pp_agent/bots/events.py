@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import defaultdict, deque
 from datetime import date
 from pathlib import Path
@@ -38,7 +39,7 @@ class BotEventStore:
     def record_message(self, message: NormalizedBotMessage) -> None:
         _append_jsonl(
             get_bot_messages_path(self.workspace, message.source.platform, message.source.bot_id),
-            message.model_dump(mode="json", exclude_none=True),
+            redact_payload(message.model_dump(mode="json", exclude_none=True)),
         )
 
     def write_status(self, status: BotStatus) -> None:
@@ -201,6 +202,7 @@ def _redact(value: str) -> str:
     for marker in _secret_values():
         if marker:
             text = text.replace(marker, "***REDACTED***")
+    text = _redact_url_secrets(text)
     for marker in ("secret", "token", "password"):
         text = text.replace(marker, "***REDACTED***")
         text = text.replace(marker.upper(), "***REDACTED***")
@@ -227,6 +229,14 @@ def redact_payload(value: Any) -> Any:
 def _secret_values() -> tuple[str, ...]:
     keys = ("PP_ECHO_QQBOT_APP_SECRET", "PP_ECHO_QQBOT_ACCESS_TOKEN", "PP_ECHO_QQBOT_TOKEN")
     return tuple(value for key in keys if (value := os.environ.get(key)))
+
+
+def _redact_url_secrets(text: str) -> str:
+    return re.sub(
+        r"(?i)([?&](?:access_)?token|[?&]signature|[?&]secret|[?&]key|[?&]auth)=([^&#\s]+)",
+        r"\1=***REDACTED***",
+        text,
+    )
 
 
 def _event_id_number(value: Any) -> int:

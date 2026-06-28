@@ -53,6 +53,7 @@ class NoopObservabilityHooks:
     def start_run(
         self,
         *,
+        run_id: str | None = None,
         session_id: str | None = None,
         turn_id: str | int | None = None,
         user_goal_preview: str = "",
@@ -60,7 +61,7 @@ class NoopObservabilityHooks:
         model: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> str:
-        _ = session_id, turn_id, user_goal_preview, provider, model, attributes
+        _ = run_id, session_id, turn_id, user_goal_preview, provider, model, attributes
         return ""
 
     def end_run(

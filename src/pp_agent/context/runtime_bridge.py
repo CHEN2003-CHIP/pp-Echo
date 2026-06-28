@@ -62,6 +62,7 @@ def build_runtime_context_pack(
         },
         attachment_providers=[*legacy_pack.attachments, *AttachmentContextProvider(workspace, session_id).list_items()],
         capability_selection=[*legacy_pack.capabilities, *legacy_pack.mcp, *legacy_pack.skills, *_capability_items(capability_selection)],
+        conversation_items=legacy_pack.conversation,
         project_context_providers=legacy_pack.project_context,
         system_instructions=legacy_pack.system,
         runtime_notes=legacy_pack.runtime_notes,
@@ -71,7 +72,6 @@ def build_runtime_context_pack(
         pre_dropped_items=[*legacy_pack.budget_report.dropped_items, *_blocked_capability_summaries(capability_selection)],
         strict_core_memory=False,
     )
-    pack.conversation = legacy_pack.conversation
     pack.source_refs = _unique_source_refs([*legacy_pack.source_refs, *pack.source_refs])
     pack.final_messages = pipeline.render_messages(pack)
     return pack

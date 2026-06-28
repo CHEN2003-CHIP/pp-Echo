@@ -34,6 +34,7 @@ class ObservabilityHooks(Protocol):
     def start_run(
         self,
         *,
+        run_id: str | None = None,
         session_id: str | None = None,
         turn_id: str | int | None = None,
         user_goal_preview: str = "",

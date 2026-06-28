@@ -147,6 +147,7 @@ class TraceRecorder:
     def start_run(
         self,
         *,
+        run_id: str | None = None,
         session_id: str | None = None,
         turn_id: str | int | None = None,
         user_goal_preview: str = "",
@@ -154,7 +155,7 @@ class TraceRecorder:
         model: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> str:
-        run_id = str(uuid.uuid4())
+        run_id = str(run_id or uuid.uuid4())
         self.current_run = TraceRun(
             run_id=run_id,
             session_id=session_id,

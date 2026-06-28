@@ -75,3 +75,57 @@ def test_tool_registry_trace_marks_result_errors_and_preserves_exceptions(tmp_pa
     span = next(span for span in detail.spans if span.attributes.get("tool_call_id") == "call-3")
     assert span.status == "error"
     assert span.error_message == "boom"
+
+
+def test_tool_registry_trace_includes_approval_and_changed_paths(tmp_path) -> None:
+    registry, recorder = _registry_with_trace(tmp_path)
+
+    result = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"}, tool_call_id="call-write")
+    run_id = recorder.current_run_id
+    recorder.end_run()
+    detail = TraceStore(tmp_path / "traces").read_run(run_id)
+
+    span = next(span for span in detail.spans if span.attributes.get("tool_call_id") == "call-write")
+    assert span.attributes["tool_name"] == "write_file"
+    assert span.attributes["tool_family"] == "file"
+    assert span.attributes["tool_category"] == "files"
+    assert span.attributes["permission_domain"] == "edit"
+    assert span.output["approval_token"] == "[REDACTED]"
+    assert span.output["approval_token_hash"]
+    assert result.details["token"] not in span.output["content_preview"]
+    assert span.output["changed_paths"] == ["notes.txt"]
+    assert span.output["is_error"] is False
+
+
+def test_dynamic_tool_trace_uses_family_category_and_error_result_shape(tmp_path) -> None:
+    registry, recorder = _registry_with_trace(tmp_path)
+    registry.register_function_tool(
+        name="demo.dynamic",
+        description="Inspect MCP state",
+        parameters={"type": "object", "properties": {"topic": {"type": "string"}}},
+        executor=lambda workspace, arguments: "ok",
+        category="mcp",
+        permission_domain="read",
+        tool_family="mcp",
+        exact_effect_mode="auto",
+        non_side_effectful=True,
+        known_safe_inspect=True,
+    )
+
+    registry.execute("demo.dynamic", {"topic": "health"}, tool_call_id="call-mcp")
+    unknown = registry.error_result(
+        type("Call", (), {"id": "call-unknown", "name": "missing_tool"})(),
+        "Unknown tool 'missing_tool' is not registered in ToolRegistry.",
+    )
+    run_id = recorder.current_run_id
+    recorder.end_run()
+    detail = TraceStore(tmp_path / "traces").read_run(run_id)
+
+    span = next(span for span in detail.spans if span.attributes.get("tool_call_id") == "call-mcp")
+    assert span.attributes["tool_family"] == "mcp"
+    assert span.attributes["tool_category"] == "mcp"
+    assert span.attributes["tool_origin"] == "mcp"
+    assert span.attributes["is_mcp_tool"] is True
+    assert unknown.is_error is True
+    assert unknown.tool_call_id == "call-unknown"
+    assert unknown.details["tool_unknown"] is True

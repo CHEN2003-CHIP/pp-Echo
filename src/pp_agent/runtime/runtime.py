@@ -130,6 +130,13 @@ def _context_pipeline_mode(settings: object) -> str:
     return "on" if bool(getattr(context_settings, "use_context_pipeline_messages", False)) else "shadow"
 
 
+def _pending_parent_run_id(payload: dict[str, object]) -> str | None:
+    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
+    run_id = details.get("run_id") or origin.get("run_id")
+    return str(run_id) if run_id else None
+
+
 @dataclass(frozen=True)
 class _TurnPersistContext:
     new_message_start_index: int
@@ -254,6 +261,7 @@ class AgentRuntime:
         self._capability_catalog_cache: object | None = None
         self._capability_catalog_fingerprint: tuple[str, ...] = ()
         self._current_capability_selection = None
+        self._last_context_selection_details: dict[str, object] = {}
         self.context_pipeline_config = _context_runtime_bridge().context_pipeline_config_from_settings(config_snapshot.settings)
         self.use_context_pipeline_messages = self.context_pipeline_config.use_context_pipeline_messages
         self.context_pipeline_mode = _context_pipeline_mode(config_snapshot.settings)
@@ -316,7 +324,7 @@ class AgentRuntime:
         把这轮运行过程中产生的所有 AgentEvent 收集起来返回。
         """
         self._cancellation_token.clear()
-        self._begin_run("prompt")
+        run_id = self._begin_run("prompt")
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
         self.state.messages.append(user_message)
         context = _TurnPersistContext(
@@ -326,6 +334,7 @@ class AgentRuntime:
         )
         self._propose_explicit_core_memory(text, context)
         self.observability.start_run(
+            run_id=run_id,
             session_id=self.session_id,
             turn_id=context.turn_id,
             user_goal_preview=safe_preview(text, 1000),
@@ -399,13 +408,14 @@ class AgentRuntime:
         """把之前排队的后续消息正式送进会话，然后从这条新消息开始再跑一轮。"""
         if decision.action == "inject_message" and decision.queued_message is not None:
             return self._collect_runtime_events(self._inject_controller_message(decision, phase="continue"))
-        self._begin_run("continue")
+        run_id = self._begin_run("continue")
         context = _TurnPersistContext(
             new_message_start_index=len(self.state.messages),
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
             turn_started_at=time.time(),
         )
         self.observability.start_run(
+            run_id=run_id,
             session_id=self.session_id,
             turn_id=context.turn_id,
             user_goal_preview=safe_preview(next_message.text if next_message is not None else "continue", 1000),
@@ -441,9 +451,11 @@ class AgentRuntime:
     def approve_pending_plan(self, token: str) -> list[AgentEvent]:
         """核对审批 token → 删除待审批记录 → 打开“已批准”开关 → 记录审批通过事件 → 恢复执行之前挂起的工具计划。"""
         self._cancellation_token.clear()
-        self._begin_run("approval")
+        run_id = self._begin_run("approval")
         if token != self.state.pending_plan_token:
             raise ValueError(f"Token {token} does not match the pending planner gate for this session")
+        pending_payload = self._pending_action_store().load(token)
+        parent_run_id = _pending_parent_run_id(pending_payload)
         self._pending_action_store().remove(token)
         self._approved_pending_plan = True
         self._queue_lifecycle_event(self._event(PLANNER_GATE_APPROVED, message=f"Approved planner gate {token}", details={"token": token}))
@@ -452,7 +464,27 @@ class AgentRuntime:
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
             turn_started_at=time.time(),
         )
-        return self._collect_runtime_events(self._run_loop(turn_persist_context=context))
+        self.observability.start_run(
+            run_id=run_id,
+            session_id=self.session_id,
+            turn_id=context.turn_id,
+            user_goal_preview="approval",
+            provider=self._provider_name(),
+            model=self.llm_client.model.model,
+            attributes={
+                "entrypoint": "approval",
+                "approval_token": token,
+                "parent_run_id": parent_run_id,
+                **self._model_runtime_attributes(),
+            },
+        )
+        try:
+            events = self._collect_runtime_events(self._run_loop(turn_persist_context=context))
+        except Exception as exc:
+            self.observability.end_run(status="error", error=exc)
+            raise
+        self.observability.end_run(status=self._trace_status_from_events(events))
+        return events
 
     def reject_pending_plan(self, token: str) -> None:
         if token != self.state.pending_plan_token:
@@ -739,6 +771,28 @@ class AgentRuntime:
                 plan_steps[index].status = "in_progress"
                 yield from self._emit(self._event(PLANNER_STEP, plan_step=plan_steps[index].model_copy(deep=True), details={"status": "in_progress"}))
                 #构造一个 TOOL_CALL 事件
+                if not self.tool_registry.has_tool(call.name):
+                    friendly_message = f"Unknown tool '{call.name}' is not registered in ToolRegistry."
+                    tool_details = {
+                        "tool_name": call.name,
+                        "tool_call_id": call.id,
+                        "args_preview": self._args_preview(call.arguments),
+                        "requires_confirmation": False,
+                        "tool_unknown": True,
+                    }
+                    tool_call_event = self._event(TOOL_CALL, tool_name=call.name, tool_args=call.arguments, details=tool_details)
+                    yield from self._emit(tool_call_event)
+                    yield from self._emit(self._event(TOOL_START, tool_name=call.name, tool_args=call.arguments, details=tool_details))
+                    error_result = self.tool_registry.error_result(call, friendly_message)
+                    self.state.messages.append(error_result.as_chat_message())
+                    plan_steps[index].status = "failed"
+                    tool_failed = True
+                    error_event = self._event(TOOL_ERROR, tool_name=call.name, message=friendly_message, details={**tool_details, "success": False, "preview": friendly_message})
+                    error_event.details.update(error_result.details)
+                    yield from self._emit(error_event)
+                    yield from self._emit(self._event(PLANNER_STEP, plan_step=plan_steps[index].model_copy(deep=True), details={"status": "failed", "tool_unknown": True}))
+                    yield from self._emit(self._event(TOOL_END, tool_name=call.name, message=friendly_message, details={**error_result.details, **tool_details}, is_error=True))
+                    continue
                 tool_spec = self.tool_registry.get_spec(call.name)
                 tool_details = {
                     "tool_name": call.name,
@@ -866,9 +920,9 @@ class AgentRuntime:
     def _collect_assistant_message(self) -> tuple[str, list[ToolCall]]:
         """Agent → LLM 的请求发送 + 响应解析全流程封装"""
         self._ensure_provider_context_budget()
-        messages = self._messages_for_model()
         tools = self.tool_registry.openapi_specs()
         self._emit_capability_selection_for_request(tools)
+        messages = self._messages_for_model()
         #构建模型请求事件
         request_event = self._event(
             BEFORE_PROVIDER_REQUEST,
@@ -1002,6 +1056,9 @@ class AgentRuntime:
                 "text_length": len("".join(text_chunks)),
                 "streamed_event_count": streamed_event_count,
                 "finish_reasons": finish_reasons,
+                "context_source": self._last_context_selection_details.get("context_source"),
+                "pipeline_mode": self._last_context_selection_details.get("pipeline_mode"),
+                "pipeline_used": self._last_context_selection_details.get("pipeline_used"),
                 **usage.as_trace_attributes(),
             },
         )
@@ -1424,6 +1481,8 @@ class AgentRuntime:
             catalog = self._builtin_capability_catalog()
             descriptor = catalog.get("builtin_tool", tool_name)
         except Exception:  # noqa: BLE001
+            if not self.tool_registry.has_tool(tool_name):
+                return True
             return self.tool_registry.get_spec(tool_name).requires_confirmation
         return descriptor.risk_level in {"write", "network", "shell", "destructive"}
 
@@ -1465,12 +1524,13 @@ class AgentRuntime:
             details={
                 "session_id": self.session_id,
                 "turn_id": self.state.turn.turn_id,
+                "run_id": self._current_run_id,
                 "tool_calls": [call.model_dump(mode="json") for call in tool_calls],
                 **preview,
             },
             session_id=self.session_id,
             turn_id=self.state.turn.turn_id,
-            origin={"source": "runtime", "kind": "planner_approval", "session_id": self.session_id},
+            origin={"source": "runtime", "kind": "planner_approval", "session_id": self.session_id, "run_id": self._current_run_id},
             expires_at=time.time() + 24 * 60 * 60,
         )
 
@@ -1519,6 +1579,7 @@ class AgentRuntime:
         context_event.details["model_id"] = self._model_trace_id()
         context_event.details["runtime_id"] = self._runtime_trace_id()
         context_event.details.update(rollout_details)
+        self._last_context_selection_details = dict(rollout_details)
         list(self._emit(context_event))
         return final_messages
 
@@ -1560,6 +1621,7 @@ class AgentRuntime:
         return selected, {
             "pipeline_mode": mode,
             "pipeline_used": used,
+            "context_source": "context_pipeline" if used else "legacy",
             "fallback_reason": fallback_reason,
             "legacy_message_count": len(legacy_messages),
             "pipeline_message_count": len(pipeline_messages),
@@ -1787,7 +1849,18 @@ class AgentRuntime:
                 },
             )
             if int(details.get("tool_count") or 0) == 0 and not event.is_error:
-                record_span("final.answer", "system", started_at=event.timestamp, ended_at=event.timestamp, attributes={"source": "provider_response"})
+                record_span(
+                    "final.answer",
+                    "system",
+                    started_at=event.timestamp,
+                    ended_at=event.timestamp,
+                    attributes={
+                        "source": "provider_response",
+                        "context_source": details.get("context_source"),
+                        "pipeline_mode": details.get("pipeline_mode"),
+                        "pipeline_used": details.get("pipeline_used"),
+                    },
+                )
             return
         if event.type == PROVIDER_ERROR:
             start = self._trace_event_starts.pop("llm", None)

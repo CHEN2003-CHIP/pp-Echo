@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import subprocess
@@ -189,17 +190,48 @@ def _tool_trace_output(result: ToolExecutionResult) -> dict[str, Any]:
     私密字段把 trace 文件撑大或泄露到 TraceInspect。
     """
 
-    details = _attachment_trace_details(result) if result.tool_name in _ATTACHMENT_TOOLS else redact_mapping(dict(result.details or {}))
-    content_preview = _attachment_trace_content_preview(result, details) if result.tool_name in _ATTACHMENT_TOOLS else safe_preview(result.content, 2000)
+    raw_details = dict(result.details or {})
+    details = _attachment_trace_details(result) if result.tool_name in _ATTACHMENT_TOOLS else redact_mapping(raw_details)
+    content_preview = _attachment_trace_content_preview(result, details) if result.tool_name in _ATTACHMENT_TOOLS else safe_preview(_redact_tool_content(result.content, raw_details), 2000)
+    approval_token = raw_details.get("token") or raw_details.get("approval_token")
     return {
         "is_error": bool(result.is_error),
         "content_preview": content_preview,
         "details": safe_preview(json.dumps(details, ensure_ascii=False, default=str), 16 * 1024),
         "artifact_token": details.get("artifact_token"),
         "approval_token": details.get("token") or details.get("approval_token"),
-        "changed_paths": details.get("changed_paths") or details.get("affected_paths"),
+        "approval_token_hash": _stable_token_hash(approval_token),
+        "changed_paths": _trace_changed_paths(raw_details, details),
         "exit_code": details.get("exit_code") or details.get("returncode"),
     }
+
+
+def _redact_tool_content(content: str, details: dict[str, Any]) -> str:
+    text = str(content or "")
+    for token_key in ("token", "approval_token", "artifact_token"):
+        token = str(details.get(token_key) or "")
+        if token:
+            text = text.replace(token, "[REDACTED]")
+    return text
+
+
+def _stable_token_hash(token: object) -> str | None:
+    value = str(token or "").strip()
+    if not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _trace_changed_paths(raw_details: dict[str, Any], redacted_details: dict[str, Any]) -> list[str] | None:
+    explicit = redacted_details.get("changed_paths") or redacted_details.get("affected_paths")
+    if isinstance(explicit, list):
+        return [str(path) for path in explicit if str(path).strip()]
+    effect = raw_details.get("effect") if isinstance(raw_details.get("effect"), dict) else {}
+    normalized = effect.get("normalized_arguments") if isinstance(effect.get("normalized_arguments"), dict) else {}
+    path = normalized.get("path") or raw_details.get("path")
+    if path:
+        return [str(path)]
+    return None
 
 
 def _attachment_trace_content_preview(result: ToolExecutionResult, details: dict[str, Any]) -> str:
@@ -508,6 +540,11 @@ class ToolRegistry:
             spec.requires_confirmation = self._confirmation_overrides[name]
         return spec
 
+    def has_tool(self, name: str) -> bool:
+        """Return whether a tool is registered without materializing it."""
+
+        return name in self._registrations
+
     def metadata(self) -> dict[str, ToolMetadata]:
         """
         【公共方法】获取所有工具元数据（供前端展示/权限面板）
@@ -713,6 +750,20 @@ class ToolRegistry:
         """
         【公共方法】生成工具执行错误结果（统一错误格式）
         """
+        if call.name not in self._registrations:
+            return ToolExecutionResult(
+                tool_call_id=call.id,
+                tool_name=call.name,
+                content=message,
+                is_error=True,
+                details={
+                    "error": message,
+                    "tool_call_id": call.id,
+                    "trace_tool_call_id": call.id,
+                    "tool_name": call.name,
+                    "tool_unknown": True,
+                },
+            )
         return self._get_tool(call.name).error_result(call, message)
 
     def openapi_specs(self) -> list[dict[str, Any]]:

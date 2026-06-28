@@ -371,6 +371,17 @@ def register_core_memory_tools(registry, *, settings) -> None:
     for cls in tool_classes:
         factory = lambda cls=cls: cls(registry.workspace, registry.policy_evaluator, settings=settings)
         spec = factory().spec
+        permission_domain = spec.permission_domain
+        mutates_governance = spec.name in {
+            "memory_propose",
+            "memory_approve",
+            "memory_reject",
+            "memory_archive",
+            "memory_replace",
+            "memory_compact_apply",
+            "memory_merge_apply",
+            "memory_export_to_markdown",
+        }
         registry.register(
             ToolRegistration(
                 name=spec.name,
@@ -381,11 +392,13 @@ def register_core_memory_tools(registry, *, settings) -> None:
                     name=spec.name,
                     category="memory",
                     requires_confirmation=spec.requires_confirmation,
-                    permission_domain=spec.permission_domain,
+                    permission_domain=permission_domain,
                     sensitive=spec.sensitive,
                     model_callable=spec.model_callable,
                     tool_family="memory",
-                    exact_effect_mode="none",
+                    exact_effect_mode="auto" if mutates_governance or permission_domain != "read" else "none",
+                    non_side_effectful=not mutates_governance and permission_domain == "read",
+                    known_safe_inspect=not mutates_governance and permission_domain == "read",
                 ),
             ),
             replace=True,

@@ -94,11 +94,15 @@ class ContextBudgeter:
         ordered = sorted(enumerate(items), key=lambda pair: (-pair[1].priority, pair[0]))
         for _, item in ordered:
             size = item.budget_chars
-            if usage.used + size <= budget:
+            if usage.used + size <= budget and self.report.used + size <= self.total_budget:
                 selected.append(item)
                 self.report.record_included(section, item)
                 continue
-            reason = drop_reason or _drop_reason_for(item, droppable=bool(droppable))
+            reason = drop_reason or _drop_reason_for(
+                item,
+                droppable=bool(droppable),
+                total_exceeded=self.report.used + size > self.total_budget,
+            )
             self.report.record_dropped(section, item, reason)
             if not droppable:
                 raise ContextBudgetExceeded(
@@ -123,11 +127,13 @@ def _summary_for(section: str, item: ContextItem, *, reason: Optional[str] = Non
     )
 
 
-def _drop_reason_for(item: ContextItem, *, droppable: bool) -> str:
+def _drop_reason_for(item: ContextItem, *, droppable: bool, total_exceeded: bool = False) -> str:
     """Choose a trace reason for an item dropped by budget."""
 
     if not droppable:
         return "core_memory_budget_exceeded_not_truncated"
+    if total_exceeded:
+        return "total_budget_exceeded"
     if item.metadata.get("context_provider") in {"mcp", "skill"}:
         return "context_budget_exceeded"
     return "section_budget_exceeded"

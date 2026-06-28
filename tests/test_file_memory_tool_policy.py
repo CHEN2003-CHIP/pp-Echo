@@ -35,3 +35,19 @@ def test_memory_search_uses_local_recall_for_runtime_policy_when_remote_embeddin
     assert metadata.requests_network_hint is False
     assert metadata.known_safe_inspect is True
     assert decision.action == "allow"
+
+
+def test_core_memory_tools_declare_read_and_write_metadata(tmp_path: Path) -> None:
+    registry = create_tool_registry(tmp_path)
+    metadata = registry.metadata()
+
+    assert metadata["memory_search"].permission_domain == "read"
+    assert metadata["memory_search"].known_safe_inspect is True
+    assert metadata["memory_propose"].permission_domain == "read"
+    assert metadata["memory_propose"].exact_effect_mode == "auto"
+    assert metadata["memory_propose"].known_safe_inspect is False
+    assert metadata["memory_pending"].known_safe_inspect is True
+    assert metadata["memory_approve"].requires_confirmation is True
+    assert metadata["memory_approve"].permission_domain == "approval"
+    assert metadata["memory_approve"].exact_effect_mode == "auto"
+    assert metadata["memory_archive"].requires_confirmation is True

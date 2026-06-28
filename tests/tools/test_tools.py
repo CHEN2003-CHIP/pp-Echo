@@ -369,7 +369,7 @@ def test_registry_does_not_cache_failed_tool_materialization(tmp_path: Path) -> 
     assert "read_file" not in registry._instances
 
 
-def test_unregistered_tool_behavior_matches_current_errors(tmp_path: Path) -> None:
+def test_unregistered_tool_error_result_is_understandable(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     call = ToolCall(id="call-1", name="missing_tool", arguments={})
 
@@ -379,8 +379,13 @@ def test_unregistered_tool_behavior_matches_current_errors(tmp_path: Path) -> No
     with pytest.raises(KeyError):
         registry.execute("missing_tool", {})
 
-    with pytest.raises(KeyError):
-        registry.error_result(call, "nope")
+    result = registry.error_result(call, "Unknown tool 'missing_tool' is not registered in ToolRegistry.")
+
+    assert result.is_error is True
+    assert result.tool_call_id == "call-1"
+    assert result.tool_name == "missing_tool"
+    assert result.details["tool_unknown"] is True
+    assert "not registered" in result.content
 
 
 def test_preview_safe_rewind_uses_sdk_preview_and_returns_structured_details(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

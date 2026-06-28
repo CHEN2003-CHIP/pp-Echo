@@ -64,3 +64,18 @@ def test_memory_search_and_get_support_global_scope(tmp_path: Path, monkeypatch)
     assert payload["results"][0]["path"] == "global/MEMORY.md"
     assert payload["results"][0]["source_scope"] == "global_bootstrap"
     assert "Chinese plans" in read_payload["content"]
+
+
+def test_memory_search_tool_returns_structured_error_when_retrieval_fails(tmp_path: Path, monkeypatch) -> None:
+    def fail_build_engine(*_args, **_kwargs):
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr("pp_agent.memory.file_memory_tools.build_file_memory_search_engine", fail_build_engine)
+
+    result = memory_search_executor(tmp_path, {"query": "pytest"}, settings=_settings(tmp_path))
+    payload = json.loads(result.content)
+
+    assert result.is_error is True
+    assert payload["results"] == []
+    assert payload["error"]["code"] == "search_failed"
+    assert payload["error"]["message"] == "index unavailable"

@@ -104,16 +104,33 @@ def memory_search_executor(workspace: Path, arguments: dict[str, Any], *, settin
     scope = str(arguments.get("scope") or "auto")
     if scope not in {"auto", "workspace", "global", "all"}:
         scope = "auto"
-    engine = build_file_memory_search_engine(workspace, settings=settings)
-    result = engine.search(
-        FileMemorySearchRequest(
-            query=str(arguments.get("query") or ""),
-            top_k=max(1, top_k),
-            mode=mode,  # type: ignore[arg-type]
-            scope=scope,  # type: ignore[arg-type]
-            include_debug=include_debug,
+    query = str(arguments.get("query") or "")
+    try:
+        engine = build_file_memory_search_engine(workspace, settings=settings)
+        result = engine.search(
+            FileMemorySearchRequest(
+                query=query,
+                top_k=max(1, top_k),
+                mode=mode,  # type: ignore[arg-type]
+                scope=scope,  # type: ignore[arg-type]
+                include_debug=include_debug,
+            )
         )
-    )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("File memory search failed and returned a structured error: %s", exc)
+        return _json_result(
+            "memory_search",
+            {
+                "query": query,
+                "mode": mode,
+                "semantic_available": False,
+                "bm25_available": False,
+                "results": [],
+                "warnings": ["File memory search failed."],
+                "error": {"code": "search_failed", "message": str(exc)},
+            },
+            is_error=True,
+        )
     return _json_result("memory_search", result.to_dict(include_debug=include_debug))
 
 

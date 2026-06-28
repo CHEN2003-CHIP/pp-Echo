@@ -16,6 +16,7 @@ from pp_agent.integrations.qqbot.config import QQBotConfig
 from pp_agent.integrations.qqbot.dedupe import QQEventDedupeStore
 from pp_agent.integrations.qqbot.schema import QQIncomingMessage, parse_incoming_message
 from pp_agent.integrations.qqbot.session_store import QQSessionStore
+from pp_agent.observability.store import TraceStore
 
 logger = logging.getLogger(__name__)
 APPROVAL_REPLY = "This action needs approval in the local pp-Echo Web UI."
@@ -58,10 +59,18 @@ class QQBotAdapter:
             logger.info("Ignoring unsupported or malformed QQ event.")
             self._event("message_ignored", "Ignoring unsupported or malformed QQ event.", level="warning", metadata={"reason": "unsupported_event_type"})
             return
+        if self._is_self_message(message):
+            self._event(
+                "message_ignored",
+                "Ignoring QQ message sent by the bot itself.",
+                message_id=message.message_id,
+                metadata={"reason": "self_message", "platform_event_id": message.event_id, "platform_message_id": message.message_id},
+            )
+            return
         event_key = f"qq:{message.event_id}:{message.message_id}"
         if self.dedupe_store.seen_or_mark(event_key):
             logger.info("Ignoring duplicate QQ event %s", redact_id(message.event_id))
-            self._event("message_ignored", "Ignoring duplicate QQ event.", metadata={"reason": "duplicate", "raw_event_id": message.event_id})
+            self._event("message_ignored", "Ignoring duplicate QQ event.", metadata={"reason": "duplicate", "platform_event_id": message.event_id, "platform_message_id": message.message_id})
             return
 
         source = self._source(message)
@@ -191,7 +200,7 @@ class QQBotAdapter:
             self._event("reply_sent", "QQ reply sent.", session_id=session_id, run_id=run_id, message_id=message.message_id, metadata={"source": source.model_dump(mode="json", exclude_none=True)})
         except Exception as exc:  # noqa: BLE001
             self._event("reply_failed", f"QQ reply failed: {type(exc).__name__}", level="error", session_id=session_id, run_id=run_id, message_id=message.message_id, metadata={"source": source.model_dump(mode="json", exclude_none=True)})
-            raise
+            logger.warning("QQ reply failed after runtime run completed: %s", exc)
 
     def _prompt_from_message(self, message: QQIncomingMessage) -> str | None:
         if message.conversation_type == "c2c":
@@ -251,6 +260,16 @@ class QQBotAdapter:
             raw_event_id=message.event_id,
         )
 
+    def _is_self_message(self, message: QQIncomingMessage) -> bool:
+        bot_ids = {str(self.config.app_id or "").strip(), "bot", "self"}
+        candidates = {
+            str((message.raw.get("d") or {}).get("bot_id") or "").strip() if isinstance(message.raw.get("d"), dict) else "",
+            str((message.raw.get("d") or {}).get("self_id") or "").strip() if isinstance(message.raw.get("d"), dict) else "",
+            str(message.user_openid or "").strip(),
+            str(message.openid or "").strip(),
+        }
+        return bool((bot_ids - {""}) & (candidates - {""}))
+
     def _event(
         self,
         event_type: str,
@@ -299,16 +318,26 @@ class QQBotAdapter:
             return
         trace_id = run_info.get("trace_id") or f"trace_{uuid4().hex}"
         run_info["trace_id"] = trace_id
+        runtime_trace_run_id = self._latest_runtime_trace_run_id(str(run_info.get("session_id") or ""))
         self.bot_manager.record_trace(
             self.bot_id,
             {
                 "trace_id": trace_id,
                 "run_id": run_info.get("run_id"),
+                "runtime_trace_run_id": runtime_trace_run_id,
+                "parent_id": runtime_trace_run_id,
                 "bot_id": self.bot_id,
                 "channel": "qq",
-                "conversation_id": message.conversation_key,
+                "platform": "qqbot",
+                "platform_event_id": message.event_id,
+                "platform_message_id": message.message_id,
+                "platform_user_id": message.user_openid or message.openid,
+                "channel_id": message.group_openid or message.openid,
+                "group_id": message.group_openid,
+                "conversation_id": redact_id(message.conversation_key),
                 "session_id": run_info.get("session_id"),
                 "message_id": message.message_id,
+                "inbound_event_type": message.event_type,
                 "started_at": run_info.get("started_at"),
                 "finished_at": run_info.get("finished_at"),
                 "status": status,
@@ -318,6 +347,18 @@ class QQBotAdapter:
                 "error": error,
             },
         )
+
+    def _latest_runtime_trace_run_id(self, session_id: str) -> str | None:
+        if not session_id:
+            return None
+        for root in (self.workspace, self.workspace / ".pp-agent" / "traces"):
+            try:
+                latest = TraceStore(root).find_latest_run(session_id=session_id)
+            except Exception:  # noqa: BLE001
+                continue
+            if latest is not None:
+                return latest.run_id
+        return None
 
 
 def is_group_triggered(text: str, trigger: str) -> bool:
