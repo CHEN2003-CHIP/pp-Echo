@@ -31,6 +31,103 @@ class PolicyDecision:
     details: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class ApprovalScope:
+    profile_id: str = "default"
+    session_id: str | None = None
+    run_id: str | None = None
+    tool_call_id: str | None = None
+    effect_id: str | None = None
+    payload_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolPolicyDecision:
+    tool_name: str
+    tool_call_id: str | None
+    run_id: str | None
+    session_id: str | None
+    read_only: bool
+    requires_approval: bool
+    risk_level: str
+    side_effect_type: str | None
+    allowed: bool
+    blocked_reason: str | None
+    budget_cost: int
+    approval_scope: ApprovalScope
+    policy_action: str
+    permission_domain: str
+
+    @classmethod
+    def from_policy_decision(
+        cls,
+        decision: PolicyDecision,
+        *,
+        tool_name: str,
+        tool_call_id: str | None = None,
+        run_id: str | None = None,
+        session_id: str | None = None,
+        permission_mode: str = "workspace-write",
+        budget_cost: int = 1,
+        approval_scope: ApprovalScope | None = None,
+    ) -> "ToolPolicyDecision":
+        details = decision.details or {}
+        return cls(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+            session_id=session_id,
+            read_only=permission_mode == "read-only",
+            requires_approval=decision.action == ASK,
+            risk_level=_risk_level(details),
+            side_effect_type=_side_effect_type(decision.permission_domain, details),
+            allowed=decision.action != DENY,
+            blocked_reason=decision.reason if decision.action == DENY else None,
+            budget_cost=int(budget_cost),
+            approval_scope=approval_scope or ApprovalScope(session_id=session_id, run_id=run_id, tool_call_id=tool_call_id),
+            policy_action=decision.action,
+            permission_domain=decision.permission_domain,
+        )
+
+    def to_trace_attributes(self) -> dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "tool_call_id": self.tool_call_id,
+            "run_id": self.run_id,
+            "session_id": self.session_id,
+            "read_only": self.read_only,
+            "requires_approval": self.requires_approval,
+            "risk_level": self.risk_level,
+            "side_effect_type": self.side_effect_type,
+            "allowed": self.allowed,
+            "blocked_reason": self.blocked_reason,
+            "budget_cost": self.budget_cost,
+            "approval_scope": self.approval_scope.__dict__,
+            "policy_action": self.policy_action,
+            "permission_domain": self.permission_domain,
+        }
+
+
+def _risk_level(details: dict[str, Any]) -> str:
+    if details.get("destructive_hint") or details.get("touches_external") or details.get("protected_path_hint"):
+        return "high"
+    if details.get("requests_network") or details.get("risk_class") not in {None, "inspect"}:
+        return "medium"
+    return "low"
+
+
+def _side_effect_type(permission_domain: str, details: dict[str, Any]) -> str | None:
+    if details.get("writes_workspace_files") or permission_domain == PermissionDomain.EDIT:
+        return "write"
+    if permission_domain == PermissionDomain.BASH:
+        return "shell"
+    if details.get("requests_network"):
+        return "network"
+    if permission_domain in {PermissionDomain.READ, PermissionDomain.REPO}:
+        return "read"
+    return permission_domain or None
+
+
 class ToolPolicyEvaluator:
     """
     ToolPolicyEvaluator 是工具执行前的策略判断层。

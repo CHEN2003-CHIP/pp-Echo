@@ -149,6 +149,10 @@ def _slice_file_preview(text: str, *, offset: int, max_chars: int) -> tuple[str,
 
 
 class WriteFileTool(BaseTool):
+    def __init__(self, workspace: Path, policy_evaluator=None, *, current_session_id: str | None = None) -> None:
+        super().__init__(workspace, policy_evaluator)
+        self.current_session_id = current_session_id
+
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec(name="write_file", description="Stage a new file write for host-side approval.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean"}}, "required": ["path", "content"]}, requires_confirmation=True, permission_domain=PermissionDomain.EDIT, sensitive=True)
@@ -179,6 +183,7 @@ class WriteFileTool(BaseTool):
             after=after,
             details={"overwrite": overwrite, "diff": diff},
             effect=effect,
+            session_id=self.current_session_id,
             origin={"source": "tool", "tool_name": self.spec.name, "kind": "file_write"},
         )
         return ToolExecutionResult(
@@ -199,6 +204,10 @@ class WriteFileTool(BaseTool):
 
 
 class EditFileTool(BaseTool):
+    def __init__(self, workspace: Path, policy_evaluator=None, *, current_session_id: str | None = None) -> None:
+        super().__init__(workspace, policy_evaluator)
+        self.current_session_id = current_session_id
+
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec(name="edit_file", description="Stage a safe diff-style edit using SEARCH/REPLACE blocks or a unified diff for host-side approval.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "diff": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path"]}, requires_confirmation=True, permission_domain=PermissionDomain.EDIT, sensitive=True)
@@ -237,6 +246,7 @@ class EditFileTool(BaseTool):
             after=updated,
             details={"replacements": replacements, "diff": diff},
             effect=effect,
+            session_id=self.current_session_id,
             origin={"source": "tool", "tool_name": self.spec.name, "kind": "file_edit"},
         )
         return ToolExecutionResult(

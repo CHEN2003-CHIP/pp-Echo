@@ -92,3 +92,18 @@ class NoopObservabilityHooks:
         payload: dict[str, Any] | None = None,
     ) -> None:
         _ = name, attributes, payload
+
+    def record_completed_span(
+        self,
+        name: str,
+        span_type: SpanType,
+        *,
+        status: TraceStatus = "ok",
+        started_at: float | None = None,
+        ended_at: float | None = None,
+        attributes: dict[str, Any] | None = None,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+        error: BaseException | str | None = None,
+    ) -> None:
+        _ = name, span_type, status, started_at, ended_at, attributes, input, output, error

@@ -1,4 +1,5 @@
 from pp_agent.runtime.emitter import LifecycleEmitter
+from pp_agent.runtime.contracts import RuntimeContext, RuntimeInput, RuntimeResult
 from pp_agent.runtime.events import FORMAL_TURN_PHASES, RuntimeMonitor
 from pp_agent.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks, ToolErrorDecision
 from pp_agent.runtime.lifecycle import (
@@ -105,8 +106,11 @@ __all__ = [
     "REASONING_SUMMARY",
     "RewindResult",
     "RuntimeHooks",
+    "RuntimeContext",
+    "RuntimeInput",
     "RuntimeMonitor",
     "RuntimeProfile",
+    "RuntimeResult",
     "RuntimeRegistry",
     "SafeRewindOrchestrator",
     "SESSION_BEFORE_COMPACT",

@@ -6,6 +6,7 @@ import json
 import logging
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
@@ -37,7 +38,7 @@ from pp_agent.tools.effects import (
     dynamic_tool_declarations,
 )
 from pp_agent.tools.metadata import ToolMetadata
-from pp_agent.tools.policy import ALLOW, ASK, PermissionDomain, ToolPolicyEvaluator
+from pp_agent.tools.policy import ALLOW, ASK, PermissionDomain, ToolPolicyDecision, ToolPolicyEvaluator
 from pp_agent.tools.repo_tools import GitDiffWorktreeTool, GitStatusTool, GrepCodeTool
 from pp_agent.tools.search_tool import SearchTextTool
 from pp_agent.tools.session_tools import ExecuteSafeRewindTool, PreviewSafeRewindTool
@@ -715,7 +716,17 @@ class ToolRegistry:
         if not registration.metadata.model_callable:
             raise PermissionError(f"Tool '{name}' is host-only and not model-callable")
         decision = self.evaluate_call(name, arguments)
+        self._record_policy_decision(
+            name,
+            decision,
+            tool_call_id=trace_tool_call_id,
+        )
         if decision.action == "deny":
+            self.observability.event(
+                "tool_policy_denied",
+                attributes={"tool_name": name, "tool_call_id": trace_tool_call_id},
+                payload={"reason": decision.reason, "permission_domain": decision.permission_domain},
+            )
             raise PermissionError(decision.reason)
         spec = self.get_spec(name)
         attributes = _tool_trace_attributes(name, None, spec, registration.metadata)
@@ -738,6 +749,10 @@ class ToolRegistry:
                     result.tool_call_id = trace_tool_call_id
                 result.details.setdefault("tool_call_id", trace_tool_call_id)
                 result.details.setdefault("trace_tool_call_id", trace_tool_call_id)
+                result.details.setdefault("policy_decision", decision.action)
+                result.details.setdefault("policy_reason", decision.reason)
+                result.details.setdefault("permission_domain", decision.permission_domain)
+                self._backfill_pending_scope(result, session_id=self.current_session_id, tool_call_id=trace_tool_call_id)
                 span.set_output(_tool_trace_output(result))
                 if result.is_error:
                     span.set_error(result.content or "tool returned is_error=True", kind="ToolExecutionError")
@@ -765,6 +780,82 @@ class ToolRegistry:
                 },
             )
         return self._get_tool(call.name).error_result(call, message)
+
+    def _record_policy_decision(self, name: str, decision, *, tool_call_id: str) -> None:
+        details = dict(decision.details or {})
+        stable_decision = ToolPolicyDecision.from_policy_decision(
+            decision,
+            tool_name=name,
+            tool_call_id=tool_call_id,
+            run_id=getattr(self.observability, "current_run_id", None),
+            session_id=self.current_session_id or getattr(self.observability, "current_session_id", None),
+            permission_mode=self.policy.permission_mode,
+        )
+        attributes = {
+            **details,
+            **stable_decision.to_trace_attributes(),
+            "tool_name": name,
+            "source_tool_name": name,
+            "tool_call_id": tool_call_id,
+            "source_tool_call_id": tool_call_id,
+            "policy_action": decision.action,
+            "policy_reason": decision.reason,
+            "permission_domain": decision.permission_domain,
+            "target": decision.target,
+            "source": "tool_registry_policy",
+        }
+        self.observability.record_completed_span(
+            "policy.decision",
+            "policy",
+            status="blocked" if decision.action == "deny" else "ok",
+            attributes=attributes,
+        )
+        self.emit_runtime_event(
+            "tool_call",
+            tool_name=name,
+            details=attributes,
+            is_error=decision.action == "deny",
+        )
+
+    def _backfill_pending_scope(self, result: ToolExecutionResult, *, session_id: str | None, tool_call_id: str) -> None:
+        token = result.details.get("token") if isinstance(result.details, dict) else None
+        if not token:
+            return
+        store = self.pending_store()
+        try:
+            payload = store.load(str(token))
+        except FileNotFoundError:
+            return
+        payload_session = str(payload.get("session_id") or "")
+        if session_id and payload_session and payload_session != session_id:
+            cloned = dict(payload)
+            cloned["token"] = str(uuid.uuid4())
+            cloned["session_id"] = session_id
+            cloned["tool_call_id"] = tool_call_id
+            cloned["created_at"] = time.time()
+            cloned["details"] = dict(cloned.get("details") or {})
+            cloned["details"]["session_id"] = session_id
+            cloned["details"]["tool_call_id"] = tool_call_id
+            store.save(cloned["token"], cloned)
+            result.details["token"] = cloned["token"]
+            return
+        changed = False
+        if session_id and not payload.get("session_id"):
+            payload["session_id"] = session_id
+            changed = True
+        if tool_call_id and not payload.get("tool_call_id"):
+            payload["tool_call_id"] = tool_call_id
+            changed = True
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        if session_id and not details.get("session_id"):
+            details["session_id"] = session_id
+            changed = True
+        if tool_call_id and not details.get("tool_call_id"):
+            details["tool_call_id"] = tool_call_id
+            changed = True
+        if changed:
+            payload["details"] = details
+            store.save(str(token), payload)
 
     def openapi_specs(self) -> list[dict[str, Any]]:
         """
@@ -969,8 +1060,8 @@ class ToolRegistry:
         """
         registrations = [
             self._registration("read_file", self._spec_read_file, lambda: ReadFileTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id)),
-            self._registration("write_file", self._spec_write_file, lambda: WriteFileTool(self.workspace, self.policy_evaluator)),
-            self._registration("edit_file", self._spec_edit_file, lambda: EditFileTool(self.workspace, self.policy_evaluator)),
+            self._registration("write_file", self._spec_write_file, lambda: WriteFileTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id)),
+            self._registration("edit_file", self._spec_edit_file, lambda: EditFileTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id)),
             self._registration("preview_pending_action", self._spec_preview_pending_action, lambda: PreviewPendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self)),
             self._registration("approve_pending_action", self._spec_approve_pending_action, lambda: ApprovePendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self)),
             self._registration("reject_pending_action", self._spec_reject_pending_action, lambda: RejectPendingActionTool(self.workspace, self.policy_evaluator)),
