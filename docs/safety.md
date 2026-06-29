@@ -65,3 +65,7 @@ python -m pp_agent.cli.main workflow doctor --json
 ```
 
 release 前检查请参考 [release-checklist.md](release-checklist.md)。
+
+Shell sandbox executor 的当前语义见 [sandbox.md](sandbox.md)。其中 `LocalSandboxExecutor` 只是兼容旧行为，不是安全 sandbox；`DockerSandboxExecutor` 当前只返回 patch candidate，不会自动写回真实 workspace。
+
+`apply_patch_candidate` 在写入真实 workspace 前会获取 `.pp-agent/locks/apply.lock`，用于串行化 pp-Echo 内部的 patch candidate apply。该锁不会阻止外部编辑器、git、用户手动 shell 命令或其他进程并发修改文件；进程异常退出后也不会自动清理 stale lock。

@@ -616,6 +616,29 @@ export type ConfigSnapshot = {
   schema: { fields: ConfigField[]; categories: string[] };
 };
 
+export type SandboxStatus = {
+  ok: boolean;
+  enabled: boolean;
+  backend: string;
+  image: string;
+  sandbox_isolation: string;
+  docker_found?: boolean | null;
+  docker_path?: string | null;
+  daemon_available?: boolean | null;
+  image_available?: boolean | null;
+  network_policy_mode?: string;
+  network_enforced?: boolean;
+  message: string;
+  install_url?: string | null;
+  docs_url?: string;
+  build_command?: string | null;
+  pull_command?: string | null;
+  next_steps?: string[];
+  checks?: Array<Record<string, unknown>>;
+  session_id?: string | null;
+  config_source?: string;
+};
+
 export type ModelProviderPreset = {
   id: string;
   label: string;
@@ -969,6 +992,8 @@ export const api = {
     request<CapabilityInventory>(`/api/plugins/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(payload) }),
   mcp: () => request<Record<string, unknown>>("/api/mcp"),
   settings: () => request<Record<string, unknown>>("/api/settings"),
+  sandboxStatus: (sessionId?: string) =>
+    request<SandboxStatus>(sessionId ? `/api/sandbox/status?session_id=${encodeURIComponent(sessionId)}` : "/api/sandbox/status"),
   config: (sessionId?: string) => request<ConfigSnapshot>(sessionId ? `/api/config?session_id=${encodeURIComponent(sessionId)}` : "/api/config"),
   configSet: (path: string, value: unknown, baseHash?: string) =>
     request<ConfigSnapshot>("/api/config/set", {

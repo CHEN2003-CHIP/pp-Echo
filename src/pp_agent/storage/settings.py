@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from pp_agent.learning.models import LearningSettings
 from pp_agent.memory.config import MemorySettings
+from pp_agent.sandbox.config import SandboxConfig, sandbox_config_from_env, sandbox_config_from_mapping
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 
 
@@ -287,6 +288,7 @@ class Settings(BaseModel):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     subagents: SubAgentSettings = Field(default_factory=SubAgentSettings)
     context_pipeline: ContextPipelineSettings = Field(default_factory=ContextPipelineSettings)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     learning: LearningSettings = Field(default_factory=LearningSettings)
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
@@ -308,6 +310,7 @@ class Settings(BaseModel):
         settings._apply_environment_overrides()
         #应用本地配置
         settings._apply_project_config()
+        settings.sandbox = sandbox_config_from_env(base=settings.sandbox)
 
         agents_md = workspace / "AGENTS.md"
         system_md = project_dir / "SYSTEM.md"
@@ -363,6 +366,7 @@ class Settings(BaseModel):
             self.model.model = os.environ["PP_AGENT_MODEL"]
         if os.getenv("PP_AGENT_ENABLE_THINKING"):
             self.model.enable_thinking = os.environ["PP_AGENT_ENABLE_THINKING"].strip().lower() in {"1", "true", "yes", "on"}
+        self.sandbox = sandbox_config_from_env()
 
     def _apply_project_config(self) -> None:
         """
@@ -394,6 +398,9 @@ class Settings(BaseModel):
             self.model.enable_thinking = bool(data["enable_thinking"])
         if "shell_timeout_seconds" in data:
             self.tool_policy.shell_timeout_seconds = int(data["shell_timeout_seconds"])
+        sandbox_config = data.get("sandbox", {})
+        if sandbox_config:
+            self.sandbox = sandbox_config_from_mapping(sandbox_config, base=self.sandbox)
         context_pipeline = data.get("context_pipeline", {})
         if isinstance(context_pipeline, dict):
             self.context_pipeline = self.context_pipeline.model_copy(update=context_pipeline, deep=True)

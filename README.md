@@ -352,6 +352,22 @@ pp-Echo 的安全设计重点是“可见、可审、可回退”：
 - 它不能保证模型永远按预期规划。
 - 在真实仓库中运行前，应先看 `docs/safety.md` 和 `workflow doctor` 输出。
 
+Shell 默认仍使用本地兼容执行。Docker sandbox 是 opt-in，可用环境变量或 CLI 显式启用，例如：
+
+```powershell
+docker build -t pp-echo-sandbox:base -f docker/sandbox-base/Dockerfile .
+$env:PP_ECHO_SANDBOX_BACKEND="docker"
+python -m pp_agent.cli.main run "inspect this repo"
+```
+
+Web UI 启用 sandbox 后会自动使用 `pp-echo-sandbox:base` 作为默认镜像，并可通过 `/api/sandbox/status?session_id=<session-id>` 检查 Docker CLI、daemon 和镜像状态。pp-Echo 不会静默安装 Docker；如果缺少 Docker，请按状态接口或 Settings 页面给出的 Docker Desktop 链接安装，再 build base image。
+
+默认 Docker 镜像是通用 `pp-echo-sandbox:base`。项目需要 Python/Node/Java/C++ 等工具链时，请构建自己的项目镜像并通过 `--sandbox-image my-project-dev:latest` 或 `PP_ECHO_SANDBOX_IMAGE` 指定。完整语义见 [docs/sandbox.md](docs/sandbox.md)。
+
+Docker sandbox 默认无网络，使用 `--network none`。如果确实需要网络，请先阅读 [docs/sandbox.md](docs/sandbox.md)；当前 `network_allowlist` 只是配置和校验入口，不代表完整域名级 allowlist enforcement 已实现。
+
+Docker sandbox 产生的文件变更只会先进入 patch candidate；必须再批准 `apply_patch_candidate`，才会写回真实 workspace。
+
 ## 🧭 文档导航
 
 - [tutorials/README.md](tutorials/README.md)：7 天读懂 pp-Echo。
@@ -363,6 +379,7 @@ pp-Echo 的安全设计重点是“可见、可审、可回退”：
 - [docs/architecture/README.md](docs/architecture/README.md)：系统架构导引。
 - [docs/interview-guide.md](docs/interview-guide.md)：实习与面试准备索引。
 - [docs/safety.md](docs/safety.md)：安全边界与审批策略。
+- [docs/sandbox.md](docs/sandbox.md)：Shell sandbox executor 语义与限制。
 - [docs/configuration.md](docs/configuration.md)：配置模型、工具和项目设置。
 - [docs/mcp-fetch-integration.md](docs/mcp-fetch-integration.md)：MCP 集成说明。
 - [docs/bot_center.md](docs/bot_center.md)：Bot Center / Bot Gateway 设计与安全边界。

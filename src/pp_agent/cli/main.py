@@ -10,6 +10,8 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+from pp_agent.sandbox.config import apply_sandbox_cli_overrides
+
 try:
     import typer
 except ImportError:  # pragma: no cover
@@ -23,6 +25,13 @@ if app:
     def chat(
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
         session_id: Optional[str] = typer.Option(None, "--session"),
+        sandbox_backend: Optional[str] = typer.Option(None, "--sandbox-backend"),
+        sandbox_image: Optional[str] = typer.Option(None, "--sandbox-image"),
+        sandbox_network: bool = typer.Option(False, "--sandbox-network"),
+        sandbox_network_allowlist: Optional[str] = typer.Option(None, "--sandbox-network-allowlist"),
+        sandbox_network_dangerously_allow_all: bool = typer.Option(False, "--sandbox-network-dangerously-allow-all"),
+        sandbox_memory: Optional[str] = typer.Option(None, "--sandbox-memory"),
+        sandbox_cpus: Optional[str] = typer.Option(None, "--sandbox-cpus"),
     ) -> None:
         """
         启动交互式聊天模式
@@ -31,6 +40,15 @@ if app:
         """
         from pp_agent.cli.chat import chat_main
 
+        apply_sandbox_cli_overrides(
+            backend=sandbox_backend,
+            image=sandbox_image,
+            network_access=True if sandbox_network else None,
+            network_allowlist=sandbox_network_allowlist,
+            network_dangerously_allow_all=True if sandbox_network_dangerously_allow_all else None,
+            memory=sandbox_memory,
+            cpus=sandbox_cpus,
+        )
         chat_main(workspace, session_id)
 
 
@@ -41,6 +59,13 @@ if app:
         session_id: Optional[str] = typer.Option(None, "--session"),
         json_mode: bool = typer.Option(False, "--json"),
         mode: str = typer.Option("default", "--mode"),
+        sandbox_backend: Optional[str] = typer.Option(None, "--sandbox-backend"),
+        sandbox_image: Optional[str] = typer.Option(None, "--sandbox-image"),
+        sandbox_network: bool = typer.Option(False, "--sandbox-network"),
+        sandbox_network_allowlist: Optional[str] = typer.Option(None, "--sandbox-network-allowlist"),
+        sandbox_network_dangerously_allow_all: bool = typer.Option(False, "--sandbox-network-dangerously-allow-all"),
+        sandbox_memory: Optional[str] = typer.Option(None, "--sandbox-memory"),
+        sandbox_cpus: Optional[str] = typer.Option(None, "--sandbox-cpus"),
     ) -> None:
         """
         执行单条指令，非交互式调用代理
@@ -52,15 +77,40 @@ if app:
         """
         from pp_agent.cli.commands.run import run_main
 
+        apply_sandbox_cli_overrides(
+            backend=sandbox_backend,
+            image=sandbox_image,
+            network_access=True if sandbox_network else None,
+            network_allowlist=sandbox_network_allowlist,
+            network_dangerously_allow_all=True if sandbox_network_dangerously_allow_all else None,
+            memory=sandbox_memory,
+            cpus=sandbox_cpus,
+        )
         run_main(prompt, workspace, session_id, json_mode=json_mode, mode=mode)
 
     @app.command()
     def tui(
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
         session_id: Optional[str] = typer.Option(None, "--session"),
+        sandbox_backend: Optional[str] = typer.Option(None, "--sandbox-backend"),
+        sandbox_image: Optional[str] = typer.Option(None, "--sandbox-image"),
+        sandbox_network: bool = typer.Option(False, "--sandbox-network"),
+        sandbox_network_allowlist: Optional[str] = typer.Option(None, "--sandbox-network-allowlist"),
+        sandbox_network_dangerously_allow_all: bool = typer.Option(False, "--sandbox-network-dangerously-allow-all"),
+        sandbox_memory: Optional[str] = typer.Option(None, "--sandbox-memory"),
+        sandbox_cpus: Optional[str] = typer.Option(None, "--sandbox-cpus"),
     ) -> None:
         from pp_agent.tui.main import tui_main
 
+        apply_sandbox_cli_overrides(
+            backend=sandbox_backend,
+            image=sandbox_image,
+            network_access=True if sandbox_network else None,
+            network_allowlist=sandbox_network_allowlist,
+            network_dangerously_allow_all=True if sandbox_network_dangerously_allow_all else None,
+            memory=sandbox_memory,
+            cpus=sandbox_cpus,
+        )
         tui_main(workspace, session_id)
 
     @app.command()
@@ -716,14 +766,38 @@ def main() -> None:
         return
     
     # 无Typer依赖时，使用Python内置argparse实现相同功能
+    def add_sandbox_args(command_parser) -> None:
+        command_parser.add_argument("--sandbox-backend", choices=["local", "docker"], default=None)
+        command_parser.add_argument("--sandbox-image", default=None)
+        command_parser.add_argument("--sandbox-network", action="store_true")
+        command_parser.add_argument("--sandbox-network-allowlist", default=None)
+        command_parser.add_argument("--sandbox-network-dangerously-allow-all", action="store_true")
+        command_parser.add_argument("--sandbox-memory", default=None)
+        command_parser.add_argument("--sandbox-cpus", default=None)
+
+    def apply_parsed_sandbox_args(parsed_args) -> None:
+        apply_sandbox_cli_overrides(
+            backend=getattr(parsed_args, "sandbox_backend", None),
+            image=getattr(parsed_args, "sandbox_image", None),
+            network_access=True if getattr(parsed_args, "sandbox_network", False) else None,
+            network_allowlist=getattr(parsed_args, "sandbox_network_allowlist", None),
+            network_dangerously_allow_all=(
+                True if getattr(parsed_args, "sandbox_network_dangerously_allow_all", False) else None
+            ),
+            memory=getattr(parsed_args, "sandbox_memory", None),
+            cpus=getattr(parsed_args, "sandbox_cpus", None),
+        )
+
     parser = argparse.ArgumentParser(description="Personal Python coding agent for Windows 10.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     chat_parser = subparsers.add_parser("chat")
     chat_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     chat_parser.add_argument("--session", default=None)
+    add_sandbox_args(chat_parser)
     tui_parser = subparsers.add_parser("tui")
     tui_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     tui_parser.add_argument("--session", default=None)
+    add_sandbox_args(tui_parser)
     web_parser = subparsers.add_parser("web")
     web_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
     web_parser.add_argument("--host", default="127.0.0.1")
@@ -741,6 +815,7 @@ def main() -> None:
     run_parser.add_argument("--session", default=None)
     run_parser.add_argument("--json", action="store_true")
     run_parser.add_argument("--mode", default="default")
+    add_sandbox_args(run_parser)
     sessions_parser = subparsers.add_parser("sessions")
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_command", required=True)
     sessions_list_parser = sessions_subparsers.add_parser("list")
@@ -919,10 +994,12 @@ def main() -> None:
     if command == "chat":
         from pp_agent.cli.chat import chat_main
 
+        apply_parsed_sandbox_args(args)
         chat_main(Path(args.workspace), args.session)
     elif command == "tui":
         from pp_agent.tui.main import tui_main
 
+        apply_parsed_sandbox_args(args)
         tui_main(Path(args.workspace), args.session)
     elif command == "web":
         from pp_agent.cli.commands.web import web_main
@@ -939,6 +1016,7 @@ def main() -> None:
     elif command == "run":
         from pp_agent.cli.commands.run import run_main
 
+        apply_parsed_sandbox_args(args)
         run_main(args.prompt, Path(args.workspace), args.session, json_mode=args.json, mode=args.mode)
     elif command == "sessions" and args.sessions_command == "list":
         from pp_agent.cli.commands.sessions import sessions_list_main

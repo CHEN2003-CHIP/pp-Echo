@@ -539,7 +539,33 @@ def test_agent_runtime_keeps_split_multi_tool_calls_separate(tmp_path: Path) -> 
 
     list_calls = [event for event in events if event.type == "tool_call" and event.tool_name == "list_files"]
     assert len(list_calls) == 2
+    assert [event.details.get("tool_call_id") for event in list_calls] == ["call-1", "call-2"]
     assert [message.tool_name for message in agent.state.messages if message.role == "tool"][:2] == ["list_files", "list_files"]
+
+
+def test_runtime_tool_call_events_match_actual_tool_executions(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    agent = build_agent(tmp_path, SplitMultiToolCallLLMClient(), require_plan_approval=False)
+
+    events = agent.prompt("inspect directories")
+
+    tool_call_ids = [
+        event.details.get("tool_call_id")
+        for event in events
+        if event.type == "tool_call" and event.tool_name == "list_files"
+    ]
+    tool_message_ids = [
+        message.tool_call_id
+        for message in agent.state.messages
+        if message.role == "tool" and message.tool_name == "list_files"
+    ][:2]
+
+    assert tool_call_ids == tool_message_ids == ["call-1", "call-2"]
+    assert [
+        event.details.get("tool_call_id")
+        for event in events
+        if event.type == "tool_policy_decision" and event.tool_name == "list_files"
+    ] == ["call-1", "call-2"]
 
 
 def test_agent_runtime_promotes_textual_tool_call_syntax_to_real_tool_call(tmp_path: Path) -> None:

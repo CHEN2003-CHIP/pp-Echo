@@ -49,6 +49,45 @@ def test_web_api_health_and_session_create(tmp_path: Path) -> None:
     assert created.json()["session_id"] == "session-1"
 
 
+def test_web_api_sandbox_status_uses_session_config_and_reports_missing_docker(tmp_path: Path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manager = WebSessionManager(workspace, runtime_factory=_factory)
+    client = TestClient(_app(tmp_path, manager))
+    session_id = client.post("/api/sessions").json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/config/set", json={"path": "sandbox.enabled", "value": True})
+    monkeypatch.setattr("pp_agent.sandbox.preflight.shutil.which", lambda name: None)
+
+    response = client.get(f"/api/sandbox/status?session_id={session_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["backend"] == "docker"
+    assert payload["ok"] is False
+    assert payload["docker_found"] is False
+    assert "docker executable was not found" in payload["message"]
+    assert "docker build -t pp-echo-sandbox:base" in payload["build_command"]
+    assert payload["install_url"]
+
+
+def test_web_api_sandbox_status_local_is_non_secure_compat(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    client = TestClient(_app(tmp_path))
+
+    response = client.get("/api/sandbox/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["backend"] == "local"
+    assert payload["sandbox_isolation"] == "none-local-compat"
+    assert "not secure isolation" in payload["message"]
+
+
 def test_web_api_workspace_status_includes_git_branch(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from pp_agent.api import sdk
 from pp_agent.app import bootstrap
+from pp_agent.config import get_config_manager
 from pp_agent.cli.commands.approvals import (
     approve_or_execute_pending_action,
     load_pending_action_or_user_error,
@@ -17,6 +18,7 @@ from pp_agent.cli.commands.approvals import (
 from pp_agent.web.session_manager import WebSessionManager
 from pp_agent.web.workspaces import WebWorkspaceManager
 from pp_agent.server.error_logging import write_server_error_log
+from pp_agent.sandbox.preflight import sandbox_preflight_status
 
 
 class PromptRequest(BaseModel):
@@ -196,6 +198,20 @@ def create_app(
     def settings() -> dict:
         loaded = bootstrap.load_settings(active_workspace())
         return loaded.model_dump(mode="json")
+
+    @app.get("/api/sandbox/status")
+    def sandbox_status(session_id: Optional[str] = None) -> dict:
+        """Return Web-friendly sandbox readiness for the project or session config."""
+
+        try:
+            snapshot = get_config_manager(active_workspace()).get_effective_snapshot(session_id=session_id)
+            status = sandbox_preflight_status(config=snapshot.settings.sandbox, workspace=active_workspace())
+            payload = status.to_dict()
+            payload["session_id"] = session_id
+            payload["config_source"] = snapshot.source_map.get("sandbox.backend") or snapshot.source_map.get("sandbox.enabled") or "default"
+            return payload
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/sessions")
     def list_sessions() -> dict:

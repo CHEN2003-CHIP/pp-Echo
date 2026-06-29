@@ -62,6 +62,7 @@ export function isActivityRuntimeEvent(event: RuntimeEvent) {
     event.type.startsWith("planner_") ||
     event.type.startsWith("tool_") ||
     event.type.startsWith("subagent_") ||
+    event.type.startsWith("sandbox_") ||
     event.type.startsWith("checkpoint_") ||
     event.type.startsWith("session_safe_rewind") ||
     event.type.startsWith("queue_") ||
@@ -161,6 +162,7 @@ function stepKind(event: RuntimeEvent): ActivityStep["kind"] {
   if (event.type.startsWith("reasoning_") || event.type === "before_provider_request" || event.type === "provider_response" || event.type === "provider_error") return "progress";
   if (event.type.startsWith("planner_")) return "planner";
   if (event.type.startsWith("subagent_")) return "subagent";
+  if (event.type.startsWith("sandbox_")) return "tool";
   if (event.type.startsWith("checkpoint_") || event.type.startsWith("session_safe_rewind")) return "checkpoint";
   if (event.type === "approval_result" || event.type.includes("approval")) return "approval";
   if (event.type.startsWith("tool_")) {

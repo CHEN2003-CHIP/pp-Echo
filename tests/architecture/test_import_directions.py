@@ -22,6 +22,7 @@ CHECKED_LAYERS = {
     "memory",
     "prompts",
     "runtime",
+    "sandbox",
     "skills",
     "storage",
     "subagents",
@@ -31,19 +32,19 @@ CHECKED_LAYERS = {
     "web_tools",
 }
 ALLOWED = {
-    "cli": {"cli", "app", "runtime", "storage", "domain", "api", "config", "evaluation", "learning", "memory", "skills", "tools", "tui", "web", "web_tools", "onboarding"},
-    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp", "web_tools", "config", "learning", "memory", "prompts", "skills", "subagents", "browser", "attachments", "observability"},
+    "cli": {"cli", "app", "runtime", "storage", "domain", "api", "config", "evaluation", "learning", "memory", "skills", "tools", "tui", "web", "web_tools", "onboarding", "sandbox"},
+    "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp", "web_tools", "config", "learning", "memory", "prompts", "skills", "subagents", "browser", "attachments", "observability", "sandbox"},
     "runtime": {"runtime", "storage", "llm", "tools", "domain", "config", "memory", "subagents", "observability"},
     "llm": {"llm", "domain"},
-    "storage": {"storage", "domain", "llm", "learning", "memory"},
+    "storage": {"storage", "domain", "llm", "learning", "memory", "sandbox"},
     "domain": {"domain"},
     "extensions": {"extensions", "runtime", "domain"},
-    "tools": {"tools", "storage", "domain", "api", "runtime", "subagents", "attachments", "observability"},
+    "tools": {"tools", "storage", "domain", "api", "runtime", "subagents", "attachments", "observability", "sandbox"},
     "capabilities": {"capabilities", "skills", "tools", "domain"},
     "mcp": {"mcp"},
     "web_tools": {"web_tools", "domain", "runtime", "storage", "tools"},
     "api": {"api", "runtime", "storage", "domain"},
-    "config": {"config", "storage", "session"},
+    "config": {"config", "storage", "session", "sandbox", "llm"},
     "evaluation": {"evaluation", "api", "domain", "llm", "memory", "runtime"},
     "learning": {"learning", "domain", "memory", "runtime", "storage"},
     "memory": {"memory", "domain", "runtime", "storage", "tools"},
@@ -53,7 +54,16 @@ ALLOWED = {
     "browser": {"browser", "storage", "tools", "web_tools"},
     "tui": {"tui", "app", "domain", "runtime"},
     "web": {"web", "api", "app", "cli", "domain", "runtime", "server", "storage"},
+    "sandbox": {"sandbox"},
 }
+SANDBOX_CONTRACT_MODULES = {
+    "pp_agent.sandbox",
+    "pp_agent.sandbox.base",
+    "pp_agent.sandbox.changes",
+    "pp_agent.sandbox.config",
+    "pp_agent.sandbox.network",
+}
+SANDBOX_RESOLVER_ALLOWED_LAYERS = {"app", "sandbox"}
 REMOVED_TOP_LEVEL_PACKAGES = {"agent_cli", "agent_core", "storage", "tools"}
 
 
@@ -67,6 +77,20 @@ def _layer_for(path: Path) -> str | None:
     return layer
 
 
+def _allowed_import(layer: str, module_name: str) -> bool:
+    target = module_name.split(".")[1]
+    if target != "sandbox":
+        return target in ALLOWED[layer]
+    if module_name == "pp_agent.sandbox.resolver":
+        return layer in SANDBOX_RESOLVER_ALLOWED_LAYERS
+    if module_name.startswith(("pp_agent.sandbox.docker", "pp_agent.sandbox.local")):
+        return layer == "sandbox"
+    # sandbox.base/changes/config/network are shared contract modules:
+    # they contain dataclasses, protocols, config parsing, and pure helpers,
+    # not backend execution implementations.
+    return module_name in SANDBOX_CONTRACT_MODULES and target in ALLOWED[layer]
+
+
 def test_import_directions_for_core_layers() -> None:
     violations: list[str] = []
     for path in PACKAGE_ROOT.rglob("*.py"):
@@ -76,15 +100,13 @@ def test_import_directions_for_core_layers() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("pp_agent."):
-                target = node.module.split(".")[1]
-                if target not in ALLOWED[layer]:
+                if not _allowed_import(layer, node.module):
                     violations.append(f"{path.relative_to(ROOT)} imports {node.module}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if not alias.name.startswith("pp_agent."):
                         continue
-                    target = alias.name.split(".")[1]
-                    if target not in ALLOWED[layer]:
+                    if not _allowed_import(layer, alias.name):
                         violations.append(f"{path.relative_to(ROOT)} imports {alias.name}")
     assert not violations, "\n".join(sorted(violations))
 

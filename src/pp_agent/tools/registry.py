@@ -15,6 +15,7 @@ from pp_agent.domain import ToolCall, ToolSpec
 from pp_agent.observability.hooks import ObservabilityHooks
 from pp_agent.observability.noop import NoopObservabilityHooks
 from pp_agent.observability.redaction import redact_mapping, safe_preview, sanitize_tool_args
+from pp_agent.sandbox.base import SandboxExecutor
 from pp_agent.storage.settings import ToolPolicyConfig
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.file_tools import (
@@ -43,6 +44,7 @@ from pp_agent.tools.repo_tools import GitDiffWorktreeTool, GitStatusTool, GrepCo
 from pp_agent.tools.search_tool import SearchTextTool
 from pp_agent.tools.session_tools import ExecuteSafeRewindTool, PreviewSafeRewindTool
 from pp_agent.tools.shell_tool import PowerShellTool
+from pp_agent.tools.shell_tool import default_local_sandbox_executor
 from pp_agent.attachments.tools import (
     InspectAttachmentTool,
     ListAttachmentsTool,
@@ -179,6 +181,8 @@ def _tool_trace_attributes(tool_name: str, tool: object, spec: object | None, me
         "is_mcp_tool": tool_family == "mcp" or category == "mcp" or "." in tool_name,
         "is_subagent_tool": tool_name in {"spawn_subagent", "orchestrate_agents"} or tool_family == "subagent",
         "source": "tool_registry_middleware",
+        "span_kind": "tool_execution",
+        "phase": "execution",
     }
 
 
@@ -303,6 +307,8 @@ class ToolRegistry:
         current_session_id: Optional[str] = None,
         capability_profile: Optional["SubAgentProfile"] = None,
         observability: ObservabilityHooks | None = None,
+        sandbox_config: Any | None = None,
+        sandbox_executor: SandboxExecutor | None = None,
     ) -> None:
         """
         初始化工具注册中心
@@ -320,6 +326,8 @@ class ToolRegistry:
             ask_tools=self.policy.ask_tools,
         )
         self.current_session_id = current_session_id
+        self.sandbox_config = sandbox_config
+        self.sandbox_executor = sandbox_executor or default_local_sandbox_executor()
         self._runtime_event_emitter: Optional[Callable[[Any], None]] = None
         self.observability: ObservabilityHooks = observability or NoopObservabilityHooks()
         self._runtime_event_lock = threading.RLock()
@@ -803,6 +811,9 @@ class ToolRegistry:
             "permission_domain": decision.permission_domain,
             "target": decision.target,
             "source": "tool_registry_policy",
+            "span_kind": "tool_policy_decision",
+            "phase": "policy",
+            "event_type": "tool_policy_decision",
         }
         self.observability.record_completed_span(
             "policy.decision",
@@ -811,7 +822,7 @@ class ToolRegistry:
             attributes=attributes,
         )
         self.emit_runtime_event(
-            "tool_call",
+            "tool_policy_decision",
             tool_name=name,
             details=attributes,
             is_error=decision.action == "deny",
@@ -1063,7 +1074,7 @@ class ToolRegistry:
             self._registration("write_file", self._spec_write_file, lambda: WriteFileTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id)),
             self._registration("edit_file", self._spec_edit_file, lambda: EditFileTool(self.workspace, self.policy_evaluator, current_session_id=self.current_session_id)),
             self._registration("preview_pending_action", self._spec_preview_pending_action, lambda: PreviewPendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self)),
-            self._registration("approve_pending_action", self._spec_approve_pending_action, lambda: ApprovePendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self)),
+            self._registration("approve_pending_action", self._spec_approve_pending_action, lambda: ApprovePendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self, sandbox_executor=self.sandbox_executor)),
             self._registration("reject_pending_action", self._spec_reject_pending_action, lambda: RejectPendingActionTool(self.workspace, self.policy_evaluator)),
             self._registration("list_pending_actions", self._spec_list_pending_actions, lambda: ListPendingActionsTool(self.workspace, self.policy_evaluator)),
             self._registration("list_files", self._spec_list_files, lambda: ListFilesTool(self.workspace, self.policy_evaluator)),
@@ -1084,7 +1095,12 @@ class ToolRegistry:
             self._registration(
                 "run_shell",
                 self._spec_run_shell,
-                lambda: PowerShellTool(self.workspace, self.policy_evaluator, default_timeout_seconds=self.policy.shell_timeout_seconds),
+                lambda: PowerShellTool(
+                    self.workspace,
+                    self.policy_evaluator,
+                    default_timeout_seconds=getattr(self.sandbox_config, "timeout_seconds", None) or self.policy.shell_timeout_seconds,
+                    sandbox_executor=self.sandbox_executor,
+                ),
             ),
         ]
         return {registration.name: registration for registration in registrations}

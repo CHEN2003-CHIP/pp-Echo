@@ -44,6 +44,15 @@ _FIELDS: tuple[ConfigField, ...] = (
     ConfigField("tool_policy.confirm_edit_file", "boolean", "tools", "next_turn"),
     ConfigField("tool_policy.confirm_run_shell", "boolean", "tools", "next_turn"),
     ConfigField("tool_policy.confirm_high_risk_plan", "boolean", "tools", "next_turn"),
+    ConfigField("sandbox.enabled", "boolean", "tools", "rebuild_runtime", "Enable an opt-in non-local sandbox backend."),
+    ConfigField("sandbox.backend", "string", "tools", "rebuild_runtime", "Sandbox backend for approved shell commands.", editor="select", options=("local", "docker")),
+    ConfigField("sandbox.image", "string", "tools", "rebuild_runtime", "Docker image used when sandbox.backend is docker."),
+    ConfigField("sandbox.network_access", "boolean", "tools", "rebuild_runtime", "Allow Docker sandbox network access. Defaults to false."),
+    ConfigField("sandbox.network_allowlist", "array", "tools", "rebuild_runtime", "Network allowlist entries. Currently validated but not enforced without an egress gateway."),
+    ConfigField("sandbox.network_dangerously_allow_all", "boolean", "tools", "rebuild_runtime", "Allow full Docker bridge networking when explicitly accepted."),
+    ConfigField("sandbox.memory", "string", "tools", "rebuild_runtime", "Docker memory limit."),
+    ConfigField("sandbox.cpus", "string", "tools", "rebuild_runtime", "Docker CPU limit."),
+    ConfigField("sandbox.timeout_seconds", "integer|null", "tools", "rebuild_runtime", "Optional sandbox default timeout.", minimum=1),
     ConfigField("capabilities.builtin_tools.enable", "boolean", "tools", "rebuild_runtime"),
     ConfigField("capabilities.skills.enable_project", "boolean", "skills", "rebuild_runtime"),
     ConfigField("capabilities.skills.enable_user", "boolean", "skills", "rebuild_runtime"),
@@ -226,6 +235,10 @@ def validate_settings(settings: Settings) -> None:
         raise ConfigValidationError([config_error("capabilities.web.search_timeout_seconds", "minimum", "must be >= 1")])
     if settings.capabilities.web.fetch_timeout_seconds < 1:
         raise ConfigValidationError([config_error("capabilities.web.fetch_timeout_seconds", "minimum", "must be >= 1")])
+    try:
+        settings.sandbox.normalized()
+    except ValueError as exc:
+        raise ConfigValidationError([config_error("sandbox.backend", "value", str(exc))]) from exc
 
 
 def reload_policy_for_paths(paths: list[str]) -> ReloadPolicy:

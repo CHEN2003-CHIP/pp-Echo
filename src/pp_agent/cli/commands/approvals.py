@@ -10,6 +10,7 @@ from pp_agent.cli.render.approvals import approvals_summary_payload, render_appr
 from pp_agent.cli.render.runtime import console, render_event
 from pp_agent.runtime import AgentRuntime
 from pp_agent.tools.base import ToolExecutionResult
+from pp_agent.tools.file_tools import ApprovePendingActionTool
 
 
 def load_pending_action(workspace: Path, token: str) -> dict:
@@ -44,7 +45,9 @@ def _external_approval_base_result(
     session_id: str,
 ) -> dict:
     details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
-    result_details = result.details or {}
+    result_details = dict(result.details or {})
+    if "exit_code" not in result_details and isinstance(result_details.get("returncode"), int):
+        result_details["exit_code"] = result_details["returncode"]
     lifecycle = result_details.get("lifecycle") if isinstance(result_details, dict) else None
     if lifecycle is None:
         lifecycle = payload.get("lifecycle") or {}
@@ -111,12 +114,15 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
     except Exception as exc:  # noqa: BLE001
         lifecycle = {"state": "execution_failed", "updated_at": time.time(), "failure_reason_code": "approval_execution_error", "failure_reason_detail": str(exc)}
         details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
+        failure_details = {"error": str(exc), "token": token, "action_type": payload["action_type"], "lifecycle": lifecycle}
+        if payload["action_type"] == "run_shell":
+            failure_details.update(ApprovePendingActionTool._shell_failure_details(str(exc)))
         failure_result = ToolExecutionResult(
             tool_call_id=str(payload.get("tool_call_id") or details.get("tool_call_id") or token or ""),
             tool_name="approve_pending_action",
             content=str(exc),
             is_error=True,
-            details={"error": str(exc), "token": token, "action_type": payload["action_type"], "lifecycle": lifecycle},
+            details=failure_details,
         )
         response = _external_approval_base_result(payload, token, "approve", failure_result, session_id=_payload_session_id(payload))
         response["success"] = False

@@ -54,6 +54,7 @@ from pp_agent.runtime.hooks import BeforeToolCallDecision, RuntimeHooks
 from pp_agent.runtime.lifecycle import CHECKPOINT_BEFORE_CREATE, CHECKPOINT_CREATED
 from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.session_host import SessionHost
+from pp_agent.sandbox.resolver import get_sandbox_executor
 from pp_agent.skills import skill_search_roots
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.checkpoints import CheckpointStore
@@ -69,6 +70,10 @@ from pp_agent.subagents.catalog import SubAgentCatalog
 from pp_agent.subagents.specs import SubAgentSpec
 
 logger = logging.getLogger(__name__)
+
+
+def _sandbox_executor_for_settings(settings: Settings):
+    return get_sandbox_executor(config=settings.sandbox)
 
 
 @dataclass
@@ -764,7 +769,12 @@ def create_tool_registry(
     :return: 工具注册器实例
     """
     settings = load_settings(workspace)
-    registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    registry = ToolRegistry(
+        workspace,
+        policy=settings.tool_policy,
+        sandbox_config=settings.sandbox,
+        sandbox_executor=_sandbox_executor_for_settings(settings),
+    )
     register_file_memory_tools(registry, settings=settings)
     register_core_memory_tools(registry, settings=settings)
     if include_dynamic_extensions:
@@ -837,7 +847,12 @@ def create_capability_providers(
     replacing those surfaces or changing their execution contracts.
     """
     settings = settings or load_settings(workspace)
-    registry = ToolRegistry(workspace, policy=settings.tool_policy)
+    registry = ToolRegistry(
+        workspace,
+        policy=settings.tool_policy,
+        sandbox_config=settings.sandbox,
+        sandbox_executor=_sandbox_executor_for_settings(settings),
+    )
     register_file_memory_tools(registry, settings=settings)
     register_core_memory_tools(registry, settings=settings)
     extension_registry = ExtensionRegistry()
@@ -1030,6 +1045,8 @@ def create_runtime_from_record(
         policy=settings.tool_policy,
         current_session_id=record.id,
         capability_profile=options.subagent_profile,
+        sandbox_config=settings.sandbox,
+        sandbox_executor=_sandbox_executor_for_settings(settings),
     )
     if options.mode == "main" or (options.subagent_profile is not None and options.subagent_profile.memory.allow_memory_search):
         register_file_memory_tools(tool_registry, settings=settings)

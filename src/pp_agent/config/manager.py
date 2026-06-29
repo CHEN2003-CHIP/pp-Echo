@@ -30,6 +30,7 @@ from pp_agent.storage.settings import (
     SUBAGENT_ORCHESTRATION_PROMPT,
     Settings,
 )
+from pp_agent.sandbox.config import sandbox_config_from_env
 
 
 class ConfigConflictError(ValueError):
@@ -270,6 +271,7 @@ class ConfigManager:
         settings = Settings(workspace=workspace, global_dir=global_dir, project_dir=project_dir)
         settings._apply_environment_overrides()
         settings.apply_project_config_data(data)
+        settings.sandbox = sandbox_config_from_env(base=settings.sandbox)
         self._apply_system_prompts(settings)
         return settings
 

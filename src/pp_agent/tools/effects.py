@@ -8,6 +8,13 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from pp_agent.sandbox.changes import (
+    content_digest,
+    is_protected_path,
+    normalize_structured_changes,
+    structured_changes_digest as hash_structured_changes,
+)
+
 
 CONFIDENCE_HIGH = "high"
 CONFIDENCE_MEDIUM = "medium"
@@ -28,10 +35,6 @@ _RISK_ORDER = {
     "networked": 4,
     "destructive": 5,
 }
-
-
-def content_digest(content: str) -> str:
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def normalize_shell_command(command: str) -> str:
@@ -211,22 +214,6 @@ def classify_confidence_band(score: float | None) -> str:
     if score > 0:
         return CONFIDENCE_LOW
     return CONFIDENCE_UNKNOWN
-
-
-def is_protected_path(workspace: Path, target_path: Path) -> bool:
-    resolved = target_path.resolve()
-    try:
-        rel = resolved.relative_to(workspace.resolve()).as_posix().lower()
-    except ValueError:
-        rel = resolved.name.lower()
-    name = resolved.name.lower()
-    if rel == ".env" or name == ".env":
-        return True
-    if name.startswith(".env."):
-        return True
-    if name.endswith(".pem") or name.endswith(".key"):
-        return True
-    return rel == ".pp-agent" or rel.startswith(".pp-agent/") or rel == ".git" or rel.startswith(".git/")
 
 
 def _is_within_workspace(workspace: Path, target_path: Path) -> bool:
@@ -779,6 +766,77 @@ def build_shell_effect(
         "normalized_arguments": normalized_arguments,
         "analysis": analysis,
         "classification": classification,
+        "summary": analysis["summary"],
+        "payload_digest": payload_digest(permission_domain, tool_name, normalized_arguments, baseline=None),
+        "created_at": created_at or time.time(),
+        "baseline": None,
+    }
+
+
+def build_patch_candidate_effect(
+    *,
+    tool_name: str,
+    permission_domain: str,
+    patch: str,
+    changed_files: list[dict[str, Any]],
+    patch_summary: str,
+    source_shell_command_digest: str,
+    sandbox_backend: str,
+    sandbox_mode: str,
+    patch_truncated: bool = False,
+    structured_changes: list[dict[str, Any]] | None = None,
+    structured_changes_digest: str | None = None,
+    structured_changes_truncated: bool = False,
+    effect_id: str | None = None,
+    created_at: float | None = None,
+) -> dict[str, Any]:
+    """Build an exact-effect record for applying a sandbox patch candidate."""
+
+    patch_hash = content_digest(patch)
+    canonical_changed_files = canonicalize_json_value(changed_files)
+    canonical_structured_changes = canonicalize_json_value(normalize_structured_changes(structured_changes))
+    structured_hash = structured_changes_digest or hash_structured_changes(structured_changes)
+    normalized_arguments = {
+        "patch_digest": patch_hash,
+        "changed_files": canonical_changed_files,
+        "patch_summary": patch_summary,
+        "source_shell_command_digest": source_shell_command_digest,
+        "sandbox_backend": sandbox_backend,
+        "sandbox_mode": sandbox_mode,
+        "patch_truncated": bool(patch_truncated),
+        "structured_changes": canonical_structured_changes,
+        "structured_changes_digest": structured_hash,
+        "structured_changes_truncated": bool(structured_changes_truncated),
+    }
+    analysis = _analysis(
+        family="patch_candidate",
+        permission_domain=permission_domain,
+        risk_class="workspace_mutation",
+        summary=f"Apply sandbox patch candidate: {patch_summary}",
+        confidence_score=0.9,
+        touches_workspace=True,
+        touches_external=False,
+        requests_network=False,
+        destructive_hint=False,
+        protected_path_hint=False,
+        extra={
+            "patch_digest": patch_hash,
+            "changed_file_count": len(changed_files),
+            "structured_changes_count": len(canonical_structured_changes),
+            "structured_changes_digest": structured_hash,
+            "structured_changes_truncated": bool(structured_changes_truncated),
+            "sandbox_backend": sandbox_backend,
+            "sandbox_mode": sandbox_mode,
+            "patch_truncated": bool(patch_truncated),
+        },
+    )
+    return {
+        "effect_id": effect_id or str(uuid.uuid4()),
+        "permission_domain": permission_domain,
+        "tool_name": tool_name,
+        "effect_type": "patch_apply",
+        "normalized_arguments": normalized_arguments,
+        "analysis": analysis,
         "summary": analysis["summary"],
         "payload_digest": payload_digest(permission_domain, tool_name, normalized_arguments, baseline=None),
         "created_at": created_at or time.time(),

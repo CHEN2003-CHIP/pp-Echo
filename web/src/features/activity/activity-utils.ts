@@ -26,7 +26,7 @@ export function eventActivityId(event: RuntimeEvent, index = 0) {
   if (id) return id;
   const runId = firstString(event.run_id, activity.run_id) || `run:${event.turn_id ?? "unknown"}`;
   const callId = firstString(details.tool_call_id);
-  if (event.type.startsWith("tool_")) return `${runId}:tool:${callId || event.tool_name || index}`;
+  if (event.type.startsWith("tool_") || event.type.startsWith("sandbox_")) return `${runId}:tool:${callId || event.tool_name || firstString(details.token) || index}`;
   if (event.type.startsWith("planner_")) return `${runId}:planner:${firstString(details.token) || event.turn_id || "turnless"}`;
   if (event.type.startsWith("reasoning_") || event.type === "before_provider_request" || event.type === "provider_response" || event.type === "provider_error") return `${runId}:analysis:${event.turn_id ?? index}`;
   if (event.type.startsWith("subagent_")) return `${runId}:subagent:${firstString(details.child_session_id, details.session_id, details.spec_name) || event.turn_id || "turnless"}`;
@@ -43,7 +43,7 @@ export function eventStatus(event: RuntimeEvent): ActivityStatus {
   if (event.is_error || event.type === "error" || event.type === "tool_error" || event.type === "provider_error" || event.type.endsWith("_failed") || event.type.endsWith("_fail")) return "error";
   if (event.type.includes("rejected")) return "warning";
   if (event.type.includes("pending")) return "pending";
-  if (event.type.endsWith("_start") || event.type === "tool_call" || event.type === "before_provider_request" || event.type === "reasoning_delta" || event.type === "turn_phase_changed") return "running";
+  if (event.type.endsWith("_start") || event.type === "tool_call" || event.type === "sandbox_preflight" || event.type === "before_provider_request" || event.type === "reasoning_delta" || event.type === "turn_phase_changed") return "running";
   return "success";
 }
 
@@ -56,7 +56,7 @@ export function eventPhase(event: RuntimeEvent): ActivityPhase {
   if (event.type === "provider_response" || event.type === "reasoning_end") return "finalizing";
   if (event.type.startsWith("reasoning_") || event.type === "provider_error") return "analyzing";
   if (event.type.startsWith("planner_")) return event.type.includes("gate") ? "approval" : "planning";
-  if (event.type.startsWith("tool_")) return "tool";
+  if (event.type.startsWith("tool_") || event.type.startsWith("sandbox_")) return "tool";
   if (event.type === "approval_result" || event.type.includes("approval")) return "approval";
   if (event.type.includes("artifact")) return "artifact";
   if (event.type.startsWith("checkpoint_") || event.type.startsWith("session_safe_rewind")) return "checkpoint";

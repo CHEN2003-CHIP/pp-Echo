@@ -12,6 +12,16 @@ def _registry_with_trace(tmp_path):
     return registry, recorder
 
 
+def _execution_span(detail, tool_call_id: str):
+    return next(
+        span
+        for span in detail.spans
+        if span.name == "tool.call"
+        and span.attributes.get("tool_call_id") == tool_call_id
+        and span.attributes.get("span_kind") == "tool_execution"
+    )
+
+
 def test_tool_registry_execute_records_middleware_span(tmp_path) -> None:
     (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
     registry, recorder = _registry_with_trace(tmp_path)
@@ -21,10 +31,11 @@ def test_tool_registry_execute_records_middleware_span(tmp_path) -> None:
     recorder.end_run()
     detail = TraceStore(tmp_path / "traces").read_run(run_id)
 
-    span = next(span for span in detail.spans if span.name == "tool.call")
+    span = _execution_span(detail, "call-1")
     assert span.attributes["tool_name"] == "read_file"
     assert span.attributes["tool_call_id"] == "call-1"
     assert span.attributes["source"] == "tool_registry_middleware"
+    assert span.attributes["phase"] == "execution"
     assert span.output["content_preview"] == "hello"
 
 
@@ -47,7 +58,7 @@ def test_tool_registry_trace_redacts_arguments_and_previews_output(tmp_path) -> 
     recorder.end_run()
     detail = TraceStore(tmp_path / "traces").read_run(run_id)
 
-    span = next(span for span in detail.spans if span.attributes.get("tool_call_id") == "call-2")
+    span = _execution_span(detail, "call-2")
     assert span.input["arguments"]["api_key"] == "[REDACTED]"
     assert len(span.output["content_preview"]) <= 2000
 
@@ -72,7 +83,7 @@ def test_tool_registry_trace_marks_result_errors_and_preserves_exceptions(tmp_pa
     recorder.end_run(status="error")
     detail = TraceStore(tmp_path / "traces").read_run(run_id)
 
-    span = next(span for span in detail.spans if span.attributes.get("tool_call_id") == "call-3")
+    span = _execution_span(detail, "call-3")
     assert span.status == "error"
     assert span.error_message == "boom"
 
@@ -85,7 +96,7 @@ def test_tool_registry_trace_includes_approval_and_changed_paths(tmp_path) -> No
     recorder.end_run()
     detail = TraceStore(tmp_path / "traces").read_run(run_id)
 
-    span = next(span for span in detail.spans if span.attributes.get("tool_call_id") == "call-write")
+    span = _execution_span(detail, "call-write")
     assert span.attributes["tool_name"] == "write_file"
     assert span.attributes["tool_family"] == "file"
     assert span.attributes["tool_category"] == "files"
@@ -121,7 +132,7 @@ def test_dynamic_tool_trace_uses_family_category_and_error_result_shape(tmp_path
     recorder.end_run()
     detail = TraceStore(tmp_path / "traces").read_run(run_id)
 
-    span = next(span for span in detail.spans if span.attributes.get("tool_call_id") == "call-mcp")
+    span = _execution_span(detail, "call-mcp")
     assert span.attributes["tool_family"] == "mcp"
     assert span.attributes["tool_category"] == "mcp"
     assert span.attributes["tool_origin"] == "mcp"

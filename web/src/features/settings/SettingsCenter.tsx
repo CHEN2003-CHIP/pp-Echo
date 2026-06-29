@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Brain, Copy, Database, Eye, EyeOff, KeyRound, RefreshCw, RotateCcw, Save, Search, Settings, ShieldCheck, SlidersHorizontal, Wifi, Wrench } from "lucide-react";
-import { api, type ConfigField, type ConfigSnapshot, type ModelConnectivityResult, type ModelProviderPreset } from "../../api";
+import { api, type ConfigField, type ConfigSnapshot, type ModelConnectivityResult, type ModelProviderPreset, type SandboxStatus } from "../../api";
 
 type SettingsCategory = "general" | "providers" | "tools" | "agent" | "resources" | "memory" | "security" | "advanced";
 type SettingsScope = "project" | "profile" | "session";
@@ -41,6 +41,7 @@ export function SettingsCenter({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [providers, setProviders] = useState<ModelProviderPreset[]>([]);
   const [modelCheck, setModelCheck] = useState<ModelConnectivityResult | null>(null);
+  const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null);
 
   useEffect(() => {
     load().catch((err) => setError(errorMessage(err)));
@@ -58,12 +59,14 @@ export function SettingsCenter({
   }, [snapshot, scope, profileDraft]);
 
   async function load() {
-    const [payload, providerPayload] = await Promise.all([
+    const [payload, providerPayload, sandboxPayload] = await Promise.all([
       api.config(sessionId || undefined),
-      api.modelProviders().catch(() => ({ providers: [] as ModelProviderPreset[] }))
+      api.modelProviders().catch(() => ({ providers: [] as ModelProviderPreset[] })),
+      api.sandboxStatus(sessionId || undefined).catch(() => null)
     ]);
     setSnapshot(payload);
     setProviders(providerPayload.providers);
+    setSandboxStatus(sandboxPayload);
     setProfileDraft(payload.active_profile || payload.profiles[0] || "default");
     setError("");
     setNotice("");
@@ -289,6 +292,21 @@ export function SettingsCenter({
           </section>
         ) : null}
 
+        {category === "security" && sandboxStatus ? (
+          <section className={`model-test-result ${sandboxStatus.ok ? "ok" : "warning"}`}>
+            <strong>Sandbox: {sandboxStatus.backend} / {sandboxStatus.sandbox_isolation}</strong>
+            <span>{sandboxStatus.message}</span>
+            <small>
+              image={sandboxStatus.image}
+              {sandboxStatus.docker_found !== undefined ? ` | docker=${String(sandboxStatus.docker_found)}` : ""}
+              {sandboxStatus.daemon_available !== undefined ? ` | daemon=${String(sandboxStatus.daemon_available)}` : ""}
+              {sandboxStatus.image_available !== undefined ? ` | image=${String(sandboxStatus.image_available)}` : ""}
+            </small>
+            {!sandboxStatus.ok && sandboxStatus.install_url ? <a href={sandboxStatus.install_url} target="_blank" rel="noreferrer">Install Docker</a> : null}
+            {!sandboxStatus.ok && sandboxStatus.build_command ? <code>{sandboxStatus.build_command}</code> : null}
+          </section>
+        ) : null}
+
         {category === "advanced" ? (
           <section className="settings-json-editor product">
             <div>
@@ -379,7 +397,7 @@ function categoryMatches(field: ConfigField, category: SettingsCategory) {
   if (category === "agent") return ["subagents", "storage", "learning"].includes(field.category);
   if (category === "resources") return ["skills", "plugins"].includes(field.category) || field.path.startsWith("capabilities.mcp");
   if (category === "memory") return field.category === "memory" || field.path.includes("memory");
-  if (category === "security") return field.path.includes("approval") || field.path.includes("shell") || field.path.includes("security");
+  if (category === "security") return field.path.includes("approval") || field.path.includes("shell") || field.path.includes("security") || field.path.startsWith("sandbox.");
   return false;
 }
 

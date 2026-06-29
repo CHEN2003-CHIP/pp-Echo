@@ -116,3 +116,24 @@ def test_runtime_debug_override_is_not_persisted(tmp_path) -> None:
     assert not (tmp_path / ".pp-agent" / "config.json").exists()
     runtime_overrides.clear(tmp_path)
     assert manager.get_effective_snapshot().runtime_config == {}
+
+
+def test_env_sandbox_backend_overrides_project_config(tmp_path, monkeypatch) -> None:
+    manager = ConfigManager(tmp_path)
+    manager.patch_project_config({"sandbox": {"enabled": True, "backend": "docker"}})
+    monkeypatch.setenv("PP_ECHO_SANDBOX_BACKEND", "local")
+
+    snapshot = manager.get_effective_snapshot()
+
+    assert snapshot.settings.sandbox.backend == "local"
+    assert snapshot.settings.sandbox.enabled is False
+
+
+def test_enabled_sandbox_auto_selects_docker_backend(tmp_path) -> None:
+    manager = ConfigManager(tmp_path)
+    manager.patch_project_config({"sandbox": {"enabled": True}})
+
+    snapshot = manager.get_effective_snapshot()
+
+    assert snapshot.settings.sandbox.enabled is True
+    assert snapshot.settings.sandbox.backend == "docker"

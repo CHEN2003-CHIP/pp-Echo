@@ -4,18 +4,21 @@ import difflib
 import json
 import locale
 import re
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 from pp_agent.domain import ToolSpec
 from pp_agent.attachments.importer import AttachmentWorkspaceImporter
+from pp_agent.sandbox.base import SandboxExecutor, SandboxRunRequest
+from pp_agent.sandbox.changes import bytes_digest, normalize_structured_changes, structured_changes_digest as hash_structured_changes
+from pp_agent.sandbox.preflight import DockerSandboxPreflightError
 from pp_agent.storage.approvals import PendingActionStore, create_approval_grant, classify_pending_action, is_active_pending_action
 from pp_agent.subagents.worktree import PatchArtifact, WorktreeManager
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
-from pp_agent.tools.effects import build_file_effect, build_shell_effect, content_digest
+from pp_agent.tools.effects import build_file_effect, build_patch_candidate_effect, build_shell_effect, content_digest
 from pp_agent.tools.policy import PermissionDomain
+from pp_agent.tools.shell_tool import default_local_sandbox_executor, sandbox_result_details, sandbox_result_error, shell_output
 
 SEARCH_BLOCK_RE = re.compile(
     r"<<<<<<< SEARCH\n(?P<old>.*?)\n=======\n(?P<new>.*?)\n>>>>>>> REPLACE",
@@ -23,6 +26,30 @@ SEARCH_BLOCK_RE = re.compile(
 )
 UNIFIED_HUNK_RE = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@")
 DEFAULT_READ_FILE_MAX_CHARS = 20_000
+APPLY_PATCH_CANDIDATE_TOOL = "apply_patch_candidate"
+MAX_PATCH_SNAPSHOT_BYTES = 5 * 1024 * 1024
+WorkspaceApplyLock = None
+WorkspaceApplyLockError = None
+WorkspaceApplyLockTimeout = None
+
+
+def _workspace_lock_types():
+    """Load workspace lock classes lazily to avoid tools<->runtime import cycles."""
+
+    global WorkspaceApplyLock, WorkspaceApplyLockError, WorkspaceApplyLockTimeout
+    from pp_agent.runtime.workspace_lock import (
+        WorkspaceApplyLock as RuntimeWorkspaceApplyLock,
+        WorkspaceApplyLockError as RuntimeWorkspaceApplyLockError,
+        WorkspaceApplyLockTimeout as RuntimeWorkspaceApplyLockTimeout,
+    )
+
+    if WorkspaceApplyLock is None:
+        WorkspaceApplyLock = RuntimeWorkspaceApplyLock
+    if WorkspaceApplyLockError is None:
+        WorkspaceApplyLockError = RuntimeWorkspaceApplyLockError
+    if WorkspaceApplyLockTimeout is None:
+        WorkspaceApplyLockTimeout = RuntimeWorkspaceApplyLockTimeout
+    return WorkspaceApplyLock, WorkspaceApplyLockError, WorkspaceApplyLockTimeout
 
 
 class ReadFileTool(BaseTool):
@@ -467,9 +494,17 @@ class PreviewPendingActionTool(BaseTool):
 
 
 class ApprovePendingActionTool(BaseTool):
-    def __init__(self, workspace: Path, policy_evaluator=None, *, tool_registry=None) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        policy_evaluator=None,
+        *,
+        tool_registry=None,
+        sandbox_executor: SandboxExecutor | None = None,
+    ) -> None:
         super().__init__(workspace, policy_evaluator)
         self.tool_registry = tool_registry
+        self.sandbox_executor = sandbox_executor or default_local_sandbox_executor()
 
     @property
     def spec(self) -> ToolSpec:
@@ -559,33 +594,77 @@ class ApprovePendingActionTool(BaseTool):
             timeout = int(payload.get("details", {}).get("timeout_seconds", 30))
             try:
                 self.enforce_policy_for_command(PermissionDomain.BASH, payload["command"])
-                completed = subprocess.run(
-                    ["powershell.exe", "-NoProfile", "-Command", payload["command"]],
-                    cwd=str(self.workspace),
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    check=False,
+                self._emit_sandbox_preflight_event(payload, token=arguments["token"])
+                completed = self.sandbox_executor.run(
+                    SandboxRunRequest(command=payload["command"], cwd=self.workspace, timeout_seconds=timeout)
                 )
                 if completed.returncode != 0:
-                    raise RuntimeError(
-                        "PowerShell exited with code "
-                        f"{completed.returncode}\n"
-                        f"stdout:\n{completed.stdout or ''}\n"
-                        f"stderr:\n{completed.stderr or ''}".strip()
-                    )
+                    raise sandbox_result_error(completed)
             except Exception as exc:
                 return self._record_execution_failure(store, arguments["token"], effect, exc)
+            patch_candidate = self._stage_patch_candidate(store, payload, completed)
+            shell_content = shell_output(completed).strip() or "[no output]"
+            if patch_candidate.get("staged"):
+                shell_content += (
+                    "\n\nSandbox patch candidate staged. "
+                    f"Approve patch token {patch_candidate['token']} to apply changes to the real workspace."
+                )
+            elif patch_candidate.get("reason"):
+                shell_content += f"\n\nSandbox patch candidate not staged: {patch_candidate['reason']}"
             return self._consume_success(
                 store,
                 token=arguments["token"],
-                content=((completed.stdout or "") + (("\n" + completed.stderr) if completed.stderr else "")).strip() or "[no output]",
+                content=shell_content,
                 effect=effect,
                 details={
                     "token": arguments["token"],
                     "command": payload["command"],
                     "timeout_seconds": timeout,
                     "returncode": completed.returncode,
+                    "effect": effect,
+                    "patch_candidate": patch_candidate,
+                    **sandbox_result_details(completed),
+                },
+            )
+        if action_type == "apply_patch_candidate":
+            try:
+                apply_result = self._apply_patch_candidate_payload(payload)
+            except Exception as exc:
+                return self._record_execution_failure(store, arguments["token"], effect, exc)
+            if not apply_result.get("applied"):
+                return self._record_patch_apply_failure(store, arguments["token"], effect, apply_result)
+            return self._consume_success(
+                store,
+                token=arguments["token"],
+                content=f"Sandbox patch candidate applied successfully.\n{payload.get('details', {}).get('patch_summary', '')}",
+                effect=effect,
+                details={
+                    "token": arguments["token"],
+                    "applied": True,
+                    "atomic": True,
+                    "changed_files": apply_result["changed_files"],
+                    "changed_paths": apply_result["changed_paths"],
+                    "patch_digest": payload.get("details", {}).get("patch_digest"),
+                    "sandbox_backend": payload.get("details", {}).get("sandbox_backend"),
+                    "sandbox_mode": payload.get("details", {}).get("sandbox_mode"),
+                    "source_shell_command_digest": payload.get("details", {}).get("source_shell_command_digest"),
+                    "source_shell_action_token": payload.get("details", {}).get("source_shell_action_token"),
+                    "apply_backend": apply_result.get("apply_backend", "internal_unified_diff"),
+                    "structured_changes_digest": apply_result.get("structured_changes_digest"),
+                    "rollback_attempted": False,
+                    "post_apply_validated": True,
+                    "lock_acquired": apply_result.get("lock_acquired"),
+                    "lock_released": apply_result.get("lock_released"),
+                    "lock_path": apply_result.get("lock_path"),
+                    "lock_wait_ms": apply_result.get("lock_wait_ms"),
+                    **(
+                        {
+                            "lock_release_error": apply_result.get("lock_release_error"),
+                            "manual_cleanup_required": apply_result.get("manual_cleanup_required"),
+                        }
+                        if apply_result.get("lock_released") is False
+                        else {}
+                    ),
                     "effect": effect,
                 },
             )
@@ -662,6 +741,669 @@ class ApprovePendingActionTool(BaseTool):
             return success
         raise ValueError(f"Action type not supported by this tool: {action_type}")
 
+    def _emit_sandbox_preflight_event(self, payload: dict[str, Any], *, token: str) -> None:
+        """Emit a lightweight Web/runtime progress event before sandbox execution begins."""
+
+        if self.tool_registry is None:
+            return
+        emitter = getattr(self.tool_registry, "_runtime_event_emitter", None)
+        if not callable(emitter):
+            return
+        from pp_agent.runtime.state import AgentEvent
+
+        backend = getattr(self.sandbox_executor, "backend", "local")
+        sandbox_mode = getattr(self.sandbox_executor, "sandbox_mode", backend)
+        emitter(
+            AgentEvent(
+                type="sandbox_preflight",
+                session_id=str(payload.get("session_id") or payload.get("details", {}).get("session_id") or ""),
+                tool_name="run_shell",
+                message=(
+                    "Checking Docker sandbox prerequisites."
+                    if backend == "docker"
+                    else "Using local compatibility executor; this is not secure isolation."
+                ),
+                details={
+                    "token": token,
+                    "command": payload.get("command"),
+                    "sandbox_backend": backend,
+                    "sandbox_mode": sandbox_mode,
+                    "sandbox_isolation": "none-local-compat" if backend == "local" else sandbox_mode,
+                    "phase": "preflight",
+                },
+            )
+        )
+
+    def _stage_patch_candidate(self, store: PendingActionStore, shell_payload: dict[str, Any], completed: Any) -> dict[str, Any]:
+        """Stage a separate approval action for a Docker sandbox patch candidate."""
+
+        has_patch_metadata = completed.changed_files is not None or completed.patch_summary is not None or completed.patch is not None
+        changed_files = completed.changed_files or []
+        patch = completed.patch or ""
+        structured_changes = normalize_structured_changes(completed.structured_changes)
+        structured_digest = completed.structured_changes_digest or hash_structured_changes(structured_changes)
+        if not changed_files:
+            if not has_patch_metadata:
+                return {"staged": False}
+            return {"staged": False, "reason": "no changed files"}
+        if completed.structured_changes_truncated:
+            return {"staged": False, "reason": "structured changes truncated", "structured_changes_truncated": True}
+        if completed.patch_truncated:
+            return {"staged": False, "reason": "patch truncated", "patch_truncated": True}
+        if not structured_changes and not patch.strip():
+            return {"staged": False, "reason": "empty patch"}
+        patch_digest = content_digest(patch)
+        source_digest = content_digest(str(shell_payload.get("command") or ""))
+        effect = build_patch_candidate_effect(
+            tool_name=APPLY_PATCH_CANDIDATE_TOOL,
+            permission_domain=PermissionDomain.EDIT,
+            patch=patch,
+            changed_files=changed_files,
+            patch_summary=completed.patch_summary or "",
+            source_shell_command_digest=source_digest,
+            sandbox_backend=completed.backend,
+            sandbox_mode=completed.sandbox_mode,
+            patch_truncated=completed.patch_truncated,
+            structured_changes=structured_changes,
+            structured_changes_digest=structured_digest,
+            structured_changes_truncated=completed.structured_changes_truncated,
+        )
+        payload = store.stage(
+            action_type="apply_patch_candidate",
+            details={
+                "patch": patch,
+                "changed_files": changed_files,
+                "patch_summary": completed.patch_summary or "",
+                "patch_digest": patch_digest,
+                "source_shell_command_digest": source_digest,
+                "source_shell_action_token": shell_payload.get("token"),
+                "sandbox_backend": completed.backend,
+                "sandbox_mode": completed.sandbox_mode,
+                "patch_truncated": completed.patch_truncated,
+                "structured_changes": structured_changes,
+                "structured_changes_digest": structured_digest,
+                "structured_changes_truncated": completed.structured_changes_truncated,
+            },
+            effect=effect,
+            origin={"source": "sandbox", "tool_name": APPLY_PATCH_CANDIDATE_TOOL, "kind": "patch_candidate"},
+        )
+        return {
+            "staged": True,
+            "token": payload["token"],
+            "patch_digest": patch_digest,
+            "patch_summary": completed.patch_summary or "",
+            "changed_files": changed_files,
+            "structured_changes_count": len(structured_changes),
+            "structured_changes_digest": structured_digest,
+            "structured_changes_truncated": completed.structured_changes_truncated,
+        }
+
+    def _apply_patch_candidate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Validate and atomically apply a staged sandbox patch candidate."""
+
+        details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
+        structured_changes = normalize_structured_changes(details.get("structured_changes"))
+        if structured_changes:
+            return self._apply_structured_patch_candidate_payload(details, structured_changes)
+        return self._apply_unified_diff_patch_candidate_payload(details)
+
+    def _apply_unified_diff_patch_candidate_payload(self, details: dict[str, Any]) -> dict[str, Any]:
+        """Apply a legacy unified-diff patch candidate when structured changes are absent."""
+
+        patch = str(details.get("patch") or "")
+        patch_digest = str(details.get("patch_digest") or "")
+        if not patch or not patch_digest:
+            raise ValueError("Patch candidate is missing patch content or patch_digest.")
+        if content_digest(patch) != patch_digest:
+            raise ValueError("Patch candidate digest mismatch.")
+        if bool(details.get("patch_truncated")):
+            raise ValueError("Patch candidate is truncated and cannot be applied automatically.")
+        files = self._parse_patch_files(patch)
+        if not files:
+            raise ValueError("Patch candidate contains no supported file changes.")
+        statuses = {
+            str(item.get("path")): str(item.get("status"))
+            for item in details.get("changed_files", [])
+            if isinstance(item, dict)
+        }
+        changed_files = list(details.get("changed_files") or [])
+        snapshot: dict[str, dict[str, Any]] = {}
+        changed_paths: list[str] = []
+        lock_handle = None
+        lock_details: dict[str, Any] = {}
+        Lock, LockError, LockTimeout = _workspace_lock_types()
+        try:
+            self._validate_patch_targets(files, changed_files)
+        except Exception as exc:
+            return self._rollback_patch_apply_failure(snapshot, str(exc), post_apply_validated=False)
+        try:
+            lock_handle = Lock(self.workspace).acquire()
+            lock_details = {
+                "lock_acquired": True,
+                "lock_released": None,
+                "lock_path": str(Lock.RELATIVE_LOCK_PATH).replace("\\", "/"),
+                "lock_wait_ms": lock_handle.wait_ms,
+            }
+        except LockTimeout as exc:
+            return {
+                "applied": False,
+                "atomic": True,
+                "rollback_attempted": False,
+                "rollback_succeeded": None,
+                "partial_state_possible": False,
+                "post_apply_validated": False,
+                "lock_acquired": False,
+                "lock_released": None,
+                "lock_timeout": True,
+                "reason": str(exc) or "workspace apply lock timeout",
+            }
+        except LockError as exc:
+            return {
+                "applied": False,
+                "atomic": True,
+                "rollback_attempted": False,
+                "rollback_succeeded": None,
+                "partial_state_possible": False,
+                "post_apply_validated": False,
+                "lock_acquired": False,
+                "lock_released": None,
+                "lock_timeout": False,
+                "reason": str(exc),
+            }
+        try:
+            snapshot = self._snapshot_patch_targets(files)
+            for item in files:
+                target = self._validate_patch_path(item["path"])
+                before = target.read_text(encoding="utf-8") if target.exists() else ""
+                after = self._apply_candidate_file_patch(before, item["patch"])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if statuses.get(item["path"]) == "deleted":
+                    if target.exists():
+                        target.unlink()
+                elif after == "" and target.exists() and self._patch_deletes_file(item["patch"]):
+                    target.unlink()
+                else:
+                    target.write_text(after, encoding="utf-8")
+                changed_paths.append(item["path"])
+            self._validate_post_apply_changes(files, changed_files, changed_paths)
+        except Exception as exc:
+            result = self._rollback_patch_apply_failure(snapshot, str(exc), post_apply_validated=False)
+            result.update(lock_details)
+            return self._release_apply_lock(lock_handle, result)
+        result = {
+            "applied": True,
+            "atomic": True,
+            "changed_files": changed_files,
+            "changed_paths": changed_paths,
+            "apply_backend": "internal_unified_diff",
+            "rollback_attempted": False,
+            "post_apply_validated": True,
+        }
+        result.update(lock_details)
+        return self._release_apply_lock(lock_handle, result)
+
+    def _apply_structured_patch_candidate_payload(
+        self,
+        details: dict[str, Any],
+        structured_changes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Apply structured sandbox file changes with digest checks before writes."""
+
+        expected_digest = str(details.get("structured_changes_digest") or "")
+        actual_digest = hash_structured_changes(structured_changes)
+        if not expected_digest:
+            raise ValueError("Patch candidate is missing structured_changes_digest.")
+        if actual_digest != expected_digest:
+            raise ValueError("Structured changes digest mismatch.")
+        if bool(details.get("structured_changes_truncated")):
+            raise ValueError("Structured changes are truncated and cannot be applied automatically.")
+        changed_files = list(details.get("changed_files") or [])
+        files = [{"path": change["path"]} for change in structured_changes]
+        snapshot: dict[str, dict[str, Any]] = {}
+        changed_paths: list[str] = []
+        lock_handle = None
+        lock_details: dict[str, Any] = {}
+        Lock, LockError, LockTimeout = _workspace_lock_types()
+        try:
+            self._validate_structured_changes(structured_changes, changed_files)
+        except Exception as exc:
+            result = self._rollback_patch_apply_failure(snapshot, str(exc), post_apply_validated=False)
+            result["apply_backend"] = "structured_changes"
+            result["structured_changes_digest"] = expected_digest
+            return result
+        try:
+            lock_handle = Lock(self.workspace).acquire()
+            lock_details = {
+                "lock_acquired": True,
+                "lock_released": None,
+                "lock_path": str(Lock.RELATIVE_LOCK_PATH).replace("\\", "/"),
+                "lock_wait_ms": lock_handle.wait_ms,
+            }
+        except LockTimeout as exc:
+            return {
+                "applied": False,
+                "atomic": True,
+                "rollback_attempted": False,
+                "rollback_succeeded": None,
+                "partial_state_possible": False,
+                "post_apply_validated": False,
+                "lock_acquired": False,
+                "lock_released": None,
+                "lock_timeout": True,
+                "reason": str(exc) or "workspace apply lock timeout",
+                "apply_backend": "structured_changes",
+                "structured_changes_digest": expected_digest,
+            }
+        except LockError as exc:
+            return {
+                "applied": False,
+                "atomic": True,
+                "rollback_attempted": False,
+                "rollback_succeeded": None,
+                "partial_state_possible": False,
+                "post_apply_validated": False,
+                "lock_acquired": False,
+                "lock_released": None,
+                "lock_timeout": False,
+                "reason": str(exc),
+                "apply_backend": "structured_changes",
+                "structured_changes_digest": expected_digest,
+            }
+        try:
+            snapshot = self._snapshot_patch_targets(files)
+            for change in structured_changes:
+                target = self._validate_patch_path(str(change["path"]))
+                self._apply_one_structured_change(target, change)
+                changed_paths.append(str(change["path"]))
+            self._validate_post_apply_changes(files, changed_files, changed_paths)
+        except Exception as exc:
+            result = self._rollback_patch_apply_failure(snapshot, str(exc), post_apply_validated=False)
+            result.update(lock_details)
+            result["apply_backend"] = "structured_changes"
+            result["structured_changes_digest"] = expected_digest
+            return self._release_apply_lock(lock_handle, result)
+        result = {
+            "applied": True,
+            "atomic": True,
+            "changed_files": changed_files,
+            "changed_paths": changed_paths,
+            "apply_backend": "structured_changes",
+            "structured_changes_digest": expected_digest,
+            "rollback_attempted": False,
+            "post_apply_validated": True,
+        }
+        result.update(lock_details)
+        return self._release_apply_lock(lock_handle, result)
+
+    def _validate_structured_changes(self, structured_changes: list[dict[str, Any]], changed_files: list[Any]) -> None:
+        """Validate structured change metadata before taking the apply lock."""
+
+        self._validate_patch_targets([{"path": change["path"]} for change in structured_changes], changed_files)
+        for change in structured_changes:
+            change_type = str(change.get("change_type") or "")
+            if change_type not in {"added", "modified", "deleted"}:
+                raise ValueError(f"Unsupported structured change type: {change_type}")
+            if change.get("binary") or change.get("truncated"):
+                raise ValueError("structured change is binary or truncated and cannot be auto-applied")
+            if change_type in {"added", "modified"} and change.get("content_text") is None:
+                raise ValueError(f"Structured change is missing content_text: {change.get('path')}")
+            if change_type == "added" and change.get("old_digest") is not None:
+                raise ValueError(f"Added structured change must not include old_digest: {change.get('path')}")
+            if change_type == "modified" and (not change.get("old_digest") or not change.get("new_digest")):
+                raise ValueError(f"Modified structured change must include old_digest and new_digest: {change.get('path')}")
+            if change_type == "deleted" and change.get("new_digest") is not None:
+                raise ValueError(f"Deleted structured change must not include new_digest: {change.get('path')}")
+
+    def _apply_one_structured_change(self, target: Path, change: dict[str, Any]) -> None:
+        """Apply one structured file change and verify old/new byte digests."""
+
+        change_type = str(change.get("change_type") or "")
+        path_label = str(change.get("path") or "")
+        old_digest = change.get("old_digest")
+        new_digest = change.get("new_digest")
+        existed = target.exists()
+        current_digest = bytes_digest(target.read_bytes()) if existed else None
+        if change_type == "added":
+            if existed:
+                raise ValueError(f"Structured add target already exists: {path_label}")
+            content = self._structured_change_content_bytes(change)
+            if bytes_digest(content) != new_digest:
+                raise ValueError(f"Structured change new_digest mismatch before write: {path_label}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        elif change_type == "modified":
+            if not existed:
+                raise ValueError(f"Structured modify target does not exist: {path_label}")
+            if current_digest != old_digest:
+                raise ValueError(f"Structured change old_digest mismatch: {path_label}")
+            content = self._structured_change_content_bytes(change)
+            if bytes_digest(content) != new_digest:
+                raise ValueError(f"Structured change new_digest mismatch before write: {path_label}")
+            target.write_bytes(content)
+        elif change_type == "deleted":
+            if not existed:
+                raise ValueError(f"Structured delete target does not exist: {path_label}")
+            if current_digest != old_digest:
+                raise ValueError(f"Structured change old_digest mismatch: {path_label}")
+            target.unlink()
+            return
+        else:
+            raise ValueError(f"Unsupported structured change type: {change_type}")
+        if bytes_digest(target.read_bytes()) != new_digest:
+            raise ValueError(f"Structured change new_digest mismatch after write: {path_label}")
+
+    @staticmethod
+    def _structured_change_content_bytes(change: dict[str, Any]) -> bytes:
+        """Encode structured change content with its declared text encoding."""
+
+        encoding = str(change.get("content_encoding") or "utf-8")
+        content_text = change.get("content_text")
+        if not isinstance(content_text, str):
+            raise ValueError(f"Structured change content_text must be text: {change.get('path')}")
+        return content_text.encode(encoding)
+
+    @staticmethod
+    def _release_apply_lock(lock_handle: Any, result: dict[str, Any]) -> dict[str, Any]:
+        """Release a workspace apply lock and record cleanup details in the result."""
+
+        if lock_handle is None:
+            return result
+        try:
+            lock_handle.release()
+        except Exception as exc:  # noqa: BLE001
+            result["lock_released"] = False
+            result["lock_release_error"] = str(exc)
+            result["manual_cleanup_required"] = True
+            return result
+        result["lock_released"] = True
+        return result
+
+    def _validate_patch_targets(self, files: list[dict[str, str]], changed_files: list[Any]) -> None:
+        """Validate all approved patch targets before any workspace write occurs."""
+
+        patch_paths = set()
+        for item in files:
+            self._validate_patch_path(item["path"])
+            patch_paths.add(self._normalize_patch_path_label(item["path"]))
+        if not patch_paths:
+            raise ValueError("Patch candidate contains no target paths.")
+        changed_paths = set()
+        for item in changed_files:
+            if not isinstance(item, dict):
+                raise ValueError("Patch candidate changed_files must contain objects.")
+            raw_path = str(item.get("path") or "")
+            self._validate_patch_path(raw_path)
+            changed_paths.add(self._normalize_patch_path_label(raw_path))
+        if changed_paths and not patch_paths.issubset(changed_paths):
+            unexpected = sorted(patch_paths - changed_paths)
+            raise ValueError(f"Patch modifies paths outside approved changed_files: {', '.join(unexpected)}")
+
+    def _snapshot_patch_targets(self, files: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
+        """Capture pre-apply file state for the patch target set only."""
+
+        snapshot: dict[str, dict[str, Any]] = {}
+        for item in files:
+            raw_path = self._normalize_patch_path_label(item["path"])
+            target = self._validate_patch_path(raw_path)
+            if raw_path in snapshot:
+                continue
+            existed = target.exists()
+            is_symlink = target.is_symlink() if existed else False
+            content = b""
+            mode = None
+            if existed:
+                stat_result = target.lstat()
+                if stat_result.st_size > MAX_PATCH_SNAPSHOT_BYTES:
+                    raise ValueError(
+                        f"Patch target is too large to snapshot safely: {raw_path} "
+                        f"({stat_result.st_size} bytes > {MAX_PATCH_SNAPSHOT_BYTES} bytes)"
+                    )
+                if is_symlink:
+                    raise ValueError(f"Patch target is a symlink and cannot be snapshotted safely: {raw_path}")
+                if target.is_dir():
+                    raise ValueError(f"Patch target is a directory and cannot be patched: {raw_path}")
+                content = target.read_bytes()
+                mode = stat_result.st_mode
+            snapshot[raw_path] = {
+                "path": raw_path,
+                "target": target,
+                "existed": existed,
+                "content": content,
+                "mode": mode,
+                "is_symlink": is_symlink,
+            }
+        return snapshot
+
+    def _restore_snapshot(self, snapshot: dict[str, dict[str, Any]]) -> None:
+        """Restore files captured by _snapshot_patch_targets after a failed apply."""
+
+        for item in snapshot.values():
+            target = item["target"]
+            if item["existed"]:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(item["content"])
+                mode = item.get("mode")
+                if mode is not None:
+                    try:
+                        target.chmod(mode)
+                    except OSError:
+                        pass
+            elif target.exists():
+                if target.is_dir():
+                    raise ValueError(f"Rollback cannot remove directory created at patch target: {item['path']}")
+                target.unlink()
+
+    def _rollback_patch_apply_failure(
+        self,
+        snapshot: dict[str, dict[str, Any]],
+        reason: str,
+        *,
+        post_apply_validated: bool,
+    ) -> dict[str, Any]:
+        """Build a patch-apply failure result and restore pre-apply state when needed."""
+
+        if not snapshot:
+            return {
+                "applied": False,
+                "atomic": True,
+                "rollback_attempted": False,
+                "rollback_succeeded": None,
+                "partial_state_possible": False,
+                "post_apply_validated": post_apply_validated,
+                "reason": reason,
+            }
+        try:
+            self._restore_snapshot(snapshot)
+        except Exception as rollback_exc:
+            return {
+                "applied": False,
+                "atomic": False,
+                "rollback_attempted": True,
+                "rollback_succeeded": False,
+                "partial_state_possible": True,
+                "post_apply_validated": post_apply_validated,
+                "reason": reason,
+                "rollback_error": str(rollback_exc),
+            }
+        return {
+            "applied": False,
+            "atomic": True,
+            "rollback_attempted": True,
+            "rollback_succeeded": True,
+            "partial_state_possible": False,
+            "post_apply_validated": post_apply_validated,
+            "reason": reason,
+        }
+
+    def _validate_post_apply_changes(
+        self,
+        files: list[dict[str, str]],
+        changed_files: list[Any],
+        changed_paths: list[str],
+    ) -> None:
+        """Re-check the applied path set after writes but before consuming approval."""
+
+        expected = {
+            self._normalize_patch_path_label(str(item.get("path") or ""))
+            for item in changed_files
+            if isinstance(item, dict)
+        }
+        actual = {self._normalize_patch_path_label(path) for path in changed_paths}
+        patch_paths = {self._normalize_patch_path_label(item["path"]) for item in files}
+        for raw_path in actual | patch_paths | expected:
+            self._validate_patch_path(raw_path)
+        if expected and not actual.issubset(expected):
+            unexpected = sorted(actual - expected)
+            raise ValueError(f"Patch applied unexpected paths: {', '.join(unexpected)}")
+        if actual != patch_paths:
+            missing = sorted(patch_paths - actual)
+            extra = sorted(actual - patch_paths)
+            raise ValueError(f"Post-apply path validation failed; missing={missing}, extra={extra}")
+
+    def _validate_patch_path(self, raw_path: str) -> Path:
+        """Normalize and validate one patch path before writing the workspace."""
+
+        normalized = raw_path.replace("\\", "/").strip()
+        if not normalized:
+            raise ValueError("Patch path is empty.")
+        if normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized) or normalized.startswith("//"):
+            raise ValueError(f"Patch path must be relative: {raw_path}")
+        parts: list[str] = []
+        for part in normalized.split("/"):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                raise ValueError(f"Patch path traversal is not allowed: {raw_path}")
+            parts.append(part)
+        if not parts:
+            raise ValueError(f"Patch path is invalid: {raw_path}")
+        relative = Path(*parts)
+        target = (self.workspace / relative).resolve()
+        workspace = self.workspace.resolve()
+        if target != workspace and workspace not in target.parents:
+            raise ValueError(f"Patch path escapes workspace: {raw_path}")
+        if self.policy_evaluator.is_protected(target):
+            raise ValueError(f"Patch path is protected: {raw_path}")
+        probe = target
+        while probe != workspace:
+            if probe.exists() and probe.is_symlink():
+                raise ValueError(f"Patch path crosses a symlink: {raw_path}")
+            probe = probe.parent
+        return target
+
+    @staticmethod
+    def _normalize_patch_path_label(raw_path: str) -> str:
+        """Return a stable relative patch path label using POSIX separators."""
+
+        normalized = raw_path.replace("\\", "/").strip()
+        parts: list[str] = []
+        for part in normalized.split("/"):
+            if part in {"", "."}:
+                continue
+            parts.append(part)
+        return Path(*parts).as_posix() if parts else normalized
+
+    def _parse_patch_files(self, patch: str) -> list[dict[str, str]]:
+        """Parse the limited unified-diff format produced by DockerSandboxExecutor."""
+
+        lines = patch.splitlines()
+        files: list[dict[str, str]] = []
+        index = 0
+        while index < len(lines):
+            if not lines[index].startswith("--- "):
+                index += 1
+                continue
+            before_header = lines[index][4:].strip()
+            if index + 1 >= len(lines) or not lines[index + 1].startswith("+++ "):
+                raise ValueError("Patch file header is incomplete.")
+            after_header = lines[index + 1][4:].strip()
+            file_start = index
+            index += 2
+            while index < len(lines) and not lines[index].startswith("--- "):
+                index += 1
+            file_patch = "\n".join(lines[file_start:index]) + "\n"
+            path = self._patch_header_path(after_header if after_header != "/dev/null" else before_header)
+            self._validate_patch_path(path)
+            files.append({"path": path, "patch": file_patch})
+        return files
+
+    @staticmethod
+    def _apply_candidate_file_patch(before: str, patch: str) -> str:
+        """Apply one bounded unified diff file patch produced by the sandbox executor."""
+
+        original_lines = before.splitlines()
+        output: list[str] = []
+        cursor = 0
+        lines = patch.splitlines()
+        index = 0
+        saw_hunk = False
+        while index < len(lines):
+            line = lines[index]
+            hunk_match = UNIFIED_HUNK_RE.match(line)
+            if not hunk_match:
+                index += 1
+                continue
+            saw_hunk = True
+            old_start = int(hunk_match.group("old_start"))
+            hunk_cursor = max(old_start - 1, 0)
+            output.extend(original_lines[cursor:hunk_cursor])
+            cursor = hunk_cursor
+            index += 1
+            while index < len(lines):
+                hunk_line = lines[index]
+                if UNIFIED_HUNK_RE.match(hunk_line):
+                    break
+                if hunk_line == r"\ No newline at end of file":
+                    index += 1
+                    continue
+                prefix = hunk_line[:1]
+                text = hunk_line[1:] if hunk_line else ""
+                if prefix == " ":
+                    if cursor >= len(original_lines) or original_lines[cursor] != text:
+                        raise ValueError(f"Patch context did not match file near line {cursor + 1}.")
+                    output.append(text)
+                    cursor += 1
+                elif prefix == "-":
+                    if cursor >= len(original_lines) or original_lines[cursor] != text:
+                        raise ValueError(f"Patch deletion did not match file near line {cursor + 1}.")
+                    cursor += 1
+                elif prefix == "+":
+                    output.append(text)
+                else:
+                    raise ValueError(f"Unsupported patch line: {hunk_line}")
+                index += 1
+        if not saw_hunk:
+            raise ValueError("Patch candidate must contain at least one unified diff hunk.")
+        output.extend(original_lines[cursor:])
+        text = "\n".join(output)
+        if output:
+            text += "\n"
+        return text
+
+    @staticmethod
+    def _patch_header_path(header: str) -> str:
+        """Normalize a unified diff file header path."""
+
+        path = header.strip().replace("\\", "/")
+        if path.startswith("a/") or path.startswith("b/"):
+            return path[2:]
+        return path
+
+    @staticmethod
+    def _patch_deletes_file(patch: str) -> bool:
+        """Return whether every changed line in a file patch is a deletion."""
+
+        has_deletion = False
+        has_addition = False
+        for line in patch.splitlines():
+            if line.startswith("--- ") or line.startswith("+++ ") or line.startswith("@@"):
+                continue
+            if line.startswith("-"):
+                has_deletion = True
+            elif line.startswith("+"):
+                has_addition = True
+        return has_deletion and not has_addition
+
     def _validate_grant(self, payload: dict[str, Any]) -> None:
         effect = payload["effect"]
         grant = payload["approval_grant"]
@@ -717,6 +1459,8 @@ class ApprovePendingActionTool(BaseTool):
         if action_type == "run_shell":
             shell_failure = self._shell_failure_details(failure_detail)
             details.update(shell_failure)
+            if isinstance(error, DockerSandboxPreflightError):
+                details.update(error.details)
         if action_type in {"edit_file", "apply_patch_artifact"}:
             payload_details = updated.get("details") if isinstance(updated.get("details"), dict) else {}
             details.update(
@@ -756,21 +1500,69 @@ class ApprovePendingActionTool(BaseTool):
             details=details,
         )
 
+    def _record_patch_apply_failure(
+        self,
+        store: PendingActionStore,
+        token: str,
+        effect: dict[str, Any],
+        apply_result: dict[str, Any],
+    ) -> ToolExecutionResult:
+        """Record a failed patch candidate apply with rollback/atomicity details."""
+
+        reason = str(apply_result.get("reason") or "Patch candidate apply failed.")
+        updated = store.load(token)
+        updated["lifecycle"] = self._lifecycle("execution_failed", "patch_apply_failed", reason)
+        store.save(token, updated)
+        audit = store.write_audit_record(
+            token,
+            lifecycle_state="execution_failed",
+            failure_reason_code="patch_apply_failed",
+            failure_reason_detail=reason,
+        )
+        payload_details = updated.get("details") if isinstance(updated.get("details"), dict) else {}
+        details = {
+            **apply_result,
+            "token": token,
+            "effect": effect,
+            "approval_grant": updated.get("approval_grant"),
+            "lifecycle": updated["lifecycle"],
+            "latest_audit": audit,
+            "failure_kind": "execution_failed",
+            "patch_digest": payload_details.get("patch_digest"),
+            "sandbox_backend": payload_details.get("sandbox_backend"),
+            "sandbox_mode": payload_details.get("sandbox_mode"),
+            "source_shell_command_digest": payload_details.get("source_shell_command_digest"),
+            "source_shell_action_token": payload_details.get("source_shell_action_token"),
+            "apply_backend": apply_result.get("apply_backend", "internal_unified_diff"),
+            "structured_changes_digest": apply_result.get("structured_changes_digest") or payload_details.get("structured_changes_digest"),
+        }
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name=self.spec.name,
+            content=f"Patch candidate apply failed: {reason}",
+            is_error=True,
+            details=details,
+        )
+
     @staticmethod
     def _shell_failure_details(failure_detail: str) -> dict[str, Any]:
+        code_match = re.search(r"PowerShell exited with code (?P<code>-?\d+)", failure_detail)
+        if not code_match:
+            return {"command_failed": True}
+        code = int(code_match.group("code"))
         match = re.search(
             r"PowerShell exited with code (?P<code>-?\d+)\nstdout:\n(?P<stdout>.*?)(?:\nstderr:\n(?P<stderr>.*))?\Z",
             failure_detail,
             flags=re.DOTALL,
         )
         if not match:
-            return {"command_failed": True}
+            return {"command_failed": True, "exit_code": code, "returncode": code}
         stdout = (match.group("stdout") or "").strip()
         stderr = (match.group("stderr") or "").strip()
         return {
             "command_failed": True,
-            "exit_code": int(match.group("code")),
-            "returncode": int(match.group("code")),
+            "exit_code": code,
+            "returncode": code,
             "stdout": stdout,
             "stderr": stderr,
         }
@@ -843,6 +1635,33 @@ class ApprovePendingActionTool(BaseTool):
             return WorktreeManager(self.workspace).build_effect(
                 artifact.model_copy(update={"status": artifact.status})
             ) | {"effect_id": stored_effect["effect_id"], "created_at": stored_effect["created_at"]}
+        if action_type == "apply_patch_candidate":
+            details = payload.get("details", {})
+            if not isinstance(details, dict):
+                raise ValueError("Approval invalidated: patch candidate details are missing.")
+            patch = str(details.get("patch") or "")
+            changed_files = details.get("changed_files") or []
+            effect = build_patch_candidate_effect(
+                tool_name=stored_effect["tool_name"],
+                permission_domain=stored_effect["permission_domain"],
+                patch=patch,
+                changed_files=changed_files,
+                patch_summary=str(details.get("patch_summary") or ""),
+                source_shell_command_digest=str(details.get("source_shell_command_digest") or ""),
+                sandbox_backend=str(details.get("sandbox_backend") or ""),
+                sandbox_mode=str(details.get("sandbox_mode") or ""),
+                patch_truncated=bool(details.get("patch_truncated")),
+                structured_changes=normalize_structured_changes(details.get("structured_changes")),
+                structured_changes_digest=str(details.get("structured_changes_digest") or ""),
+                structured_changes_truncated=bool(details.get("structured_changes_truncated")),
+                effect_id=stored_effect["effect_id"],
+                created_at=stored_effect["created_at"],
+            )
+            if str(details.get("patch_digest") or "") != effect["normalized_arguments"]["patch_digest"]:
+                raise ValueError("Approval invalidated: patch digest changed after approval.")
+            if "structured_changes_digest" in details and str(details.get("structured_changes_digest") or "") != effect["normalized_arguments"]["structured_changes_digest"]:
+                raise ValueError("Approval invalidated: structured changes digest changed after approval.")
+            return effect
         if action_type == "attachment_import":
             details = payload.get("details", {})
             attachment_id = str(details.get("attachment_id") or "")
