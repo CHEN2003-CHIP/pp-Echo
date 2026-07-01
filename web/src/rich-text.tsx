@@ -1,5 +1,6 @@
 import { ReactNode, useState } from "react";
 import { MessageAttachment, MessageContentPart, SnapshotMessage } from "./api";
+import { MessageResponse } from "@/components/message";
 
 export type RichAttachment = {
   url: string;
@@ -75,18 +76,14 @@ export function extractMessageBody(message: SnapshotMessage): RichMessageBody {
 }
 
 export function RichMarkdown({ text, className = "", streaming = false, plain = false }: { text: string; className?: string; streaming?: boolean; plain?: boolean }) {
-  if (streaming) {
-    return (
-      <p className={className ? `md-paragraph md-streaming-plain ${className}` : "md-paragraph md-streaming-plain"}>
-        {text}
-        <span className="stream-cursor markdown-cursor" />
-      </p>
-    );
-  }
   if (!text) {
     return null;
   }
-  return <pre className={className ? `markdown md-large-plain ${className}` : "markdown md-large-plain"}>{text}</pre>;
+  return (
+    <MessageResponse className={className} streaming={streaming}>
+      {text}
+    </MessageResponse>
+  );
 }
 
 export function RichMessageAttachments({ attachments }: { attachments: RichAttachment[] }) {

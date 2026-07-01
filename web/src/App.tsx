@@ -42,7 +42,8 @@ import { List, ListItem } from "@/components/ui/list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, ModelProviderPreset, UsageAnalytics, ModelUsageRow, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
-import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
+import { DefaultAssistantActions, Message, MessageContent, MessagePlainText, MessageResponse } from "@/components/message";
+import { extractMessageBody, RichMessageAttachments, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
 import { AttachmentPanel } from "./features/attachments/AttachmentPanel";
@@ -1870,22 +1871,7 @@ function ChatWorkspace({
             </div>
           )}
           {transcript.map((item) => (
-            <article className={`message ${item.role}${item.streaming ? " streaming" : ""}`} key={item.id} data-transcript-id={item.id}>
-              <div className="avatar">{item.role === "assistant" ? <Bot size={16} /> : item.role === "activity" ? <Code2 size={15} /> : <MessageSquare size={15} />}</div>
-              {item.role === "activity" && item.activity ? (
-                <ActivityCard item={item.activity} />
-              ) : (
-                <div className="bubble">
-                  <span>{roleLabel(item.role)}</span>
-                  <RichMessageContent
-                    text={item.body.text}
-                    attachments={item.body.attachments}
-                    streaming={item.streaming}
-                    plain={activeSnapshot?.history?.source === "stored" && !item.streaming}
-                  />
-                </div>
-              )}
-            </article>
+            <TranscriptMessage item={item} key={item.id} />
           ))}
         </section>
         <ConversationTurnRail markers={turnMarkers} activeTurnId={activeTurnId} onJump={jumpToTurn} />
@@ -2519,6 +2505,56 @@ function UsageTrendCard({ chart, timeline }: { chart: UsageChart; timeline: Arra
         <div className="text-xs text-muted-foreground">{timeline.length ? `${formatUsageDateLabel(timeline[0].date)} → ${formatUsageDateLabel(timeline[timeline.length - 1].date)}` : "No timeline data yet."}</div>
       </CardContent>
     </Card>
+  );
+}
+
+function TranscriptMessage({ item, onRetry }: { item: TranscriptItem; onRetry?: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const from = normalizeMessageRole(item.role);
+  const isAssistant = from === "assistant";
+  const isUser = from === "user";
+  const isActivity = from === "activity";
+  const text = item.body.text;
+
+  async function copyMessage() {
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard?.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <Message from={from} streaming={item.streaming} data-transcript-id={item.id}>
+      <div className="pp-message-avatar" aria-hidden="true">
+        {isAssistant ? <Bot size={16} /> : isActivity ? <Code2 size={15} /> : <MessageSquare size={15} />}
+      </div>
+      <MessageContent from={from}>
+        {isActivity && item.activity ? (
+          <ActivityCard item={item.activity} />
+        ) : isAssistant ? (
+          <>
+            <MessageResponse streaming={item.streaming}>{text}</MessageResponse>
+            {!item.streaming ? <RichMessageAttachments attachments={item.body.attachments} /> : null}
+            {!item.streaming ? <DefaultAssistantActions text={text} copied={copied} onCopy={copyMessage} onRetry={onRetry} /> : null}
+          </>
+        ) : isUser ? (
+          <>
+            <MessagePlainText>{text}</MessagePlainText>
+            <RichMessageAttachments attachments={item.body.attachments} />
+          </>
+        ) : (
+          <>
+            <span className="pp-message-role-label">{roleLabel(from)}</span>
+            <MessageResponse>{text}</MessageResponse>
+            <RichMessageAttachments attachments={item.body.attachments} />
+          </>
+        )}
+      </MessageContent>
+    </Message>
   );
 }
 
@@ -4314,6 +4350,11 @@ function roleLabel(role: string) {
   if (role === "assistant") return "assistant";
   if (role === "user") return "user";
   return role;
+}
+
+function normalizeMessageRole(role: string) {
+  if (role === "assistant" || role === "user" || role === "activity" || role === "error" || role === "tool" || role === "system") return role;
+  return role.includes("tool") ? "tool" : role.includes("system") ? "system" : role;
 }
 
 export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []): TranscriptItem[] {
