@@ -1772,7 +1772,7 @@ function ChatWorkspace({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const nearBottomRef = useRef(true);
   const turnMarkers = useMemo(() => buildTurnMarkers(transcript), [transcript]);
-  const contextSummary = useMemo(() => buildContextSummary(activeSnapshot, activeEvents), [activeSnapshot, activeEvents]);
+  const contextSummary = useMemo(() => buildContextSummary(activeSnapshot, activeEvents, activeModel), [activeSnapshot, activeEvents, activeModel]);
   const transcriptTailKey = useMemo(() => {
     const tail = transcript[transcript.length - 1];
     return tail ? `${tail.id}:${tail.body.text.length}:${tail.streaming ? "streaming" : "done"}` : "empty";
@@ -1948,30 +1948,31 @@ function ChatWorkspace({
               className="composer-context-button"
               type="button"
               onClick={() => setContextPopoverOpen((current) => !current)}
-              title={`${contextSummary.usedPctLabel} of ${contextSummary.totalLabel}`}
+              title={`${contextSummary.modelContextUsage.percentLabel} · ${contextSummary.modelContextUsage.usedLabel} / ${contextSummary.modelContextUsage.totalLabel} tokens`}
               aria-label="Context usage"
             >
-              <ContextRing value={contextSummary.usedPct} />
-              <span>{contextSummary.usedPctLabel}</span>
+              <ContextRing value={contextSummary.modelContextUsage.percent} />
+              <span>{contextSummary.modelContextUsage.percentLabel}</span>
             </button>
             {contextPopoverOpen ? (
               <div className="composer-context-popover">
                 <div className="composer-context-popover-head">
                   <strong>Context</strong>
-                  <span>{contextSummary.statusLabel}</span>
+                  <span>{contextSummary.modelContextUsage.source === "actual" ? "Model window" : "Estimated"}</span>
                 </div>
-                <div className="composer-context-popover-percent">
-                  <strong>{contextSummary.usedPctLabel}</strong>
-                  <span>{contextSummary.usedLabel} / {contextSummary.totalLabel}</span>
-                </div>
-                <div className="composer-context-popover-bar" aria-hidden="true">
-                  <span style={{ width: `${contextSummary.usedPct * 100}%` }} />
-                </div>
-                <div className="composer-context-popover-body">
-                  <div><span>Input</span><strong>{contextSummary.inputLabel}</strong></div>
-                  <div><span>Output</span><strong>{contextSummary.outputLabel}</strong></div>
-                  <div><span>Total cost</span><strong>{contextSummary.costLabel}</strong></div>
-                </div>
+                <ContextUsageSection
+                  title={contextSummary.modelContextUsage.source === "actual" ? "Model context" : "Estimated model context"}
+                  percentLabel={contextSummary.modelContextUsage.percentLabel}
+                  detail={`${contextSummary.modelContextUsage.usedLabel} / ${contextSummary.modelContextUsage.totalLabel} tokens`}
+                  value={contextSummary.modelContextUsage.percent}
+                />
+                <ContextUsageSection
+                  title="Pipeline budget"
+                  percentLabel={contextSummary.pipelineBudgetUsage.percentLabel}
+                  detail={`${contextSummary.pipelineBudgetUsage.usedLabel} / ${contextSummary.pipelineBudgetUsage.totalLabel} chars`}
+                  value={contextSummary.pipelineBudgetUsage.percent}
+                  badge={contextSummary.pipelineBudgetUsage.truncated ? "Truncated" : undefined}
+                />
               </div>
             ) : null}
           </div>
@@ -2505,6 +2506,36 @@ function UsageTrendCard({ chart, timeline }: { chart: UsageChart; timeline: Arra
         <div className="text-xs text-muted-foreground">{timeline.length ? `${formatUsageDateLabel(timeline[0].date)} → ${formatUsageDateLabel(timeline[timeline.length - 1].date)}` : "No timeline data yet."}</div>
       </CardContent>
     </Card>
+  );
+}
+
+function ContextUsageSection({
+  title,
+  percentLabel,
+  detail,
+  value,
+  badge
+}: {
+  title: string;
+  percentLabel: string;
+  detail: string;
+  value: number;
+  badge?: string;
+}) {
+  return (
+    <section className="composer-context-section">
+      <div className="composer-context-section-head">
+        <span>{title}</span>
+        {badge ? <em>{badge}</em> : null}
+      </div>
+      <div className="composer-context-popover-percent">
+        <strong>{percentLabel}</strong>
+        <span>{detail}</span>
+      </div>
+      <div className="composer-context-popover-bar" aria-hidden="true">
+        <span style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }} />
+      </div>
+    </section>
   );
 }
 
@@ -5029,48 +5060,65 @@ function runtimeEventDedupeKey(event: RuntimeEvent) {
 }
 
 type ContextSummary = {
-  used: number;
-  total: number;
-  usedPct: number;
-  usedLabel: string;
-  totalLabel: string;
-  usedPctLabel: string;
-  statusLabel: string;
-  inputLabel: string;
-  outputLabel: string;
-  costLabel: string;
+  modelContextUsage: {
+    usedTokens: number;
+    totalTokens: number;
+    percent: number;
+    percentLabel: string;
+    usedLabel: string;
+    totalLabel: string;
+    source: "actual" | "estimated";
+  };
+  pipelineBudgetUsage: {
+    usedChars: number;
+    totalChars: number;
+    percent: number;
+    percentLabel: string;
+    usedLabel: string;
+    totalLabel: string;
+    truncated: boolean;
+  };
 };
 
-function buildContextSummary(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []): ContextSummary {
-  const total = firstNumber(
-    latestContextValue(events, "context_total_budget"),
-    snapshot?.history?.max_total_text_chars ? snapshot.history.max_total_text_chars * 4 : undefined,
-    258_000
-  ) || 258_000;
-  const used = Math.max(0, firstNumber(latestContextValue(events, "context_used"), snapshot?.history?.returned_message_count ? snapshot.history.returned_message_count * 1000 : undefined, snapshot?.history?.visible_message_count ? snapshot.history.visible_message_count * 1000 : undefined) || 0);
-  const usedPct = total > 0 ? Math.min(1, used / total) : 0;
-  const inputTokens = Math.max(0, firstNumber(latestContextValue(events, "input_tokens"), 0) || 0);
-  const outputTokens = Math.max(0, firstNumber(latestContextValue(events, "output_tokens"), 0) || 0);
-  const cost = firstNumber(latestContextValue(events, "total_cost_usd"), 0);
+function buildContextSummary(snapshot?: SessionSnapshot, events: RuntimeEvent[] = [], activeModel = ""): ContextSummary {
+  const totalTokens = Math.max(1, firstNumber(latestContextValue(events, "context_window_tokens"), latestContextValue(events, "context_window"), inferModelContextWindowTokens(activeModel), 128_000) || 128_000);
+  const actualInputTokens = firstNumber(latestContextValue(events, "input_tokens"), latestContextValue(events, "prompt_tokens"));
+  const estimatedInputTokens = estimateModelInputTokens(snapshot, events);
+  const usedTokens = Math.max(0, actualInputTokens ?? estimatedInputTokens);
+  const modelPercent = totalTokens > 0 ? Math.min(1, usedTokens / totalTokens) : 0;
+
+  const totalChars = Math.max(1, firstNumber(latestContextValue(events, "context_total_budget"), snapshot?.history?.max_total_text_chars, 30_900) || 30_900);
+  const usedChars = Math.max(0, firstNumber(latestContextValue(events, "context_used"), snapshot?.history?.returned_message_count ? snapshot.history.returned_message_count * 1000 : undefined, snapshot?.history?.visible_message_count ? snapshot.history.visible_message_count * 1000 : undefined) || 0);
+  const pipelinePercent = totalChars > 0 ? Math.min(1, usedChars / totalChars) : 0;
+  const pipelineTruncated = Boolean(latestContextFlag(events, "truncated") || latestContextDroppedCount(events) > 0);
+
   return {
-    used,
-    total,
-    usedPct,
-    usedLabel: formatCompactTokens(used),
-    totalLabel: formatCompactTokens(total),
-    usedPctLabel: `${(usedPct * 100).toFixed(1)}%`,
-    statusLabel: snapshot?.history?.truncated ? "Truncated" : "Live",
-    inputLabel: formatCompactTokens(inputTokens),
-    outputLabel: formatCompactTokens(outputTokens),
-    costLabel: cost != null ? `$${cost.toFixed(2)}` : "$0.00",
+    modelContextUsage: {
+      usedTokens,
+      totalTokens,
+      percent: modelPercent,
+      percentLabel: formatPercent(modelPercent),
+      usedLabel: formatCompactNumber(usedTokens),
+      totalLabel: formatCompactNumber(totalTokens),
+      source: actualInputTokens != null ? "actual" : "estimated",
+    },
+    pipelineBudgetUsage: {
+      usedChars,
+      totalChars,
+      percent: pipelinePercent,
+      percentLabel: formatPercent(pipelinePercent),
+      usedLabel: formatCompactNumber(usedChars),
+      totalLabel: formatCompactNumber(totalChars),
+      truncated: pipelineTruncated,
+    },
   };
 }
 
-function latestContextValue(events: RuntimeEvent[], key: "context_used" | "context_total_budget" | "input_tokens" | "output_tokens" | "total_cost_usd") {
+function latestContextValue(events: RuntimeEvent[], key: "context_used" | "context_total_budget" | "context_window" | "context_window_tokens" | "input_tokens" | "prompt_tokens" | "output_tokens" | "total_cost_usd") {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     const details = event.details || {};
-    if (event.type === "context_built" || event.type === "context.build") {
+    if (event.type === "context_built" || event.type === "context.build" || event.type === "provider_response") {
       const value = details[key];
       const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
       if (Number.isFinite(n)) return n;
@@ -5084,6 +5132,65 @@ function latestContextValue(events: RuntimeEvent[], key: "context_used" | "conte
   return undefined;
 }
 
+function latestContextFlag(events: RuntimeEvent[], key: "truncated") {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    const details = event.details || {};
+    if (event.type !== "context_built" && event.type !== "context.build") continue;
+    const direct = details[key];
+    if (typeof direct === "boolean") return direct;
+    const context = details.context && typeof details.context === "object" ? details.context as Record<string, unknown> : {};
+    const report = context.budget_report && typeof context.budget_report === "object" ? context.budget_report as Record<string, unknown> : {};
+    const fromContext = context[key];
+    if (typeof fromContext === "boolean") return fromContext;
+    const fromReport = report[key];
+    if (typeof fromReport === "boolean") return fromReport;
+  }
+  return false;
+}
+
+function latestContextDroppedCount(events: RuntimeEvent[]) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    const details = event.details || {};
+    if (event.type !== "context_built" && event.type !== "context.build") continue;
+    const context = details.context && typeof details.context === "object" ? details.context as Record<string, unknown> : {};
+    const report = context.budget_report && typeof context.budget_report === "object" ? context.budget_report as Record<string, unknown> : {};
+    const droppedSources = context.dropped_sources;
+    if (Array.isArray(droppedSources)) return droppedSources.length;
+    const droppedItems = report.dropped_items;
+    if (Array.isArray(droppedItems)) return droppedItems.length;
+  }
+  return 0;
+}
+
+function estimateModelInputTokens(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []) {
+  const estimatedContextTokens = firstNumber(latestContextValue(events, "context_used"));
+  if (estimatedContextTokens != null) return Math.ceil(estimatedContextTokens / 4);
+  const textChars = (snapshot?.messages || []).reduce((total, message) => {
+    const parts = Array.isArray(message.content) ? message.content : [];
+    return total + parts.reduce((innerTotal, part) => innerTotal + (part.type === "text" && typeof part.text === "string" ? part.text.length : 0), 0);
+  }, 0);
+  if (textChars > 0) return Math.ceil(textChars / 4);
+  return Math.max(0, (snapshot?.history?.visible_message_count || snapshot?.history?.returned_message_count || 0) * 250);
+}
+
+function inferModelContextWindowTokens(model: string) {
+  const lowered = model.toLowerCase();
+  const explicit = lowered.match(/(\d+(?:\.\d+)?)\s*(m|k)\b/);
+  if (explicit) {
+    const value = Number(explicit[1]);
+    if (Number.isFinite(value)) return Math.round(value * (explicit[2] === "m" ? 1_000_000 : 1_000));
+  }
+  if (lowered.includes("qwen3-max") || lowered.includes("qwen-max") || lowered.includes("qwen-plus")) return 320_000;
+  if (lowered.includes("gpt-4.1")) return 1_000_000;
+  if (lowered.includes("gpt-4o")) return 128_000;
+  if (lowered.includes("claude")) return 200_000;
+  if (lowered.includes("deepseek")) return 128_000;
+  if (lowered.includes("mimo")) return 128_000;
+  return undefined;
+}
+
 function firstNumber(...values: Array<number | undefined>) {
   for (const value of values) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -5091,10 +5198,14 @@ function firstNumber(...values: Array<number | undefined>) {
   return undefined;
 }
 
-function formatCompactTokens(value: number) {
+function formatCompactNumber(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
   return String(Math.round(value));
+}
+
+function formatPercent(value: number) {
+  return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`;
 }
 
 function ContextRing({ value }: { value: number }) {

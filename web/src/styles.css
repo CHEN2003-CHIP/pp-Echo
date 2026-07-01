@@ -2672,6 +2672,41 @@ body {
   font-size: 12px;
 }
 
+.composer-context-section {
+  display: grid;
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--app-border) 72%, transparent);
+}
+
+.composer-context-section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.composer-context-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.composer-context-section-head span {
+  color: var(--app-text);
+  font-weight: 600;
+}
+
+.composer-context-section-head em {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(219, 164, 72, 0.12);
+  color: var(--app-warning);
+  font-style: normal;
+  font-size: 11px;
+}
+
 .composer-context-popover-percent {
   display: flex;
   justify-content: space-between;
