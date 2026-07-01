@@ -1,62 +1,76 @@
-import { Bot, CheckCircle2, ChevronRight, CircleAlert, CircleDashed, Clock3, Code2, FileWarning, GitBranch, Layers3, PlayCircle, ShieldCheck, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Bot, CheckCircle2, ChevronDown, CircleAlert, CircleDashed, Clock3, Code2, FileWarning, GitBranch, Layers3, PlayCircle, ShieldCheck, Sparkles } from "lucide-react";
 import { RichMessageAttachments } from "../../rich-text";
 import type { ActivityItem, ActivityPhase, ActivityStatus } from "./activity-types";
 
 export function ActivityCard({ item }: { item: ActivityItem }) {
-  const Icon = phaseIcon(item.phase);
-  const open = item.running || item.status === "error" || item.status === "pending";
+  const lines = buildThinkingLines(item);
+  const [expanded, setExpanded] = useState(item.running);
+
+  useEffect(() => {
+    if (item.running) {
+      setExpanded(true);
+      return;
+    }
+    if (item.status === "success" || item.status === "error" || item.status === "cancelled") {
+      setExpanded(false);
+    }
+  }, [item.id, item.running, item.status]);
+
+  const summary = useMemo(
+    () => [item.title, item.durationLabel ? `· ${item.durationLabel}` : "", statusCopy(item.status)].filter(Boolean).join(" "),
+    [item.durationLabel, item.status, item.title],
+  );
+
   return (
-    <details className={`activity-card ${item.phase} ${item.status}`} open={open}>
-      <summary>
-        <span className="activity-card-icon"><Icon size={15} /></span>
-        <span className="activity-card-main">
-          <strong>{item.title}</strong>
-          <small>{item.summary}</small>
+    <section className={`activity-thought ${item.phase} ${item.status} ${expanded ? "expanded" : "collapsed"}`}>
+      <button className="activity-thought-head" onClick={() => setExpanded((value) => !value)} type="button" aria-expanded={expanded}>
+        <span className="activity-thought-icon" aria-hidden="true">
+          <PhaseIcon phase={item.phase} />
         </span>
-        <span className={`activity-status ${item.status}`}>{statusCopy(item.status)}</span>
-        <ChevronRight className="activity-chevron" size={15} />
-      </summary>
-      <div className="activity-card-body">
-        {isProgressPhase(item.phase) ? <ProgressBlock item={item} /> : null}
-        {item.entries.length > 0 ? (
-          <ol className="activity-step-list">
-            {item.entries.map((entry) => (
-              <li className={`activity-step ${entry.status}`} key={entry.id}>
-                <span className="activity-step-dot" />
-                <div className="activity-step-content">
-                  <div className="activity-step-head">
-                    <strong>{entry.label}</strong>
-                    <small>{[entry.rawType, entry.durationLabel].filter(Boolean).join(" · ")}</small>
-                  </div>
-                  {entry.detail ? <pre>{entry.detail}</pre> : null}
-                  {entry.attachments?.length ? <RichMessageAttachments attachments={entry.attachments} /> : null}
-                </div>
-              </li>
-            ))}
-          </ol>
-        ) : item.detail ? (
-          <pre className="activity-detail-pre">{item.detail}</pre>
-        ) : null}
-        {item.attachments?.length ? <RichMessageAttachments attachments={item.attachments} /> : null}
-      </div>
-    </details>
+        <span className="activity-thought-title">{item.title}</span>
+        {item.durationLabel ? <span className="activity-thought-meta">· {item.durationLabel}</span> : null}
+        <span className={`activity-thought-status ${item.status}`}>{statusCopy(item.status)}</span>
+        <span className="activity-thought-toggle" aria-hidden="true">
+          <ChevronDown size={13} />
+        </span>
+      </button>
+      {!expanded ? <div className="activity-thought-summary">{summary}</div> : null}
+      {expanded ? (
+        <div className="activity-thought-body">
+          {lines.map((line, index) => (
+            <p className="activity-thought-line" key={`${item.id}-line-${index}`}>
+              {line}
+            </p>
+          ))}
+          {!lines.length && item.attachments?.length ? <RichMessageAttachments attachments={item.attachments} /> : null}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
 export function ProgressBlock({ item }: { item: ActivityItem }) {
   return (
     <section className={`progress-block ${item.running ? "live" : ""}`}>
-      <div className="progress-pulse"><Sparkles size={14} /></div>
+      <div className="progress-pulse">
+        <Sparkles size={14} />
+      </div>
       <div>
-        <strong>{item.running ? "Analyzing the next step" : "Progress summary"}</strong>
-        <p>{item.summary || "Public progress from the runtime."}</p>
+        <strong>{item.running ? "正在分析下一步" : "运行进度"}</strong>
+        <p>{item.narrative || item.summary || "Agent 正在推进当前任务。"}</p>
       </div>
     </section>
   );
 }
 
+function PhaseIcon({ phase }: { phase: ActivityPhase }) {
+  const Icon = phaseIcon(phase);
+  return <Icon size={14} />;
+}
+
 function phaseIcon(phase: ActivityPhase) {
-  if (isProgressPhase(phase)) return Sparkles;
+  if (phase === "preparing" || phase === "analyzing" || phase === "finalizing") return Sparkles;
   if (phase === "planning") return Layers3;
   if (phase === "tool") return Code2;
   if (phase === "approval") return ShieldCheck;
@@ -68,18 +82,22 @@ function phaseIcon(phase: ActivityPhase) {
   return PlayCircle;
 }
 
-function isProgressPhase(phase: ActivityPhase) {
-  return phase === "preparing" || phase === "analyzing" || phase === "finalizing";
+function statusCopy(status: ActivityStatus) {
+  return status;
 }
 
-function statusCopy(status: ActivityStatus) {
-  if (status === "running") return "Running";
-  if (status === "pending") return "Pending";
-  if (status === "success") return "Done";
-  if (status === "warning") return "Review";
-  if (status === "error") return "Failed";
-  if (status === "cancelled") return "Cancelled";
-  return status;
+function buildThinkingLines(item: ActivityItem) {
+  const lines: string[] = [];
+  const narrative = item.narrative || item.summary || item.detail || "";
+  if (narrative) lines.push(narrative);
+
+  for (const entry of item.entries || []) {
+    const parts = [entry.label, entry.narrative || entry.detail, [entry.rawType, entry.durationLabel].filter(Boolean).join(" · ")].filter(Boolean);
+    if (parts.length) lines.push(parts.join(" — "));
+    if (entry.attachments?.length) lines.push(`${entry.attachments.length} 个附件`);
+  }
+
+  return lines;
 }
 
 export function StatusIcon({ status }: { status: ActivityStatus }) {

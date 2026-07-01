@@ -360,6 +360,16 @@ $env:PP_ECHO_SANDBOX_BACKEND="docker"
 python -m pp_agent.cli.main run "inspect this repo"
 ```
 
+受控 coding 工作流可以从 `code` 命令进入：
+
+```powershell
+python -m pp_agent.cli.main code "add focused tests for this module" --prepare-only
+python -m pp_agent.cli.main code "add focused tests for this module" --max-turns 3 --show-timeline
+python -m pp_agent.cli.main code "add focused tests for this module" --dry-run --json
+```
+
+`code` 会先生成任务计划、任务范围、预测影响、验证建议和执行 guardrails。受控循环会在审批、guardrail 或 scope 边界处停止；它不会自动批准 pending action，也不会自动应用 patch candidate。
+
 Web UI 启用 sandbox 后会自动使用 `pp-echo-sandbox:base` 作为默认镜像，并可通过 `/api/sandbox/status?session_id=<session-id>` 检查 Docker CLI、daemon 和镜像状态。pp-Echo 不会静默安装 Docker；如果缺少 Docker，请按状态接口或 Settings 页面给出的 Docker Desktop 链接安装，再 build base image。
 
 默认 Docker 镜像是通用 `pp-echo-sandbox:base`。项目需要 Python/Node/Java/C++ 等工具链时，请构建自己的项目镜像并通过 `--sandbox-image my-project-dev:latest` 或 `PP_ECHO_SANDBOX_IMAGE` 指定。完整语义见 [docs/sandbox.md](docs/sandbox.md)。

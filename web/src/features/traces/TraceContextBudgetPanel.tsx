@@ -100,7 +100,7 @@ function SourceTable({ title, rows, dropReasons }: { title: string; rows: Array<
 
 function extractContextBudget(detail: TraceDetail): { report: BudgetReport; coreMemoryBudgetError: boolean } | null {
   const span = [...detail.spans].reverse().find((item: TraceSpan) => item.name === "context.build" || item.span_type === "context");
-  if (span?.output?.context_payload_version !== 2) {
+  if (span?.output?.context_payload_version !== 2 && span?.output?.context_payload_version !== 3) {
     return null;
   }
   const context = objectValue(span.output.context);

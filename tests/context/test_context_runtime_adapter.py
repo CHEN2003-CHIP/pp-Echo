@@ -7,6 +7,7 @@ from pp_agent.capabilities.descriptor import CapabilityDescriptor
 from pp_agent.capabilities.router import BlockedCapability, CapabilitySelection
 from pp_agent.context.adapters import build_context_pack_from_messages, context_pack_to_trace_details
 from pp_agent.context.runtime_bridge import build_runtime_context_pack
+from pp_agent.coding.repository import repository_analysis_to_context_item
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.runtime.state import AgentState
 from pp_agent.storage.settings import Settings
@@ -100,3 +101,20 @@ def test_runtime_bridge_adds_capability_selection_and_blocks_dropped(tmp_path: P
     assert pack.capabilities[0].id == "capability:list_files"
     assert pack.budget_report.drop_reasons["capability:run_shell"] == "capability_blocked"
     assert "run_shell" not in rendered_text
+
+
+def test_runtime_bridge_includes_repository_analysis_in_project_context(tmp_path: Path) -> None:
+    settings = Settings.load(tmp_path)
+    settings.global_dir = tmp_path / ".pp-agent"
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+
+    pack = build_runtime_context_pack(
+        state=AgentState(system_prompt="system"),
+        messages=[_message("system", "system"), _message("user", "hello")],
+        settings=settings,
+        session_id="s1",
+    )
+
+    assert any(item.title == "Repository analysis" for item in pack.project_context)
+    assert any(item.metadata.get("repository_analysis") for item in pack.project_context)
+    assert repository_analysis_to_context_item.__doc__

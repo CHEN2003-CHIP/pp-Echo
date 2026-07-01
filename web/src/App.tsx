@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Activity,
   ArrowDown,
@@ -34,7 +34,14 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, ModelProviderPreset, ModelUsageRow, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { List, ListItem } from "@/components/ui/list";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, ModelProviderPreset, UsageAnalytics, ModelUsageRow, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
 import { extractMessageBody, RichMessageAttachments, RichMessageContent, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
 import { StartupGuidePage } from "./features/onboarding/StartupGuidePage";
@@ -1759,10 +1766,12 @@ function ChatWorkspace({
 }) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState("");
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const nearBottomRef = useRef(true);
   const turnMarkers = useMemo(() => buildTurnMarkers(transcript), [transcript]);
+  const contextSummary = useMemo(() => buildContextSummary(activeSnapshot, activeEvents), [activeSnapshot, activeEvents]);
   const transcriptTailKey = useMemo(() => {
     const tail = transcript[transcript.length - 1];
     return tail ? `${tail.id}:${tail.body.text.length}:${tail.streaming ? "streaming" : "done"}` : "empty";
@@ -1938,6 +1947,48 @@ function ChatWorkspace({
             <FileText size={14} />
             <span>Files</span>
           </button>
+          <div
+            className="composer-context-wrap"
+            onMouseEnter={() => setContextPopoverOpen(true)}
+            onMouseLeave={() => setContextPopoverOpen(false)}
+            onFocusCapture={() => setContextPopoverOpen(true)}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setContextPopoverOpen(false);
+              }
+            }}
+          >
+            <button
+              className="composer-context-button"
+              type="button"
+              onClick={() => setContextPopoverOpen((current) => !current)}
+              title={`${contextSummary.usedPctLabel} of ${contextSummary.totalLabel}`}
+              aria-label="Context usage"
+            >
+              <ContextRing value={contextSummary.usedPct} />
+              <span>{contextSummary.usedPctLabel}</span>
+            </button>
+            {contextPopoverOpen ? (
+              <div className="composer-context-popover">
+                <div className="composer-context-popover-head">
+                  <strong>Context</strong>
+                  <span>{contextSummary.statusLabel}</span>
+                </div>
+                <div className="composer-context-popover-percent">
+                  <strong>{contextSummary.usedPctLabel}</strong>
+                  <span>{contextSummary.usedLabel} / {contextSummary.totalLabel}</span>
+                </div>
+                <div className="composer-context-popover-bar" aria-hidden="true">
+                  <span style={{ width: `${contextSummary.usedPct * 100}%` }} />
+                </div>
+                <div className="composer-context-popover-body">
+                  <div><span>Input</span><strong>{contextSummary.inputLabel}</strong></div>
+                  <div><span>Output</span><strong>{contextSummary.outputLabel}</strong></div>
+                  <div><span>Total cost</span><strong>{contextSummary.costLabel}</strong></div>
+                </div>
+              </div>
+            ) : null}
+          </div>
           <textarea
             ref={textareaRef}
             value={prompt}
@@ -2220,8 +2271,9 @@ function ComposerModelButton({
 
 function UsagePanel() {
   const [rows, setRows] = useState<ModelUsageRow[]>([]);
-  const [error, setError] = useState("");
+  const [analytics, setAnalytics] = useState<UsageAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     loadUsage().catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -2229,10 +2281,11 @@ function UsagePanel() {
 
   async function loadUsage() {
     setLoading(true);
-    setError("");
+    setError('');
     try {
       const payload = await api.modelUsage();
       setRows(payload.models);
+      setAnalytics(payload.analytics || null);
     } finally {
       setLoading(false);
     }
@@ -2245,73 +2298,394 @@ function UsagePanel() {
     cost: acc.cost + (row.total_cost_usd || 0)
   }), { runs: 0, calls: 0, tokens: 0, cost: 0 });
   const configuredCount = rows.filter((row) => row.api_key_configured).length;
+  const modelShare = analytics?.model_share?.length
+    ? analytics.model_share
+    : rows
+        .filter((row) => row.total_tokens > 0)
+        .map((row) => ({
+          provider_id: row.provider_id,
+          model: row.model,
+          share: totals.tokens ? row.total_tokens / totals.tokens : 0,
+          total_tokens: row.total_tokens,
+          runs: row.runs
+        }))
+        .sort((left, right) => right.total_tokens - left.total_tokens);
+  const timeline = analytics?.timeline || [];
+  const chartSeries = buildUsageChartSeries(analytics, rows);
 
   return (
-    <section className="usage-panel">
-      <div className="usage-head">
-        <div>
-          <small>MODEL USAGE</small>
-          <h2>Configured models</h2>
-          <p>Provider presets with visible API key env status and trace usage totals.</p>
+    <section className="space-y-4 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model Usage</p>
+          <h2 className="text-xl font-semibold tracking-tight">Usage dashboard</h2>
+          <p className="text-sm text-muted-foreground">Model distribution, token trends, and provider coverage.</p>
         </div>
-        <button onClick={loadUsage} disabled={loading}><RefreshCw size={14} /> Refresh</button>
+        <Button variant="outline" size="sm" onClick={loadUsage} disabled={loading}>
+          <RefreshCw size={14} />
+          Refresh
+        </Button>
       </div>
-      {error ? <p className="settings-error">{error}</p> : null}
-      <div className="usage-summary-grid">
-        <MetricCard label="Configured" value={`${configuredCount}/${rows.length}`} />
-        <MetricCard label="Runs" value={totals.runs} />
-        <MetricCard label="LLM Calls" value={totals.calls} />
-        <MetricCard label="Tokens" value={totals.tokens.toLocaleString()} />
-        <MetricCard label="Cost" value={totals.cost ? `$${totals.cost.toFixed(6)}` : "N/A"} />
+
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTitle>Usage load failed</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <div className="grid gap-3 md:grid-cols-5">
+        <UsageMetricCard label="Configured" value={`${configuredCount}/${rows.length}`} />
+        <UsageMetricCard label="Runs" value={totals.runs} />
+        <UsageMetricCard label="LLM Calls" value={totals.calls} />
+        <UsageMetricCard label="Tokens" value={totals.tokens.toLocaleString()} />
+        <UsageMetricCard label="Cost" value={totals.cost ? `$${totals.cost.toFixed(6)}` : 'N/A'} />
       </div>
-      <div className="usage-table-wrap">
-        <table className="usage-table">
-          <thead>
-            <tr>
-              <th>Provider</th>
-              <th>Model</th>
-              <th>Configured</th>
-              <th>Active</th>
-              <th>Runs</th>
-              <th>Calls</th>
-              <th>Input</th>
-              <th>Output</th>
-              <th>Total</th>
-              <th>Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={`${row.provider_id}:${row.model}`}>
-                <td><strong>{row.provider_label}</strong><small>{row.api_key_env || "-"}</small></td>
-                <td>{row.model}</td>
-                <td>{row.api_key_configured ? "Yes" : "Missing env"}</td>
-                <td>{row.current ? "Current" : "-"}</td>
-                <td>{row.runs}</td>
-                <td>{row.llm_calls}</td>
-                <td>{row.input_tokens.toLocaleString()}</td>
-                <td>{row.output_tokens.toLocaleString()}</td>
-                <td>{row.total_tokens.toLocaleString()}</td>
-                <td>{row.total_cost_usd == null ? "N/A" : `$${row.total_cost_usd.toFixed(6)}`}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!rows.length && !loading ? <p className="muted">No model usage records.</p> : null}
-        {loading ? <p className="muted">Loading usage...</p> : null}
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardContent className="space-y-4 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Model distribution</h3>
+                <p className="text-sm text-muted-foreground">Share by total tokens.</p>
+              </div>
+              <Badge variant="outline">{modelShare.length} models</Badge>
+            </div>
+            {loading ? <ChartSkeleton /> : <DonutChart share={modelShare} />}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="space-y-4 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Token trend</h3>
+                <p className="text-sm text-muted-foreground">Sampled token usage across models.</p>
+              </div>
+              <Badge variant="outline">{timeline.length} days</Badge>
+            </div>
+            {loading ? <ChartSkeleton /> : <UsageTrendCard chart={chartSeries} timeline={timeline} />}
+          </CardContent>
+        </Card>
       </div>
+
+      <Card>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="space-y-3 p-4">
+              <Skeleton className="h-5 w-56" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : rows.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Model</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Active</TableHead>
+                  <TableHead className="text-right">Runs</TableHead>
+                  <TableHead className="text-right">Calls</TableHead>
+                  <TableHead className="text-right">Input</TableHead>
+                  <TableHead className="text-right">Output</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead className="text-right">Cost</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((row) => (
+                  <TableRow key={`${row.provider_id}:${row.model}`}>
+                    <TableCell>
+                      <div className="space-y-1">
+                        <div className="font-medium">{row.provider_label}</div>
+                        <div className="text-xs text-muted-foreground">{row.api_key_env || '-'}</div>
+                      </div>
+                    </TableCell>
+                    <TableCell>{row.model}</TableCell>
+                    <TableCell>
+                      <Badge variant={row.api_key_configured ? 'secondary' : 'destructive'}>{row.api_key_configured ? 'Configured' : 'Missing env'}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={row.current ? 'default' : 'outline'}>{row.current ? 'Current' : 'Idle'}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">{row.runs}</TableCell>
+                    <TableCell className="text-right">{row.llm_calls}</TableCell>
+                    <TableCell className="text-right">{row.input_tokens.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{row.output_tokens.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{row.total_tokens.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{row.total_cost_usd == null ? 'N/A' : `$${row.total_cost_usd.toFixed(6)}`}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="p-4 text-sm text-muted-foreground">No model usage records.</div>
+          )}
+        </CardContent>
+      </Card>
     </section>
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: string | number }) {
+function UsageMetricCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="usage-metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <Card>
+      <CardContent className="space-y-1 p-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        <div className="text-2xl font-semibold tracking-tight">{value}</div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DonutChart({ share }: { share: Array<{ provider_id: string; model: string; share: number; total_tokens: number; runs: number }> }) {
+  if (!share.length) {
+    return <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">No usage data yet.</div>;
+  }
+  const size = 220;
+  const radius = 74;
+  const strokeWidth = 24;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+  const segments = share.map((item, index) => {
+    const dash = item.share * circumference;
+    const segment = { ...item, color: USAGE_COLORS[index % USAGE_COLORS.length], dash, gap: circumference - dash, offset };
+    offset += dash;
+    return segment;
+  });
+  return (
+    <div className="grid gap-4 md:grid-cols-[220px_1fr]">
+      <div className="mx-auto flex w-[220px] items-center justify-center">
+        <svg viewBox={`0 0 ${size} ${size}`} className="h-[220px] w-[220px]">
+          <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="hsl(var(--muted))" strokeWidth={strokeWidth} />
+          {segments.map((segment) => (
+            <circle
+              key={`${segment.provider_id}:${segment.model}`}
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill="none"
+              stroke={segment.color}
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${segment.dash} ${segment.gap}`}
+              strokeDashoffset={-segment.offset}
+              strokeLinecap="round"
+              transform={`rotate(-90 ${size / 2} ${size / 2})`}
+            />
+          ))}
+        </svg>
+      </div>
+      <div className="space-y-2">
+        {segments.map((segment) => (
+          <div key={`${segment.provider_id}:${segment.model}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+            <div className="flex items-center gap-3">
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: segment.color }} />
+              <div>
+                <div className="text-sm font-medium">{segment.model}</div>
+                <div className="text-xs text-muted-foreground">{segment.provider_id}</div>
+              </div>
+            </div>
+            <div className="text-right text-sm">
+              <div>{Math.round(segment.share * 100)}%</div>
+              <div className="text-xs text-muted-foreground">{segment.total_tokens.toLocaleString()} tokens</div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
+
+function UsageTrendCard({ chart, timeline }: { chart: UsageChart; timeline: Array<{ date: string; runs: number; input_tokens: number; output_tokens: number; total_tokens: number; total_cost_usd: number }> }) {
+  return (
+    <Card className="usage-trend-card">
+      <CardContent className="space-y-3 p-4">
+        <h3 className="text-sm font-medium text-foreground">Follower metrics</h3>
+        <AreaChart data={chart.data} index="date" categories={chart.categories} colors={chart.colors} showLegend={false} showYAxis={false} showGradient={false} startEndOnly className="h-32" />
+        <List className="usage-trend-list">
+          {chart.summary.map((item) => (
+            <ListItem key={item.name}>
+              <span className="usage-trend-name">
+                <span className="usage-trend-swatch" style={{ backgroundColor: item.color }} />
+                {item.name}
+              </span>
+              <span className="font-medium text-foreground">{item.value.toLocaleString()}</span>
+            </ListItem>
+          ))}
+        </List>
+        <div className="text-xs text-muted-foreground">{timeline.length ? `${formatUsageDateLabel(timeline[0].date)} → ${formatUsageDateLabel(timeline[timeline.length - 1].date)}` : "No timeline data yet."}</div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function buildUsageChartSeries(analytics: UsageAnalytics | null, rows: ModelUsageRow[]): UsageChart {
+  const series = analytics?.series || [];
+  const timeline = analytics?.timeline || [];
+  const grouped = new Map<string, { provider_id: string; model: string }>();
+  series.forEach((point: UsageAnalytics["series"][number]) => {
+    const key = usageSeriesKey(point.provider_id, point.model);
+    if (!grouped.has(key)) grouped.set(key, { provider_id: point.provider_id, model: point.model });
+  });
+  if (!grouped.size) {
+    rows.filter((row) => row.total_tokens > 0).forEach((row) => {
+      const key = usageSeriesKey(row.provider_id, row.model);
+      if (!grouped.has(key)) grouped.set(key, { provider_id: row.provider_id, model: row.model });
+    });
+  }
+  const entries = Array.from(grouped.values());
+  const categories = entries.map((item) => usageSeriesKey(item.provider_id, item.model));
+  const colors = entries.map((_, index) => USAGE_COLORS[index % USAGE_COLORS.length]);
+  const data = timeline.map((day: UsageAnalytics["timeline"][number]) => {
+    const row: Record<string, string | number> = { date: day.date };
+    categories.forEach((category) => {
+      row[category] = 0;
+    });
+    return row;
+  });
+  series.forEach((point: UsageAnalytics["series"][number]) => {
+    const category = usageSeriesKey(point.provider_id, point.model);
+    const dayRow = data.find((entry) => entry.date === point.date);
+    if (dayRow) dayRow[category] = point.total_tokens;
+  });
+  const summary = entries.map((item, index) => {
+    const category = usageSeriesKey(item.provider_id, item.model);
+    const value = data.reduce((total, row) => total + Number(row[category] || 0), 0) || rows.find((row) => row.provider_id === item.provider_id && row.model === item.model)?.total_tokens || 0;
+    return { name: item.model, value, color: colors[index] };
+  });
+  return { data, categories, colors, summary, timeline };
+}
+
+function usageSeriesKey(providerId: string, model: string) {
+  return `${providerId}_${model}`.replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
+function formatUsageDateLabel(value: string) {
+  if (!value) return "-";
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    const normalized = numeric > 10_000_000_000 ? numeric : numeric * 1000;
+    const date = new Date(normalized);
+    if (!Number.isNaN(date.getTime())) return date.toLocaleDateString();
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+}
+
+type UsageChart = {
+  data: Array<Record<string, string | number>>;
+  categories: string[];
+  colors: string[];
+  summary: Array<{ name: string; value: number; color: string }>;
+  timeline: Array<{ date: string; runs: number; input_tokens: number; output_tokens: number; total_tokens: number; total_cost_usd: number }>;
+};
+
+function AreaChart({
+  data,
+  index,
+  categories,
+  colors,
+  showLegend = false,
+  showYAxis = false,
+  showGradient = false,
+  startEndOnly = false,
+  className = ""
+}: {
+  data: Array<Record<string, string | number>>;
+  index: string;
+  categories: string[];
+  colors: string[];
+  showLegend?: boolean;
+  showYAxis?: boolean;
+  showGradient?: boolean;
+  startEndOnly?: boolean;
+  className?: string;
+}) {
+  if (!data.length || !categories.length) {
+    return <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">No usage data yet.</div>;
+  }
+  const width = 720;
+  const height = 132;
+  const paddingX = 18;
+  const paddingY = 10;
+  const xStep = data.length > 1 ? (width - paddingX * 2) / (data.length - 1) : 0;
+  const values = data.flatMap((row: Record<string, string | number>) => categories.map((category: string) => Number(row[category] || 0)));
+  const maxValue = Math.max(1, ...values);
+  const yScale = (value: number) => height - paddingY - (value / maxValue) * (height - paddingY * 2);
+  const buildPath = (category: string) => {
+    const points = data.map((row: Record<string, string | number>, pointIndex: number) => `${pointIndex === 0 ? "M" : "L"} ${paddingX + pointIndex * xStep} ${yScale(Number(row[category] || 0))}`).join(" ");
+    const firstX = paddingX;
+    const lastX = paddingX + (data.length - 1) * xStep;
+    if (data.length === 1) {
+      const y = yScale(Number(data[0][category] || 0));
+      return `M ${firstX} ${y} L ${firstX + 1} ${y}`;
+    }
+    return `${points} L ${lastX} ${height - paddingY} L ${firstX} ${height - paddingY} Z`;
+  };
+  return (
+    <div className={className ? `space-y-3 ${className}` : "space-y-3"}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-32 w-full overflow-visible">
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => (
+          <line
+            key={ratio}
+            x1={paddingX}
+            x2={width - paddingX}
+            y1={paddingY + ratio * (height - paddingY * 2)}
+            y2={paddingY + ratio * (height - paddingY * 2)}
+            stroke="var(--border)"
+            strokeWidth="1"
+            strokeDasharray="4 4"
+            opacity={ratio === 1 || ratio === 0 ? 0.6 : 0.35}
+          />
+        ))}
+        {categories.map((category, index) => (
+          <path key={category} d={buildPath(category)} fill={colors[index % colors.length]} opacity={0.14 + index * 0.03} />
+        ))}
+        {categories.map((category, index) => (
+          <path
+            key={`${category}-line`}
+            d={data.map((row, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${paddingX + pointIndex * xStep} ${yScale(Number(row[category] || 0))}`).join(" ")}
+            fill="none"
+            stroke={colors[index % colors.length]}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ))}
+        {data.map((row, pointIndex) => (
+          <g key={String(row[index])}>
+            {categories.map((category, categoryIndex) => {
+              const value = Number(row[category] || 0);
+              if (!value) return null;
+              return <circle key={`${category}-${pointIndex}`} cx={paddingX + pointIndex * xStep} cy={yScale(value)} r={data.length === 1 ? 4 : 3} fill={colors[categoryIndex % colors.length]} />;
+            })}
+          </g>
+        ))}
+        {data.length > 0 ? (
+          <>
+            <text x={paddingX} y={height - 2} className="fill-muted-foreground text-[10px]">
+              {String(data[0][index])}
+            </text>
+            {data.length > 1 ? (
+              <text x={width - paddingX} y={height - 2} textAnchor="end" className="fill-muted-foreground text-[10px]">
+                {String(data[data.length - 1][index])}
+              </text>
+            ) : null}
+          </>
+        ) : null}
+      </svg>
+    </div>
+  );
+}
+
+function ChartSkeleton() {
+  return <div className="h-[220px] animate-pulse rounded-lg border border-dashed bg-muted/20" />;
+}
+
+const USAGE_COLORS = ['#6366f1', '#14b8a6', '#f59e0b', '#ef4444', '#8b5cf6', '#22c55e', '#06b6d4'];
 
 type ModelCandidate = {
   key: string;
@@ -2481,35 +2855,22 @@ function ToolActivityBlock({ item }: { item: TranscriptItem }) {
   if (!activity) return null;
   const entries = activity.entries || [];
   const commandCount = entries.filter((entry) => entry.kind === "command").length;
+  const narrative = activity.narrative || activity.summary || activity.detail || "";
+  const detailText = entries
+    .map((entry) => entry.narrative || entry.detail)
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .join("\n\n");
   return (
-    <details className={`tool-activity ${activity.tone || "success"}`}>
-      <summary>
+    <div className={`tool-activity ${activity.tone || "success"}`}>
+      <div className="tool-activity-head">
         <span className="tool-activity-status">{activity.title}</span>
-        <ChevronRight size={14} />
-      </summary>
-      <div className="tool-activity-detail">
-        {activity.summary ? <p className="tool-activity-summary">{activity.summary}</p> : null}
-        {commandCount > 0 ? <p className="tool-activity-command-count">已运行 {commandCount} 条命令</p> : null}
-        {entries.length > 0 ? (
-          <ol className="tool-activity-steps">
-            {entries.map((entry) => (
-              <li className={`tool-activity-step ${entry.tone || "success"}`} key={entry.id}>
-                <div className="tool-activity-step-head">
-                  <span>{entry.label}</span>
-                  {entry.durationLabel ? <small>{entry.durationLabel}</small> : null}
-                  {entry.tone === "running" ? <small>运行中</small> : null}
-                </div>
-                {entry.detail ? <pre>{entry.detail}</pre> : null}
-                {entry.attachments?.length ? <RichMessageAttachments attachments={entry.attachments} /> : null}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <pre>{activity.detail}</pre>
-        )}
+        {activity.durationLabel ? <span className="tool-activity-duration">· {activity.durationLabel}</span> : null}
       </div>
+      {narrative ? <p className="tool-activity-narrative">{narrative}</p> : null}
+      {commandCount > 0 ? <p className="tool-activity-command-count">已运行 {commandCount} 条命令</p> : null}
+      {detailText ? <p className="tool-activity-detail-text">{detailText}</p> : null}
       {entries.length === 0 ? <RichMessageAttachments attachments={item.body.attachments} /> : null}
-    </details>
+    </div>
   );
 }
 
@@ -3261,7 +3622,7 @@ function CapabilityWorkbench({
                   {capabilityMeta(item, tab).map((meta) => <span key={meta}>{meta}</span>)}
                 </span>
               </span>
-              <span className="capability-card-menu" aria-hidden="true">⋮</span>
+              <span className="capability-card-menu" aria-hidden="true">?</span>
             </button>
           ))}
           {items.length === 0 ? <div className="capability-empty">No {tab} resources configured yet.</div> : null}
@@ -4062,10 +4423,11 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
   activityGroups.forEach((group, index) => {
     const activity = combineActivityItemsForTranscript(buildActivityRuns(group), group);
     if (!activity) return;
+    const bodyText = [activity.narrative || activity.summary || activity.detail, activity.detail].filter(Boolean).join("\n\n");
     runtime.push({
       id: `activity-turn:${index}:${activity.startedAt || activity.endedAt || runtime.length}`,
       role: "activity",
-      body: { text: activity.detail, attachments: activity.entries?.flatMap((entry) => entry.attachments || []) || [] },
+      body: { text: bodyText, attachments: activity.entries?.flatMap((entry) => entry.attachments || []) || [] },
       timestamp: activity.endedAt || activity.startedAt,
       activity
     });
@@ -4102,7 +4464,7 @@ function combineActivityItemsForTranscript(items: ActivityItem[], events: Runtim
     phase: items.some((item) => item.phase === "preparing" || item.phase === "analyzing" || item.phase === "finalizing") ? "analyzing" : items.some((item) => item.phase === "planning") ? "planning" : "tool",
     status,
     tone: status,
-    title: `${status === "error" ? "Failed" : running ? "Running" : "Done"} · ${items.length} activities${durationLabel ? ` · ${durationLabel}` : ""}`,
+    title: `${status === "error" ? "遇到问题" : running ? "正在推进" : "已完成"} · ${items.length} 个过程${durationLabel ? ` · ${durationLabel}` : ""}`,
     summary: [
       toolCount ? `${toolCount} tool call${toolCount === 1 ? "" : "s"}` : "",
       approvalCount ? `${approvalCount} approval${approvalCount === 1 ? "" : "s"}` : "",
@@ -4625,6 +4987,99 @@ function runtimeEventDedupeKey(event: RuntimeEvent) {
   return runtimeEventKey(event);
 }
 
+type ContextSummary = {
+  used: number;
+  total: number;
+  usedPct: number;
+  usedLabel: string;
+  totalLabel: string;
+  usedPctLabel: string;
+  statusLabel: string;
+  inputLabel: string;
+  outputLabel: string;
+  costLabel: string;
+};
+
+function buildContextSummary(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []): ContextSummary {
+  const total = firstNumber(
+    latestContextValue(events, "context_total_budget"),
+    snapshot?.history?.max_total_text_chars ? snapshot.history.max_total_text_chars * 4 : undefined,
+    258_000
+  ) || 258_000;
+  const used = Math.max(0, firstNumber(latestContextValue(events, "context_used"), snapshot?.history?.returned_message_count ? snapshot.history.returned_message_count * 1000 : undefined, snapshot?.history?.visible_message_count ? snapshot.history.visible_message_count * 1000 : undefined) || 0);
+  const usedPct = total > 0 ? Math.min(1, used / total) : 0;
+  const inputTokens = Math.max(0, firstNumber(latestContextValue(events, "input_tokens"), 0) || 0);
+  const outputTokens = Math.max(0, firstNumber(latestContextValue(events, "output_tokens"), 0) || 0);
+  const cost = firstNumber(latestContextValue(events, "total_cost_usd"), 0);
+  return {
+    used,
+    total,
+    usedPct,
+    usedLabel: formatCompactTokens(used),
+    totalLabel: formatCompactTokens(total),
+    usedPctLabel: `${(usedPct * 100).toFixed(1)}%`,
+    statusLabel: snapshot?.history?.truncated ? "Truncated" : "Live",
+    inputLabel: formatCompactTokens(inputTokens),
+    outputLabel: formatCompactTokens(outputTokens),
+    costLabel: cost != null ? `$${cost.toFixed(2)}` : "$0.00",
+  };
+}
+
+function latestContextValue(events: RuntimeEvent[], key: "context_used" | "context_total_budget" | "input_tokens" | "output_tokens" | "total_cost_usd") {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    const details = event.details || {};
+    if (event.type === "context_built" || event.type === "context.build") {
+      const value = details[key];
+      const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+      if (Number.isFinite(n)) return n;
+      const context = details.context && typeof details.context === "object" ? details.context as Record<string, unknown> : {};
+      const report = context.budget_report && typeof context.budget_report === "object" ? context.budget_report as Record<string, unknown> : {};
+      const fallback = report[key === "context_used" ? "used" : key === "context_total_budget" ? "total_budget" : key];
+      const fallbackNumber = typeof fallback === "number" ? fallback : typeof fallback === "string" ? Number(fallback) : NaN;
+      if (Number.isFinite(fallbackNumber)) return fallbackNumber;
+    }
+  }
+  return undefined;
+}
+
+function firstNumber(...values: Array<number | undefined>) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function formatCompactTokens(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
+  return String(Math.round(value));
+}
+
+function ContextRing({ value }: { value: number }) {
+  const radius = 10;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference * (1 - Math.max(0, Math.min(1, value)));
+  return (
+    <svg aria-hidden="true" height="20" viewBox="0 0 24 24" width="20">
+      <circle cx="12" cy="12" fill="none" opacity="0.22" r={radius} stroke="currentColor" strokeWidth="2" />
+      <circle
+        cx="12"
+        cy="12"
+        fill="none"
+        opacity="0.92"
+        r={radius}
+        stroke="currentColor"
+        strokeDasharray={`${circumference} ${circumference}`}
+        strokeDashoffset={dashOffset}
+        strokeLinecap="round"
+        strokeWidth="2"
+        style={{ transform: "rotate(-90deg)", transformOrigin: "center" }}
+      />
+    </svg>
+  );
+}
+
 function runtimeEventKey(event: RuntimeEvent) {
   const detailKey = event.details?.event_id || event.details?.id || event.details?.tool_call_id || event.details?.token || event.details?.artifact_id || "";
   return [
@@ -4946,3 +5401,5 @@ function shortId(value: string) {
 function sortSessionsByUpdatedAt(items: SessionEntry[]) {
   return [...items].sort((left, right) => (right.updated_at || 0) - (left.updated_at || 0));
 }
+
+

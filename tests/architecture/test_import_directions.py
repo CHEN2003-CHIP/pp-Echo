@@ -10,6 +10,7 @@ CHECKED_LAYERS = {
     "api",
     "app",
     "browser",
+    "coding",
     "capabilities",
     "cli",
     "config",
@@ -32,7 +33,7 @@ CHECKED_LAYERS = {
     "web_tools",
 }
 ALLOWED = {
-    "cli": {"cli", "app", "runtime", "storage", "domain", "api", "config", "evaluation", "learning", "memory", "skills", "tools", "tui", "web", "web_tools", "onboarding", "sandbox"},
+    "cli": {"cli", "app", "runtime", "storage", "domain", "api", "config", "evaluation", "learning", "memory", "skills", "tools", "tui", "web", "web_tools", "onboarding", "sandbox", "coding", "observability"},
     "app": {"app", "runtime", "storage", "llm", "tools", "domain", "extensions", "capabilities", "mcp", "web_tools", "config", "learning", "memory", "prompts", "skills", "subagents", "browser", "attachments", "observability", "sandbox"},
     "runtime": {"runtime", "storage", "llm", "tools", "domain", "config", "memory", "subagents", "observability"},
     "llm": {"llm", "domain"},
@@ -52,8 +53,9 @@ ALLOWED = {
     "skills": {"skills"},
     "subagents": {"subagents", "domain", "runtime", "storage", "tools"},
     "browser": {"browser", "storage", "tools", "web_tools"},
+    "coding": {"coding", "context", "observability", "runtime"},
     "tui": {"tui", "app", "domain", "runtime"},
-    "web": {"web", "api", "app", "cli", "domain", "runtime", "server", "storage"},
+    "web": {"web", "api", "app", "cli", "config", "domain", "runtime", "sandbox", "server", "storage", "coding", "observability"},
     "sandbox": {"sandbox"},
 }
 SANDBOX_CONTRACT_MODULES = {
@@ -62,6 +64,7 @@ SANDBOX_CONTRACT_MODULES = {
     "pp_agent.sandbox.changes",
     "pp_agent.sandbox.config",
     "pp_agent.sandbox.network",
+    "pp_agent.sandbox.preflight",
 }
 SANDBOX_RESOLVER_ALLOWED_LAYERS = {"app", "sandbox"}
 REMOVED_TOP_LEVEL_PACKAGES = {"agent_cli", "agent_core", "storage", "tools"}

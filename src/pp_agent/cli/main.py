@@ -88,6 +88,28 @@ if app:
         )
         run_main(prompt, workspace, session_id, json_mode=json_mode, mode=mode)
 
+    @app.command("code")
+    def code(
+        task: str = typer.Argument(..., help="Coding task to run through the controlled workflow."),
+        workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
+        max_turns: int = typer.Option(3, "--max-turns"),
+        prepare_only: bool = typer.Option(False, "--prepare-only"),
+        dry_run: bool = typer.Option(False, "--dry-run"),
+        json_mode: bool = typer.Option(False, "--json"),
+        show_timeline: bool = typer.Option(False, "--show-timeline"),
+    ) -> None:
+        from pp_agent.cli.commands.coding import run_code_command
+
+        run_code_command(
+            task,
+            workspace,
+            max_turns=max_turns,
+            prepare_only=prepare_only,
+            dry_run=dry_run,
+            json_mode=json_mode,
+            show_timeline=show_timeline,
+        )
+
     @app.command()
     def tui(
         workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w"),
@@ -816,6 +838,14 @@ def main() -> None:
     run_parser.add_argument("--json", action="store_true")
     run_parser.add_argument("--mode", default="default")
     add_sandbox_args(run_parser)
+    code_parser = subparsers.add_parser("code")
+    code_parser.add_argument("task")
+    code_parser.add_argument("--workspace", "-w", default=str(Path.cwd()))
+    code_parser.add_argument("--max-turns", type=int, default=3)
+    code_parser.add_argument("--prepare-only", action="store_true")
+    code_parser.add_argument("--dry-run", action="store_true")
+    code_parser.add_argument("--json", action="store_true")
+    code_parser.add_argument("--show-timeline", action="store_true")
     sessions_parser = subparsers.add_parser("sessions")
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_command", required=True)
     sessions_list_parser = sessions_subparsers.add_parser("list")
@@ -1018,6 +1048,18 @@ def main() -> None:
 
         apply_parsed_sandbox_args(args)
         run_main(args.prompt, Path(args.workspace), args.session, json_mode=args.json, mode=args.mode)
+    elif command == "code":
+        from pp_agent.cli.commands.coding import run_code_command
+
+        run_code_command(
+            args.task,
+            Path(args.workspace),
+            max_turns=args.max_turns,
+            prepare_only=args.prepare_only,
+            dry_run=args.dry_run,
+            json_mode=args.json,
+            show_timeline=args.show_timeline,
+        )
     elif command == "sessions" and args.sessions_command == "list":
         from pp_agent.cli.commands.sessions import sessions_list_main
 

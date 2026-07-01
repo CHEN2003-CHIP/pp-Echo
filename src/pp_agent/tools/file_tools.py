@@ -10,6 +10,14 @@ from typing import Any, Optional
 
 from pp_agent.domain import ToolSpec
 from pp_agent.attachments.importer import AttachmentWorkspaceImporter
+from pp_agent.runtime.execution_context import (
+    attach_runtime_context_to_patch_candidate_args,
+    check_runtime_guardrails,
+    increment_runtime_counter,
+    runtime_counters_to_dict,
+    runtime_guardrail_check_to_dict,
+)
+from pp_agent.runtime.scope_contract import check_structured_changes_against_write_scope, write_scope_check_to_dict, write_scope_from_dict
 from pp_agent.sandbox.base import SandboxExecutor, SandboxRunRequest
 from pp_agent.sandbox.changes import bytes_digest, normalize_structured_changes, structured_changes_digest as hash_structured_changes
 from pp_agent.sandbox.preflight import DockerSandboxPreflightError
@@ -561,8 +569,12 @@ class ApprovePendingActionTool(BaseTool):
                 failure_reason_detail=str(exc),
             )
             raise
-        payload = store.set_lifecycle(arguments["token"], "execution_in_progress")
         action_type = payload["action_type"]
+        if action_type == "run_shell":
+            shell_guardrail = self._check_runtime_guardrail("shell_command")
+            if shell_guardrail.allowed is False:
+                return self._runtime_guardrail_block_result("shell_command", shell_guardrail, token=arguments["token"])
+        payload = store.set_lifecycle(arguments["token"], "execution_in_progress")
         if action_type in {"write_file", "edit_file"}:
             try:
                 path = self.enforce_policy_for_path(PermissionDomain.EDIT, payload["target_path"])
@@ -602,6 +614,7 @@ class ApprovePendingActionTool(BaseTool):
                     raise sandbox_result_error(completed)
             except Exception as exc:
                 return self._record_execution_failure(store, arguments["token"], effect, exc)
+            shell_context = self._increment_runtime_counter("shell_command")
             patch_candidate = self._stage_patch_candidate(store, payload, completed)
             shell_content = shell_output(completed).strip() or "[no output]"
             if patch_candidate.get("staged"):
@@ -623,6 +636,7 @@ class ApprovePendingActionTool(BaseTool):
                     "returncode": completed.returncode,
                     "effect": effect,
                     "patch_candidate": patch_candidate,
+                    **self._runtime_result_details(shell_context, guardrail_check=shell_guardrail, action="shell_command"),
                     **sandbox_result_details(completed),
                 },
             )
@@ -657,6 +671,7 @@ class ApprovePendingActionTool(BaseTool):
                     "lock_released": apply_result.get("lock_released"),
                     "lock_path": apply_result.get("lock_path"),
                     "lock_wait_ms": apply_result.get("lock_wait_ms"),
+                    **({"scope_check": apply_result.get("scope_check")} if apply_result.get("scope_check") is not None else {}),
                     **(
                         {
                             "lock_release_error": apply_result.get("lock_release_error"),
@@ -774,6 +789,57 @@ class ApprovePendingActionTool(BaseTool):
             )
         )
 
+    def _runtime_execution_context(self):
+        if self.tool_registry is None:
+            return None
+        getter = getattr(self.tool_registry, "runtime_execution_context", None)
+        if not callable(getter):
+            return None
+        return getter()
+
+    def _set_runtime_execution_context(self, context: Any) -> None:
+        if self.tool_registry is None:
+            return
+        setter = getattr(self.tool_registry, "_set_runtime_execution_context", None)
+        if callable(setter):
+            setter(context)
+
+    def _check_runtime_guardrail(self, action: str):
+        return check_runtime_guardrails(self._runtime_execution_context(), action)
+
+    def _increment_runtime_counter(self, action: str):
+        context = self._runtime_execution_context()
+        if context is None:
+            return None
+        updated = increment_runtime_counter(context, action)
+        self._set_runtime_execution_context(updated)
+        return updated
+
+    def _runtime_result_details(self, context: Any, *, guardrail_check: Any | None = None, action: str | None = None) -> dict[str, Any]:
+        current = context or self._runtime_execution_context()
+        details: dict[str, Any] = {"runtime_execution_context_present": current is not None}
+        if current is not None:
+            details["execution_session_id"] = current.session_id
+            details["runtime_counters"] = runtime_counters_to_dict(current.counters)
+        if guardrail_check is not None:
+            key = f"{action}_guardrail_check" if action else "guardrail_check"
+            details[key] = runtime_guardrail_check_to_dict(guardrail_check)
+        return details
+
+    def _runtime_guardrail_block_result(self, action: str, check: Any, *, token: str) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name=self.spec.name,
+            content=f"Runtime guardrail blocked {action}: {check.reason}",
+            is_error=True,
+            details={
+                "token": token,
+                "runtime_guardrail_blocked": True,
+                "guardrail_check": runtime_guardrail_check_to_dict(check),
+                **self._runtime_result_details(None),
+            },
+        )
+
     def _stage_patch_candidate(self, store: PendingActionStore, shell_payload: dict[str, Any], completed: Any) -> dict[str, Any]:
         """Stage a separate approval action for a Docker sandbox patch candidate."""
 
@@ -792,41 +858,60 @@ class ApprovePendingActionTool(BaseTool):
             return {"staged": False, "reason": "patch truncated", "patch_truncated": True}
         if not structured_changes and not patch.strip():
             return {"staged": False, "reason": "empty patch"}
+        patch_guardrail = self._check_runtime_guardrail("patch_candidate")
+        if patch_guardrail.allowed is False:
+            return {
+                "staged": False,
+                "reason": patch_guardrail.reason,
+                "patch_candidate_blocked": True,
+                "runtime_guardrail_blocked": True,
+                "guardrail_check": runtime_guardrail_check_to_dict(patch_guardrail),
+                **self._runtime_result_details(None),
+            }
         patch_digest = content_digest(patch)
         source_digest = content_digest(str(shell_payload.get("command") or ""))
+        candidate_args = {
+            "patch": patch,
+            "changed_files": changed_files,
+            "patch_summary": completed.patch_summary or "",
+            "patch_digest": patch_digest,
+            "source_shell_command_digest": source_digest,
+            "source_shell_action_token": shell_payload.get("token"),
+            "sandbox_backend": completed.backend,
+            "sandbox_mode": completed.sandbox_mode,
+            "patch_truncated": completed.patch_truncated,
+            "structured_changes": structured_changes,
+            "structured_changes_digest": structured_digest,
+            "structured_changes_truncated": completed.structured_changes_truncated,
+            **(
+                {"write_scope": shell_payload.get("details", {}).get("write_scope")}
+                if isinstance(shell_payload.get("details"), dict) and isinstance(shell_payload.get("details", {}).get("write_scope"), dict)
+                else {}
+            ),
+        }
+        candidate_args = attach_runtime_context_to_patch_candidate_args(candidate_args, self._runtime_execution_context())
         effect = build_patch_candidate_effect(
             tool_name=APPLY_PATCH_CANDIDATE_TOOL,
             permission_domain=PermissionDomain.EDIT,
-            patch=patch,
-            changed_files=changed_files,
-            patch_summary=completed.patch_summary or "",
-            source_shell_command_digest=source_digest,
-            sandbox_backend=completed.backend,
-            sandbox_mode=completed.sandbox_mode,
-            patch_truncated=completed.patch_truncated,
-            structured_changes=structured_changes,
-            structured_changes_digest=structured_digest,
-            structured_changes_truncated=completed.structured_changes_truncated,
+            patch=candidate_args["patch"],
+            changed_files=candidate_args["changed_files"],
+            patch_summary=candidate_args["patch_summary"],
+            source_shell_command_digest=candidate_args["source_shell_command_digest"],
+            sandbox_backend=candidate_args["sandbox_backend"],
+            sandbox_mode=candidate_args["sandbox_mode"],
+            patch_truncated=candidate_args["patch_truncated"],
+            structured_changes=candidate_args["structured_changes"],
+            structured_changes_digest=candidate_args["structured_changes_digest"],
+            structured_changes_truncated=candidate_args["structured_changes_truncated"],
+            write_scope=candidate_args.get("write_scope") if isinstance(candidate_args.get("write_scope"), dict) else None,
         )
         payload = store.stage(
             action_type="apply_patch_candidate",
-            details={
-                "patch": patch,
-                "changed_files": changed_files,
-                "patch_summary": completed.patch_summary or "",
-                "patch_digest": patch_digest,
-                "source_shell_command_digest": source_digest,
-                "source_shell_action_token": shell_payload.get("token"),
-                "sandbox_backend": completed.backend,
-                "sandbox_mode": completed.sandbox_mode,
-                "patch_truncated": completed.patch_truncated,
-                "structured_changes": structured_changes,
-                "structured_changes_digest": structured_digest,
-                "structured_changes_truncated": completed.structured_changes_truncated,
-            },
+            details=candidate_args,
             effect=effect,
             origin={"source": "sandbox", "tool_name": APPLY_PATCH_CANDIDATE_TOOL, "kind": "patch_candidate"},
         )
+        patch_context = self._increment_runtime_counter("patch_candidate")
         return {
             "staged": True,
             "token": payload["token"],
@@ -836,6 +921,7 @@ class ApprovePendingActionTool(BaseTool):
             "structured_changes_count": len(structured_changes),
             "structured_changes_digest": structured_digest,
             "structured_changes_truncated": completed.structured_changes_truncated,
+            **self._runtime_result_details(patch_context, guardrail_check=patch_guardrail, action="patch_candidate"),
         }
 
     def _apply_patch_candidate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -843,9 +929,45 @@ class ApprovePendingActionTool(BaseTool):
 
         details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
         structured_changes = normalize_structured_changes(details.get("structured_changes"))
+        scope_result = self._check_patch_candidate_write_scope(details, structured_changes)
+        if scope_result.get("scope_blocked"):
+            return scope_result
         if structured_changes:
-            return self._apply_structured_patch_candidate_payload(details, structured_changes)
-        return self._apply_unified_diff_patch_candidate_payload(details)
+            result = self._apply_structured_patch_candidate_payload(details, structured_changes)
+        else:
+            result = self._apply_unified_diff_patch_candidate_payload(details)
+        if scope_result.get("scope_check") is not None:
+            result["scope_check"] = scope_result["scope_check"]
+        return result
+
+    def _check_patch_candidate_write_scope(self, details: dict[str, Any], structured_changes: list[dict[str, Any]]) -> dict[str, Any]:
+        """Check optional write_scope before acquiring locks or writing patch candidate changes."""
+
+        raw_scope = details.get("write_scope")
+        if raw_scope is None:
+            return {
+                "scope_check": write_scope_check_to_dict(check_structured_changes_against_write_scope(None, structured_changes)),
+            }
+        scope = write_scope_from_dict(raw_scope if isinstance(raw_scope, dict) else None)
+        check = check_structured_changes_against_write_scope(scope, structured_changes)
+        payload = write_scope_check_to_dict(check)
+        if check.allowed is False:
+            return {
+                "applied": False,
+                "atomic": True,
+                "rollback_attempted": False,
+                "rollback_succeeded": None,
+                "partial_state_possible": False,
+                "post_apply_validated": False,
+                "lock_acquired": False,
+                "lock_released": None,
+                "scope_blocked": True,
+                "scope_check": payload,
+                "reason": check.reason,
+                "apply_backend": "structured_changes" if structured_changes else "internal_unified_diff",
+                "structured_changes_digest": details.get("structured_changes_digest"),
+            }
+        return {"scope_check": payload}
 
     def _apply_unified_diff_patch_candidate_payload(self, details: dict[str, Any]) -> dict[str, Any]:
         """Apply a legacy unified-diff patch candidate when structured changes are absent."""
@@ -1654,6 +1776,7 @@ class ApprovePendingActionTool(BaseTool):
                 structured_changes=normalize_structured_changes(details.get("structured_changes")),
                 structured_changes_digest=str(details.get("structured_changes_digest") or ""),
                 structured_changes_truncated=bool(details.get("structured_changes_truncated")),
+                write_scope=details.get("write_scope") if isinstance(details.get("write_scope"), dict) else None,
                 effect_id=stored_effect["effect_id"],
                 created_at=stored_effect["created_at"],
             )
@@ -1661,6 +1784,10 @@ class ApprovePendingActionTool(BaseTool):
                 raise ValueError("Approval invalidated: patch digest changed after approval.")
             if "structured_changes_digest" in details and str(details.get("structured_changes_digest") or "") != effect["normalized_arguments"]["structured_changes_digest"]:
                 raise ValueError("Approval invalidated: structured changes digest changed after approval.")
+            stored_write_scope = stored_effect.get("normalized_arguments", {}).get("write_scope")
+            current_write_scope = effect["normalized_arguments"].get("write_scope")
+            if stored_write_scope != current_write_scope:
+                raise ValueError("Approval invalidated: write scope changed after approval.")
             return effect
         if action_type == "attachment_import":
             details = payload.get("details", {})

@@ -6,11 +6,13 @@ from typing import Any
 
 from pp_agent.attachments.context import AttachmentContextProvider
 from pp_agent.capabilities.router import CapabilitySelection
+from pp_agent.coding.repository import analyze_repository, repository_analysis_to_context_item
 from pp_agent.context.adapters import build_context_pack_from_messages
 from pp_agent.context.budget import ContextItemSummary
 from pp_agent.context.item import ContextItem
 from pp_agent.context.pack import ContextPack
 from pp_agent.context.pipeline import ContextPipeline, ContextPipelineConfig
+from pp_agent.context.project import build_project_context, project_context_to_timeline_step
 from pp_agent.context.source_ref import SourceRef
 from pp_agent.domain import ChatMessage, TextPart
 
@@ -72,6 +74,11 @@ def build_runtime_context_pack(
         pre_dropped_items=[*legacy_pack.budget_report.dropped_items, *_blocked_capability_summaries(capability_selection)],
         strict_core_memory=False,
     )
+    project_context = build_project_context(workspace)
+    repository_analysis = analyze_repository(workspace, project_context)
+    project_context_item = project_context_to_timeline_step(project_context)
+    repository_analysis_item = repository_analysis_to_context_item(repository_analysis)
+    pack.project_context = [project_context_item, repository_analysis_item, *pack.project_context]
     pack.source_refs = _unique_source_refs([*legacy_pack.source_refs, *pack.source_refs])
     pack.final_messages = pipeline.render_messages(pack)
     return pack

@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / 'src' / 'pp_agent'
 ALLOWED = {
-    'cli': {'cli', 'runtime', 'domain', 'storage', 'app', 'api', 'config', 'evaluation', 'learning', 'memory', 'skills', 'tools', 'tui', 'web', 'web_tools', 'onboarding', 'sandbox'},
+    'cli': {'cli', 'runtime', 'domain', 'storage', 'app', 'api', 'config', 'evaluation', 'learning', 'memory', 'skills', 'tools', 'tui', 'web', 'web_tools', 'onboarding', 'sandbox', 'coding', 'observability'},
     'runtime': {'runtime', 'domain', 'llm', 'tools', 'storage', 'config', 'memory', 'subagents', 'observability'},
     'storage': {'storage', 'domain', 'llm', 'learning', 'memory', 'sandbox'},
     'llm': {'llm', 'domain'},
@@ -26,8 +26,9 @@ ALLOWED = {
     'subagents': {'subagents', 'domain', 'runtime', 'storage', 'tools'},
     'web_tools': {'web_tools', 'domain', 'runtime', 'storage', 'tools'},
     'browser': {'browser', 'storage', 'tools', 'web_tools'},
+    'coding': {'coding', 'context', 'observability', 'runtime'},
     'tui': {'tui', 'app', 'domain', 'runtime'},
-    'web': {'web', 'api', 'app', 'cli', 'domain', 'runtime', 'server', 'storage'},
+    'web': {'web', 'api', 'app', 'cli', 'config', 'domain', 'runtime', 'sandbox', 'server', 'storage', 'coding', 'observability'},
     'sandbox': {'sandbox'},
 }
 SANDBOX_CONTRACT_MODULES = {
@@ -36,6 +37,7 @@ SANDBOX_CONTRACT_MODULES = {
     'pp_agent.sandbox.changes',
     'pp_agent.sandbox.config',
     'pp_agent.sandbox.network',
+    'pp_agent.sandbox.preflight',
 }
 SANDBOX_RESOLVER_ALLOWED_LAYERS = {'app', 'sandbox'}
 REMOVED_TOP_LEVEL_PACKAGES = {'agent_cli', 'agent_core', 'storage', 'tools'}

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Activity, CircleAlert, Clock3, Code2, Copy, ListChecks, ShieldCheck, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import type { ActivityItem } from "./activity-types";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { buildActivitySummary } from "./activity-normalizer";
@@ -30,27 +34,35 @@ export function ActivityDetailsPanel({
 
   return (
     <section className="activity-details-panel">
-      <header className={`activity-run-summary ${summary.status}`}>
-        <div>
-          <small>ACTIVITY</small>
-          <h3>{summary.status === "running" ? "Run in progress" : summary.activityCount ? "Run activity" : "Waiting for activity"}</h3>
-          <p>{summary.durationLabel || "No runtime events yet"}</p>
-        </div>
-        <div className="activity-run-actions">
-          <button className={follow ? "active" : ""} onClick={() => setFollow((value) => !value)} type="button">
-            <Activity size={14} />
-            {follow ? "Following" : "Paused"}
-          </button>
-          {onClose ? <button onClick={onClose} type="button" title="Close activity"><X size={14} /></button> : null}
-        </div>
-      </header>
+      <Card className="activity-run-summary">
+        <CardContent className="space-y-4 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Activity</p>
+              <h3 className="text-lg font-semibold">{summary.status === "running" ? "Run in progress" : summary.activityCount ? "Run activity" : "Waiting for activity"}</h3>
+              <p className="text-sm text-muted-foreground">{summary.durationLabel || "No runtime events yet"}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant={follow ? "default" : "outline"} size="sm" onClick={() => setFollow((value) => !value)}>
+                <Activity size={14} />
+                {follow ? "Following" : "Paused"}
+              </Button>
+              {onClose ? (
+                <Button variant="ghost" size="icon" onClick={onClose} title="Close activity">
+                  <X size={14} />
+                </Button>
+              ) : null}
+            </div>
+          </div>
 
-      <div className="activity-summary-grid">
-        <Metric icon={ListChecks} label="Events" value={summary.eventCount} />
-        <Metric icon={Code2} label="Tools" value={summary.toolCount} />
-        <Metric icon={ShieldCheck} label="Approvals" value={summary.approvalCount} />
-        <Metric icon={CircleAlert} label="Errors" value={summary.errorCount} />
-      </div>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <Metric icon={ListChecks} label="Events" value={summary.eventCount} />
+            <Metric icon={Code2} label="Tools" value={summary.toolCount} />
+            <Metric icon={ShieldCheck} label="Approvals" value={summary.approvalCount} />
+            <Metric icon={CircleAlert} label="Errors" value={summary.errorCount} />
+          </div>
+        </CardContent>
+      </Card>
 
       <ActivityTimeline
         items={items}
@@ -61,50 +73,61 @@ export function ActivityDetailsPanel({
         }}
       />
 
-      <section className="activity-selected-detail">
-        {selected ? (
-          <>
-            <div className="activity-selected-head">
-              <div>
-                <small>{selected.phase.toUpperCase()}</small>
-                <h4>{selected.title}</h4>
+      <Card className="activity-selected-detail">
+        <CardContent className="space-y-4 p-4">
+          {selected ? (
+            <>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">{selected.phase}</p>
+                  <h4 className="text-base font-semibold">{selected.title}</h4>
+                  <p className="text-sm text-muted-foreground">{selected.narrative || selected.summary}</p>
+                </div>
+                <Badge variant="outline">{selected.status}</Badge>
               </div>
-              <span className={`activity-status ${selected.status}`}>{selected.status}</span>
+              <Separator />
+              <ActionRow selected={selected} onApprove={onApprove} onReject={onReject} onOpenArtifact={onOpenArtifact} onOpenCheckpoint={onOpenCheckpoint} />
+              <DetailSection title="过程摘要">
+                <p className="text-sm leading-6 text-foreground/90">{selected.narrative || selected.summary}</p>
+              </DetailSection>
+              <DetailSection title="安全细节">
+                <dl className="grid gap-3 sm:grid-cols-2">
+                  <Meta label="Activity ID" value={selected.activityId || selected.id} />
+                  <Meta label="Parent" value={selected.parentActivityId || "none"} />
+                  <Meta label="Run" value={selected.runId || "unknown"} />
+                  <Meta label="Duration" value={selected.durationLabel || "n/a"} />
+                  <Meta label="Events" value={selected.eventCount} />
+                  <Meta label="Steps" value={selected.entries.length} />
+                </dl>
+              </DetailSection>
+              <DetailSection title="工具与结果">
+                <div className="space-y-3">
+                  {selected.entries.map((entry) => (
+                    <details key={entry.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
+                      <summary className="flex cursor-pointer items-center justify-between gap-3 text-sm font-medium">
+                        <span>{entry.label}</span>
+                        <span className="text-xs text-muted-foreground">{[entry.rawType, entry.durationLabel].filter(Boolean).join(" · ")}</span>
+                      </summary>
+                      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{entry.detail || "No detail available."}</pre>
+                      {entry.attachments?.length ? <div className="mt-3"><RichAttachments attachments={entry.attachments} /></div> : null}
+                    </details>
+                  ))}
+                </div>
+              </DetailSection>
+              {selected.detail ? (
+                <DetailSection title="结构化记录">
+                  <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">{selected.detail}</pre>
+                </DetailSection>
+              ) : null}
+            </>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Clock3 size={18} />
+              <span>No activity selected.</span>
             </div>
-            <p>{selected.summary}</p>
-            <ActionRow selected={selected} onApprove={onApprove} onReject={onReject} onOpenArtifact={onOpenArtifact} onOpenCheckpoint={onOpenCheckpoint} />
-            <DetailSection title="Metadata">
-              <dl>
-                <div><dt>Activity ID</dt><dd>{selected.activityId || selected.id}</dd></div>
-                <div><dt>Parent</dt><dd>{selected.parentActivityId || "none"}</dd></div>
-                <div><dt>Run</dt><dd>{selected.runId || "unknown"}</dd></div>
-                <div><dt>Duration</dt><dd>{selected.durationLabel || "n/a"}</dd></div>
-                <div><dt>Events</dt><dd>{selected.eventCount}</dd></div>
-                <div><dt>Steps</dt><dd>{selected.entries.length}</dd></div>
-              </dl>
-            </DetailSection>
-            <DetailSection title="Input">
-              <pre>{detailLines(selected, ["Command:", "Path:", "Tool:", "Token:", "Child session:"]) || "No input summary."}</pre>
-            </DetailSection>
-            <DetailSection title="Result">
-              <pre>{detailLines(selected, ["Exit:", "Changed:", "Step status:"]) || selected.detail || "No result summary yet."}</pre>
-            </DetailSection>
-            <DetailSection title="Safe Raw Event">
-              {selected.entries.length ? selected.entries.map((entry) => (
-                <details key={entry.id} className="activity-raw-event">
-                  <summary><span>{entry.rawType || entry.label}</span><Copy size={12} /></summary>
-                  <pre>{entry.safeRaw || "No raw event available."}</pre>
-                </details>
-              )) : <pre>No raw event available.</pre>}
-            </DetailSection>
-          </>
-        ) : (
-          <div className="activity-detail-empty">
-            <Clock3 size={18} />
-            <span>No activity selected.</span>
-          </div>
-        )}
-      </section>
+          )}
+        </CardContent>
+      </Card>
     </section>
   );
 }
@@ -122,37 +145,46 @@ function ActionRow({
   onOpenArtifact?: (item: ActivityItem) => void;
   onOpenCheckpoint?: (item: ActivityItem) => void;
 }) {
-  if (!onApprove && !onReject && !onOpenArtifact && !onOpenCheckpoint) return null;
   return (
-    <div className="activity-detail-actions">
-      {selected.phase === "approval" && onApprove ? <button onClick={() => onApprove(selected)} type="button">Approve</button> : null}
-      {selected.phase === "approval" && onReject ? <button onClick={() => onReject(selected)} type="button">Reject</button> : null}
-      {selected.phase === "artifact" && onOpenArtifact ? <button onClick={() => onOpenArtifact(selected)} type="button">Open artifact</button> : null}
-      {selected.phase === "checkpoint" && onOpenCheckpoint ? <button onClick={() => onOpenCheckpoint(selected)} type="button">Open checkpoint</button> : null}
+    <div className="flex flex-wrap gap-2">
+      {selected.phase === "approval" && onApprove ? <Button size="sm" onClick={() => onApprove(selected)}>Approve</Button> : null}
+      {selected.phase === "approval" && onReject ? <Button size="sm" variant="outline" onClick={() => onReject(selected)}>Reject</Button> : null}
+      {selected.phase === "artifact" && onOpenArtifact ? <Button size="sm" variant="outline" onClick={() => onOpenArtifact(selected)}>Open artifact</Button> : null}
+      {selected.phase === "checkpoint" && onOpenCheckpoint ? <Button size="sm" variant="outline" onClick={() => onOpenCheckpoint(selected)}>Open checkpoint</Button> : null}
     </div>
   );
 }
 
 function DetailSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="activity-detail-section">
-      <h5>{title}</h5>
+    <section className="space-y-3">
+      <h5 className="text-sm font-medium">{title}</h5>
       {children}
     </section>
   );
 }
 
-function detailLines(item: ActivityItem, prefixes: string[]) {
-  const lines = item.detail.split("\n").filter((line) => prefixes.some((prefix) => line.startsWith(prefix)));
-  return Array.from(new Set(lines)).join("\n");
-}
-
 function Metric({ icon: Icon, label, value }: { icon: typeof Activity; label: string; value: number }) {
   return (
-    <div className="activity-metric">
-      <Icon size={14} />
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+        <Icon size={14} />
+        <span>{label}</span>
+      </div>
+      <div className="mt-2 text-2xl font-semibold">{value}</div>
     </div>
   );
+}
+
+function Meta({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-sm font-medium">{value}</dd>
+    </div>
+  );
+}
+
+function RichAttachments({ attachments }: { attachments: Array<{ url: string; alt?: string; title?: string; name?: string }> }) {
+  return <div className="space-y-2">{attachments.map((attachment) => <div key={attachment.url} className="text-xs text-muted-foreground">{attachment.title || attachment.alt || attachment.name || attachment.url}</div>)}</div>;
 }

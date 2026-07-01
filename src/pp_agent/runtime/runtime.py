@@ -24,6 +24,7 @@ from pp_agent.observability.redaction import safe_preview, sanitize_tool_args
 from pp_agent.runtime.cancellation import CancellationToken, OperationCancelled
 from pp_agent.runtime.compaction import ConversationCompactor
 from pp_agent.runtime.emitter import LifecycleEmitter
+from pp_agent.runtime.execution_context import RuntimeExecutionContext
 from pp_agent.runtime.turn_loop import TurnController, TurnDecision
 from pp_agent.runtime.hooks import (
     AfterToolCallDecision,
@@ -182,9 +183,11 @@ class AgentRuntime:
         config_snapshot: Optional[object] = None,
         config_refresh_callback: Optional[ConfigRefreshCallback] = None,
         observability: Optional[ObservabilityHooks] = None,
+        runtime_execution_context: Optional[RuntimeExecutionContext] = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
+        self.runtime_execution_context = runtime_execution_context
         self.session_store = session_store
         self.session_id = session_id
         self.confirm_callback = confirm_callback or (lambda _name, _args: True)
@@ -3095,6 +3098,9 @@ class AgentRuntime:
         set_observability = getattr(self.tool_registry, "set_observability", None)
         if callable(set_observability) and hasattr(self, "observability"):
             set_observability(self.observability)
+        set_runtime_execution_context = getattr(self.tool_registry, "set_runtime_execution_context", None)
+        if callable(set_runtime_execution_context):
+            set_runtime_execution_context(getattr(self, "runtime_execution_context", None))
 
     def _refresh_config_for_turn(self) -> Iterator[AgentEvent]:
         manager = self.config_manager

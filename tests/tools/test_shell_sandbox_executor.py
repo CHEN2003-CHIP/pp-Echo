@@ -22,6 +22,7 @@ from pp_agent.runtime.workspace_lock import (
 )
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.effects import build_patch_candidate_effect, content_digest
+from pp_agent.runtime.scope_contract import WriteScope, write_scope_to_dict
 from pp_agent.tools.file_tools import ApprovePendingActionTool
 from pp_agent.tools.policy import PermissionDomain
 from pp_agent.tools.registry import ToolRegistry
@@ -446,6 +447,7 @@ def _stage_structured_candidate(
     changed_files: list[dict],
     patch: str = "--- a/ignored.txt\n+++ b/ignored.txt\n@@ -0,0 +1 @@\n+ignored\n",
     structured_changes_truncated: bool = False,
+    write_scope: dict | None = None,
 ) -> str:
     """Stage an apply_patch_candidate action with structured changes."""
 
@@ -464,6 +466,7 @@ def _stage_structured_candidate(
         structured_changes=structured_changes,
         structured_changes_digest=structured_digest,
         structured_changes_truncated=structured_changes_truncated,
+        write_scope=write_scope,
     )
     payload = store.stage(
         action_type="apply_patch_candidate",
@@ -480,6 +483,7 @@ def _stage_structured_candidate(
             "structured_changes": structured_changes,
             "structured_changes_digest": structured_digest,
             "structured_changes_truncated": structured_changes_truncated,
+            **({"write_scope": write_scope} if write_scope is not None else {}),
         },
         effect=effect,
     )
@@ -1180,6 +1184,70 @@ def test_apply_structured_added_file(tmp_path: Path) -> None:
     assert (tmp_path / "added.txt").read_text(encoding="utf-8") == "hello\n"
     assert result.details["apply_backend"] == "structured_changes"
     assert result.details["structured_changes_digest"] == structured_changes_digest(changes)
+
+
+def test_apply_patch_candidate_with_write_scope_allows_in_scope_changes(tmp_path: Path) -> None:
+    changes = [_structured("src/added.txt", "added", old=None, new="hello\n")]
+    token = _stage_structured_candidate(
+        tmp_path,
+        structured_changes=changes,
+        changed_files=[{"path": "src/added.txt", "status": "added", "before_size": 0, "after_size": 6, "before_digest": "", "after_digest": bytes_digest(b"hello\n"), "truncated": False}],
+        write_scope=write_scope_to_dict(WriteScope(allowed_paths=["src/**"], disallowed_paths=[".env"], max_files_changed=2, source="test")),
+    )
+
+    result = ApprovePendingActionTool(tmp_path, tool_registry=ToolRegistry(tmp_path)).execute({"token": token})
+
+    assert (tmp_path / "src" / "added.txt").read_text(encoding="utf-8") == "hello\n"
+    assert result.details["scope_check"]["allowed"] is True
+
+
+def test_apply_patch_candidate_with_write_scope_blocks_out_of_scope_changes(tmp_path: Path) -> None:
+    changes = [_structured(".env", "added", old=None, new="SECRET=1\n")]
+    token = _stage_structured_candidate(
+        tmp_path,
+        structured_changes=changes,
+        changed_files=[{"path": ".env", "status": "added", "before_size": 0, "after_size": 9, "before_digest": "", "after_digest": bytes_digest(b"SECRET=1\n"), "truncated": False}],
+        write_scope=write_scope_to_dict(WriteScope(allowed_paths=["src/**"], disallowed_paths=[".env"], source="test")),
+    )
+
+    result = ApprovePendingActionTool(tmp_path, tool_registry=ToolRegistry(tmp_path)).execute({"token": token})
+
+    assert result.is_error is True
+    assert result.details["scope_blocked"] is True
+    assert result.details["scope_check"]["allowed"] is False
+    assert result.details["scope_check"]["failed_path"] == ".env"
+    assert not (tmp_path / ".env").exists()
+
+
+def test_apply_patch_candidate_without_write_scope_keeps_legacy_behavior(tmp_path: Path) -> None:
+    changes = [_structured("legacy.txt", "added", old=None, new="legacy\n")]
+    token = _stage_structured_candidate(
+        tmp_path,
+        structured_changes=changes,
+        changed_files=[{"path": "legacy.txt", "status": "added", "before_size": 0, "after_size": 7, "before_digest": "", "after_digest": bytes_digest(b"legacy\n"), "truncated": False}],
+    )
+
+    result = ApprovePendingActionTool(tmp_path, tool_registry=ToolRegistry(tmp_path)).execute({"token": token})
+
+    assert result.is_error is False
+    assert (tmp_path / "legacy.txt").read_text(encoding="utf-8") == "legacy\n"
+    assert result.details["scope_check"]["allowed"] is None
+
+
+def test_apply_patch_candidate_scope_block_returns_scope_check_details(tmp_path: Path) -> None:
+    changes = [_structured("outside.txt", "added", old=None, new="nope\n")]
+    token = _stage_structured_candidate(
+        tmp_path,
+        structured_changes=changes,
+        changed_files=[{"path": "outside.txt", "status": "added", "before_size": 0, "after_size": 5, "before_digest": "", "after_digest": bytes_digest(b"nope\n"), "truncated": False}],
+        write_scope=write_scope_to_dict(WriteScope(allowed_paths=["src/**"], source="test")),
+    )
+
+    result = ApprovePendingActionTool(tmp_path, tool_registry=ToolRegistry(tmp_path)).execute({"token": token})
+
+    assert result.details["scope_blocked"] is True
+    assert result.details["lock_acquired"] is False
+    assert result.details["scope_check"]["checked_paths"] == ["outside.txt"]
 
 
 def test_apply_structured_modified_file(tmp_path: Path) -> None:

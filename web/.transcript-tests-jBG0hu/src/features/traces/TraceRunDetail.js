@@ -1,0 +1,26 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TraceRunDetail = TraceRunDetail;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const react_1 = require("react");
+const TraceApprovalPanel_1 = require("./TraceApprovalPanel");
+const TraceArtifactsPanel_1 = require("./TraceArtifactsPanel");
+const TraceCapabilityPanel_1 = require("./TraceCapabilityPanel");
+const TraceCheckpointPanel_1 = require("./TraceCheckpointPanel");
+const TraceContextBudgetPanel_1 = require("./TraceContextBudgetPanel");
+const TraceDiagnosisPanel_1 = require("./TraceDiagnosisPanel");
+const TraceMemoryPanel_1 = require("./TraceMemoryPanel");
+const TraceModelRuntimeCard_1 = require("./TraceModelRuntimeCard");
+const TraceRawJsonPanel_1 = require("./TraceRawJsonPanel");
+const TraceSpanInspector_1 = require("./TraceSpanInspector");
+const TraceSummaryCards_1 = require("./TraceSummaryCards");
+const TraceTimeline_1 = require("./TraceTimeline");
+const TraceToolCallsPanel_1 = require("./TraceToolCallsPanel");
+const trace_utils_1 = require("./trace-utils");
+function TraceRunDetail({ detail, selectedSpan, onSelectSpan }) {
+    const [tab, setTab] = (0, react_1.useState)("tools");
+    if (!detail)
+        return (0, jsx_runtime_1.jsx)("main", { className: "trace-inspect-detail", children: (0, jsx_runtime_1.jsxs)("div", { className: "empty", children: [(0, jsx_runtime_1.jsx)("h2", { children: "No trace selected" }), (0, jsx_runtime_1.jsx)("p", { children: "Select a run from the list." })] }) });
+    const tabs = [["tools", "Tools"], ["context", "Context"], ["approval", "Approval"], ["checkpoints", "Checkpoints"], ["memory", "Memory"], ["artifacts", "Artifacts"], ["raw", "Raw JSON"]];
+    return ((0, jsx_runtime_1.jsxs)("main", { className: "trace-inspect-detail", children: [(0, jsx_runtime_1.jsxs)("section", { className: "trace-run-head", children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsxs)("h2", { children: ["Run ", (0, trace_utils_1.compactId)(detail.summary?.run_id || String(detail.run?.run_id || ""))] }), (0, jsx_runtime_1.jsx)("p", { children: detail.summary?.user_goal_preview || "No goal preview recorded." })] }), (0, jsx_runtime_1.jsxs)("dl", { children: [(0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("dt", { children: "Status" }), (0, jsx_runtime_1.jsx)("dd", { children: detail.summary ? (0, trace_utils_1.statusLabel)(detail.summary.status) : "-" })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("dt", { children: "Session" }), (0, jsx_runtime_1.jsx)("dd", { children: detail.summary?.session_id ? (0, trace_utils_1.compactId)(detail.summary.session_id) : "-" })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("dt", { children: "Started" }), (0, jsx_runtime_1.jsx)("dd", { children: (0, trace_utils_1.formatRelativeTime)(detail.summary?.started_at) })] }), (0, jsx_runtime_1.jsxs)("div", { children: [(0, jsx_runtime_1.jsx)("dt", { children: "Workspace" }), (0, jsx_runtime_1.jsx)("dd", { children: detail.summary?.workspace || "-" })] })] })] }), (0, jsx_runtime_1.jsx)(TraceSummaryCards_1.TraceSummaryCards, { summary: detail.summary }), (0, jsx_runtime_1.jsxs)("div", { className: "trace-debug-console", children: [(0, jsx_runtime_1.jsxs)("aside", { className: "trace-run-support", children: [(0, jsx_runtime_1.jsx)(TraceModelRuntimeCard_1.TraceModelRuntimeCard, { detail: detail }), (0, jsx_runtime_1.jsx)(TraceCapabilityPanel_1.TraceCapabilityPanel, { detail: detail })] }), (0, jsx_runtime_1.jsxs)("section", { className: "trace-debug-main", children: [(0, jsx_runtime_1.jsx)(TraceTimeline_1.TraceTimeline, { spans: detail.spans, selectedSpanId: selectedSpan?.span_id || null, onSelect: onSelectSpan }), (0, jsx_runtime_1.jsx)("div", { className: "trace-tabs", role: "tablist", "aria-label": "Trace detail panels", children: tabs.map(([value, label]) => (0, jsx_runtime_1.jsx)("button", { className: tab === value ? "active" : "", onClick: () => setTab(value), children: label }, value)) }), tab === "tools" ? (0, jsx_runtime_1.jsx)(TraceToolCallsPanel_1.TraceToolCallsPanel, { spans: detail.spans, selectedSpanId: selectedSpan?.span_id || null, onSelectSpan: onSelectSpan }) : null, tab === "context" ? (0, jsx_runtime_1.jsx)(TraceContextBudgetPanel_1.TraceContextBudgetPanel, { detail: detail }) : null, tab === "approval" ? (0, jsx_runtime_1.jsx)(TraceApprovalPanel_1.TraceApprovalPanel, { spans: detail.spans }) : null, tab === "checkpoints" ? (0, jsx_runtime_1.jsx)(TraceCheckpointPanel_1.TraceCheckpointPanel, { spans: detail.spans }) : null, tab === "memory" ? (0, jsx_runtime_1.jsx)(TraceMemoryPanel_1.TraceMemoryPanel, { spans: detail.spans }) : null, tab === "artifacts" ? (0, jsx_runtime_1.jsx)(TraceArtifactsPanel_1.TraceArtifactsPanel, { artifacts: detail.artifacts }) : null, tab === "raw" ? (0, jsx_runtime_1.jsx)(TraceRawJsonPanel_1.TraceRawJsonPanel, { detail: detail }) : null] }), (0, jsx_runtime_1.jsxs)("aside", { className: "trace-debug-side", children: [(0, jsx_runtime_1.jsx)(TraceSpanInspector_1.TraceSpanInspector, { span: selectedSpan }), (0, jsx_runtime_1.jsx)(TraceDiagnosisPanel_1.TraceDiagnosisPanel, { diagnosis: detail.diagnosis, warnings: detail.warnings })] })] })] }));
+}

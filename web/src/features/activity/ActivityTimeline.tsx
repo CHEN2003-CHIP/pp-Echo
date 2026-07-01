@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
 import { Activity, Bot, Code2, Filter, ShieldCheck, Sparkles } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import type { ActivityItem, ActivityPhase } from "./activity-types";
 import { StatusIcon } from "./ActivityCard";
 
@@ -17,27 +20,31 @@ export function ActivityTimeline({
   const [filter, setFilter] = useState<FilterKey>("all");
   const filtered = useMemo(() => items.filter((item) => matchesFilter(item.phase, filter)), [items, filter]);
   return (
-    <section className="activity-timeline">
-      <div className="activity-filter-row">
+    <section className="activity-timeline space-y-3">
+      <div className="flex flex-wrap gap-2">
         {filters.map((item) => (
-          <button className={filter === item.id ? "active" : ""} key={item.id} onClick={() => setFilter(item.id)} type="button">
+          <Button key={item.id} size="sm" variant={filter === item.id ? "default" : "outline"} onClick={() => setFilter(item.id)} type="button">
             <item.icon size={13} />
             <span>{item.label}</span>
-          </button>
+          </Button>
         ))}
       </div>
-      <ol>
-        {filtered.length === 0 ? <li className="activity-empty">No activity yet.</li> : null}
+      <ol className="space-y-2">
+        {filtered.length === 0 ? <li className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">No activity yet.</li> : null}
         {filtered.map((item) => (
           <li key={item.id}>
-            <button className={selectedId === item.id ? `activity-timeline-row active ${item.status}` : `activity-timeline-row ${item.status}`} onClick={() => onSelect?.(item)} type="button">
-              <span className="activity-timeline-status"><StatusIcon status={item.status} /></span>
-              <span>
-                <strong>{item.title}</strong>
-                <small>{item.summary}</small>
-              </span>
-              <em>{item.durationLabel}</em>
-            </button>
+            <Card className={selectedId === item.id ? "border-primary/60 bg-primary/5" : ""}>
+              <CardContent className="p-0">
+                <button className={`flex w-full items-start gap-3 px-4 py-3 text-left ${selectedId === item.id ? "bg-primary/5" : ""}`} onClick={() => onSelect?.(item)} type="button">
+                  <span className="mt-0.5 text-muted-foreground"><StatusIcon status={item.status} /></span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block truncate text-sm">{item.title}</strong>
+                    <small className="mt-1 block text-sm leading-6 text-muted-foreground">{item.narrative || item.summary}</small>
+                  </span>
+                  <Badge variant="outline" className="shrink-0">{item.durationLabel || "…"}</Badge>
+                </button>
+              </CardContent>
+            </Card>
           </li>
         ))}
       </ol>

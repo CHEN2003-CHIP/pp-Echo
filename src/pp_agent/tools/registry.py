@@ -15,6 +15,14 @@ from pp_agent.domain import ToolCall, ToolSpec
 from pp_agent.observability.hooks import ObservabilityHooks
 from pp_agent.observability.noop import NoopObservabilityHooks
 from pp_agent.observability.redaction import redact_mapping, safe_preview, sanitize_tool_args
+from pp_agent.runtime.execution_context import (
+    RuntimeExecutionContext,
+    check_runtime_guardrails,
+    increment_runtime_counter,
+    runtime_counters_to_dict,
+    runtime_guardrail_check_to_dict,
+)
+from pp_agent.runtime.tool_context import ToolExecutionContext
 from pp_agent.sandbox.base import SandboxExecutor
 from pp_agent.storage.settings import ToolPolicyConfig
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
@@ -332,6 +340,7 @@ class ToolRegistry:
         self.observability: ObservabilityHooks = observability or NoopObservabilityHooks()
         self._runtime_event_lock = threading.RLock()
         self._cancellation_token: Any = None
+        self._tool_execution_context = ToolExecutionContext()
         self._instances: dict[str, BaseTool] = {}
         self._confirmation_overrides = {
             "write_file": self.policy.confirm_write_file,
@@ -605,6 +614,54 @@ class ToolRegistry:
 
         self.observability = observability or NoopObservabilityHooks()
 
+    def set_tool_execution_context(self, context: ToolExecutionContext | None) -> None:
+        """Attach optional runtime guardrail context without changing legacy tool behavior.
+
+        A missing RuntimeExecutionContext means guardrail checks are skipped and the existing
+        ToolRegistry path continues. This does not replace ToolPolicy, approval, sandbox, or payload
+        digest semantics.
+        """
+
+        self._tool_execution_context = context or ToolExecutionContext()
+
+    def set_runtime_execution_context(self, context: RuntimeExecutionContext | None) -> None:
+        """Set the optional RuntimeExecutionContext consumed by tool guardrail checks.
+
+        The context is runtime-owned and keeps tools from importing coding contracts. Passing None
+        restores legacy skipped-guardrail behavior.
+        """
+
+        self._tool_execution_context = ToolExecutionContext(runtime_execution_context=context)
+
+    def runtime_execution_context(self) -> RuntimeExecutionContext | None:
+        """Return the optional RuntimeExecutionContext currently attached to this registry."""
+
+        return self._tool_execution_context.runtime_execution_context
+
+    def _set_runtime_execution_context(self, context: RuntimeExecutionContext | None) -> None:
+        self._tool_execution_context.runtime_execution_context = context
+
+    def _runtime_context_details(self) -> dict[str, Any]:
+        context = self.runtime_execution_context()
+        return {
+            "runtime_execution_context_present": context is not None,
+            **({"execution_session_id": context.session_id} if context is not None else {}),
+            **({"runtime_counters": runtime_counters_to_dict(context.counters)} if context is not None else {}),
+        }
+
+    def _runtime_guardrail_block_result(self, name: str, tool_call_id: str, check: Any) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            tool_call_id=tool_call_id,
+            tool_name=name,
+            content=f"Runtime guardrail blocked tool call '{name}': {check.reason}",
+            is_error=True,
+            details={
+                "runtime_guardrail_blocked": True,
+                "guardrail_check": runtime_guardrail_check_to_dict(check),
+                **self._runtime_context_details(),
+            },
+        )
+
     @property
     def cancellation_token(self) -> Any:
         return self._cancellation_token
@@ -643,6 +700,7 @@ class ToolRegistry:
         cloned._runtime_event_emitter = self._runtime_event_emitter
         cloned._runtime_event_lock = self._runtime_event_lock
         cloned._cancellation_token = self._cancellation_token
+        cloned._tool_execution_context = self._tool_execution_context
         return cloned
 
     def evaluate_call(self, name: str, arguments: dict[str, Any]):
@@ -736,6 +794,9 @@ class ToolRegistry:
                 payload={"reason": decision.reason, "permission_domain": decision.permission_domain},
             )
             raise PermissionError(decision.reason)
+        guardrail_check = check_runtime_guardrails(self.runtime_execution_context(), "tool_call")
+        if guardrail_check.allowed is False:
+            return self._runtime_guardrail_block_result(name, trace_tool_call_id, guardrail_check)
         spec = self.get_spec(name)
         attributes = _tool_trace_attributes(name, None, spec, registration.metadata)
         attributes["tool_call_id"] = trace_tool_call_id
@@ -760,12 +821,23 @@ class ToolRegistry:
                 result.details.setdefault("policy_decision", decision.action)
                 result.details.setdefault("policy_reason", decision.reason)
                 result.details.setdefault("permission_domain", decision.permission_domain)
+                current_context = self.runtime_execution_context()
+                if current_context is not None:
+                    updated_context = increment_runtime_counter(current_context, "tool_call")
+                    self._set_runtime_execution_context(updated_context)
+                    result.details.setdefault("runtime_execution_context_present", True)
+                    result.details.setdefault("execution_session_id", updated_context.session_id)
+                    result.details.setdefault("tool_call_guardrail_check", runtime_guardrail_check_to_dict(guardrail_check))
+                    result.details.setdefault("runtime_counters", runtime_counters_to_dict(updated_context.counters))
                 self._backfill_pending_scope(result, session_id=self.current_session_id, tool_call_id=trace_tool_call_id)
                 span.set_output(_tool_trace_output(result))
                 if result.is_error:
                     span.set_error(result.content or "tool returned is_error=True", kind="ToolExecutionError")
                 return result
             except Exception as exc:
+                current_context = self.runtime_execution_context()
+                if current_context is not None:
+                    self._set_runtime_execution_context(increment_runtime_counter(current_context, "tool_call"))
                 span.set_error(exc)
                 raise
 

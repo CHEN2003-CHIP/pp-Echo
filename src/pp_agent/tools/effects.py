@@ -787,6 +787,7 @@ def build_patch_candidate_effect(
     structured_changes: list[dict[str, Any]] | None = None,
     structured_changes_digest: str | None = None,
     structured_changes_truncated: bool = False,
+    write_scope: dict[str, Any] | None = None,
     effect_id: str | None = None,
     created_at: float | None = None,
 ) -> dict[str, Any]:
@@ -808,6 +809,8 @@ def build_patch_candidate_effect(
         "structured_changes_digest": structured_hash,
         "structured_changes_truncated": bool(structured_changes_truncated),
     }
+    if write_scope is not None:
+        normalized_arguments["write_scope"] = canonicalize_json_value(write_scope)
     analysis = _analysis(
         family="patch_candidate",
         permission_domain=permission_domain,
@@ -828,6 +831,7 @@ def build_patch_candidate_effect(
             "sandbox_backend": sandbox_backend,
             "sandbox_mode": sandbox_mode,
             "patch_truncated": bool(patch_truncated),
+            "write_scope_present": write_scope is not None,
         },
     )
     return {

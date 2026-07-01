@@ -91,7 +91,7 @@ function compileSource(sourcePath) {
   const absoluteSourcePath = path.join(projectRoot, sourcePath);
   const outputPath = path.join(tempRoot, sourcePath.replace(/\.(ts|tsx)$/, ".js"));
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  const source = fs.readFileSync(absoluteSourcePath, "utf8");
+  const source = fs.readFileSync(absoluteSourcePath, "utf8").replace(/\bimport\.meta\.env\b/g, "{}");
   const result = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -116,7 +116,7 @@ function sourceFiles(root) {
       files.push(...sourceFiles(absolute));
       continue;
     }
-    if (!entry.isFile() || !/\.(ts|tsx)$/.test(entry.name)) continue;
+    if (!entry.isFile() || entry.name.endsWith(".d.ts") || !/\.(ts|tsx)$/.test(entry.name)) continue;
     files.push(path.relative(projectRoot, absolute).replace(/\\/g, "/"));
   }
   return files;

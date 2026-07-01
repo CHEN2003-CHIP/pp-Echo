@@ -680,6 +680,44 @@ export type ModelUsageRow = {
   total_cost_usd?: number | null;
 };
 
+export type UsageTimelinePoint = {
+  date: string;
+  runs: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+};
+
+export type UsageModelSeriesPoint = UsageTimelinePoint & {
+  model: string;
+  provider_id: string;
+};
+
+export type UsageModelShare = {
+  model: string;
+  provider_id: string;
+  runs: number;
+  total_tokens: number;
+  share: number;
+};
+
+export type UsageAnalytics = {
+  total_runs: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  model_share: UsageModelShare[];
+  timeline: UsageTimelinePoint[];
+  series: UsageModelSeriesPoint[];
+};
+
+export type ModelUsageResponse = {
+  models: ModelUsageRow[];
+  analytics?: UsageAnalytics;
+};
+
 export type BotSummary = {
   id: string;
   type: string;
@@ -794,7 +832,7 @@ export const api = {
   onboardingStatus: () => request<OnboardingStatus>("/api/onboarding/status"),
   onboardingCheckModel: () => request<OnboardingCheck>("/api/onboarding/check-model", { method: "POST" }),
   modelProviders: () => request<{ providers: ModelProviderPreset[] }>("/api/models/providers"),
-  modelUsage: () => request<{ models: ModelUsageRow[] }>("/api/models/usage"),
+  modelUsage: () => request<ModelUsageResponse>("/api/models/usage"),
   modelTest: (provider?: Record<string, unknown>, model?: Record<string, unknown>) =>
     request<ModelConnectivityResult>("/api/models/test", {
       method: "POST",

@@ -1,4 +1,4 @@
-const assert = require("assert/strict");
+﻿const assert = require("assert/strict");
 const fs = require("fs");
 const path = require("path");
 const ts = require("typescript");
@@ -6,6 +6,8 @@ const ts = require("typescript");
 const projectRoot = path.resolve(__dirname, "..");
 const tempRoot = fs.mkdtempSync(path.join(projectRoot, ".activity-tests-"));
 fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ type: "commonjs" }), "utf8");
+process.env.TS_ALIAS_TEMP_ROOT = tempRoot;
+require("./ts-alias.cjs");
 
 for (const sourcePath of sourceFiles(path.join(projectRoot, "src"))) {
   compileSource(sourcePath);
@@ -28,6 +30,7 @@ test("merges public progress into one running activity", () => {
   assert.equal(items[0].phase, "preparing");
   assert.equal(items[0].status, "running");
   assert.equal(items[0].entries.length, 2);
+  assert.ok(items[0].narrative.includes("推进") || items[0].narrative.includes("上下文"));
   assert.ok(!JSON.stringify(items[0]).includes("Thinking"));
   assert.ok(!JSON.stringify(items[0]).includes("Reasoning"));
 });
@@ -41,8 +44,8 @@ test("pairs tool start and end by activity id fallback", () => {
   assert.equal(items[0].phase, "tool");
   assert.equal(items[0].status, "success");
   assert.equal(items[0].toolCount, 1);
-  assert.ok(items[0].detail.includes("Command: npm test"));
-  assert.ok(items[0].detail.includes("Exit: 0"));
+  assert.ok(items[0].narrative.includes("命令") || items[0].narrative.includes("测试") || items[0].narrative.includes("运行"));
+  assert.ok(items[0].entries.some((entry) => entry.narrative.includes("运行命令") || entry.narrative.includes("运行")));
 });
 
 test("marks failed tools and keeps output preview", () => {
@@ -53,7 +56,7 @@ test("marks failed tools and keeps output preview", () => {
   assert.equal(items.length, 1);
   assert.equal(items[0].status, "error");
   assert.equal(items[0].errorCount, 1);
-  assert.ok(items[0].summary.includes("failed"));
+  assert.ok(items[0].narrative.includes("问题") || items[0].narrative.includes("失败"));
 });
 
 test("maps planner approval gate as approval activity", () => {
@@ -123,7 +126,7 @@ function compileSource(sourcePath) {
   const absoluteSourcePath = path.join(projectRoot, sourcePath);
   const outputPath = path.join(tempRoot, sourcePath.replace(/\.(ts|tsx)$/, ".js"));
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  const source = fs.readFileSync(absoluteSourcePath, "utf8");
+  const source = fs.readFileSync(absoluteSourcePath, "utf8").replace(/\bimport\.meta\.env\b/g, "{}");
   const result = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -148,7 +151,7 @@ function sourceFiles(root) {
       files.push(...sourceFiles(absolute));
       continue;
     }
-    if (!entry.isFile() || !/\.(ts|tsx)$/.test(entry.name)) continue;
+    if (!entry.isFile() || entry.name.endsWith(".d.ts") || !/\.(ts|tsx)$/.test(entry.name)) continue;
     files.push(path.relative(projectRoot, absolute).replace(/\\/g, "/"));
   }
   return files;

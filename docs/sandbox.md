@@ -49,6 +49,14 @@ Unknown backends are rejected. Docker is never enabled by default.
 12. Patch apply obtains the workspace apply lock.
 13. Apply snapshots target files, writes changes, runs post-apply validation, and rolls back on failure where possible.
 
+If an `apply_patch_candidate` pending action carries a `write_scope`, pp-Echo checks structured changes against that runtime write boundary before the workspace apply lock is acquired. A blocked write scope prevents snapshotting and file writes. Legacy pending actions without `write_scope` keep their existing apply behavior.
+
+`write_scope` does not replace approval, payload digest checks, structured change digests, rollback, protected path checks, or the workspace apply lock. It is an additional task-level write boundary for candidates that choose to carry it.
+
+For future controlled coding execution flows, `RuntimeExecutionContext` can carry the same `WriteScope` plus guardrail metadata. `attach_runtime_context_to_patch_candidate_args` can copy that `write_scope` into patch candidate args and add minimal execution metadata. When no runtime context is provided, legacy patch candidate behavior is unchanged.
+
+When a runtime patch-candidate guardrail blocks creation, pp-Echo does not create the `apply_patch_candidate` pending action. When creation is allowed, the `write_scope` is attached before the pending action effect and payload digest are built. This preserves the existing approval, digest, rollback, protected-path checks, and workspace apply lock semantics.
+
 During Web execution, pp-Echo emits a `sandbox_preflight` runtime event before the executor starts. Approval failures also include `sandbox_preflight` / `docker_preflight` details so the page can show the exact phase that blocked execution instead of treating sandbox startup as a black box.
 
 Protected paths include:

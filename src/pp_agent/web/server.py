@@ -99,6 +99,7 @@ def create_app(
     from pp_agent.server.routes.core_memory import mount_core_memory_routes
     from pp_agent.server.routes.qqbot import mount_qqbot_routes
     from pp_agent.server.routes.bots import mount_bot_routes
+    from pp_agent.web.coding_api import mount_coding_routes
 
     mount_config_routes(app, active_workspace, session_manager)
     mount_capability_config_routes(app, active_workspace)
@@ -109,6 +110,7 @@ def create_app(
     mount_core_memory_routes(app, active_workspace)
     mount_bot_routes(app, active_workspace)
     mount_qqbot_routes(app, active_workspace, session_manager)
+    mount_coding_routes(app, active_workspace)
 
     @app.middleware("http")
     async def no_cache(request, call_next):

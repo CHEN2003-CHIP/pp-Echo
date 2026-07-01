@@ -23,6 +23,7 @@ export type ActivityStep = {
   kind: "progress" | "tool" | "command" | "planner" | "subagent" | "checkpoint" | "approval" | "artifact" | "memory" | "system" | "message" | "event";
   label: string;
   detail: string;
+  narrative?: string;
   timestamp?: number;
   startedAt?: number;
   endedAt?: number;
@@ -44,6 +45,7 @@ export type ActivityItem = {
   tone?: ActivityStatus;
   title: string;
   summary: string;
+  narrative?: string;
   detail: string;
   timestamp?: number;
   startedAt?: number;

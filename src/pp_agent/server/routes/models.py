@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
 import os
+from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -41,6 +43,10 @@ def mount_model_routes(app, active_workspace) -> None:
         current_provider = settings.provider.name or settings.model.provider
         current_model = settings.model.model
         usage: dict[tuple[str, str], dict[str, Any]] = {}
+        analytics_by_day: dict[str, dict[str, Any]] = defaultdict(lambda: {"runs": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0})
+        analytics_by_model: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"runs": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0})
+        analytics_by_model_day: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(lambda: {"runs": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0})
+        analytics_total = {"runs": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0}
         for preset in list_provider_presets():
             for model_name in preset.recommended_models:
                 usage[(preset.id, model_name)] = _usage_row(
@@ -53,6 +59,8 @@ def mount_model_routes(app, active_workspace) -> None:
                     current_model=current_model,
                 )
         for summary in TraceStore(active_workspace()).list_runs(limit=max(1, min(500, int(limit)))):
+            if summary.started_at <= 0:
+                continue
             provider_id = summary.provider or "unknown"
             model_name = summary.model or "unknown"
             key = (provider_id, model_name)
@@ -74,7 +82,89 @@ def mount_model_routes(app, active_workspace) -> None:
             row["total_tokens"] += summary.total_tokens
             if summary.total_cost_usd is not None:
                 row["total_cost_usd"] = round(float(row["total_cost_usd"] or 0.0) + float(summary.total_cost_usd), 8)
-        return {"models": list(usage.values())}
+            day_key = _day_key(summary.started_at)
+            day_bucket = analytics_by_day[day_key]
+            day_bucket["runs"] += 1
+            day_bucket["input_tokens"] += summary.total_input_tokens
+            day_bucket["output_tokens"] += summary.total_output_tokens
+            day_bucket["total_tokens"] += summary.total_tokens
+            if summary.total_cost_usd is not None:
+                day_bucket["total_cost_usd"] = round(float(day_bucket["total_cost_usd"]) + float(summary.total_cost_usd), 8)
+                analytics_total["total_cost_usd"] = round(float(analytics_total["total_cost_usd"]) + float(summary.total_cost_usd), 8)
+            analytics_total["runs"] += 1
+            analytics_total["input_tokens"] += summary.total_input_tokens
+            analytics_total["output_tokens"] += summary.total_output_tokens
+            analytics_total["total_tokens"] += summary.total_tokens
+            model_bucket = analytics_by_model[key]
+            model_bucket["runs"] += 1
+            model_bucket["input_tokens"] += summary.total_input_tokens
+            model_bucket["output_tokens"] += summary.total_output_tokens
+            model_bucket["total_tokens"] += summary.total_tokens
+            if summary.total_cost_usd is not None:
+                model_bucket["total_cost_usd"] = round(float(model_bucket["total_cost_usd"]) + float(summary.total_cost_usd), 8)
+            model_day_bucket = analytics_by_model_day[(provider_id, model_name, day_key)]
+            model_day_bucket["runs"] += 1
+            model_day_bucket["input_tokens"] += summary.total_input_tokens
+            model_day_bucket["output_tokens"] += summary.total_output_tokens
+            model_day_bucket["total_tokens"] += summary.total_tokens
+            if summary.total_cost_usd is not None:
+                model_day_bucket["total_cost_usd"] = round(float(model_day_bucket["total_cost_usd"]) + float(summary.total_cost_usd), 8)
+
+        model_share = []
+        total_tokens = analytics_total["total_tokens"] or 1
+        for (provider_id, model_name), bucket in sorted(analytics_by_model.items(), key=lambda item: item[1]["total_tokens"], reverse=True):
+            model_share.append(
+                {
+                    "provider_id": provider_id,
+                    "model": model_name,
+                    "runs": bucket["runs"],
+                    "total_tokens": bucket["total_tokens"],
+                    "share": round(float(bucket["total_tokens"]) / float(total_tokens), 6),
+                }
+            )
+
+        series: list[dict[str, Any]] = []
+        for (provider_id, model_name), bucket in sorted(analytics_by_model.items(), key=lambda item: item[0]):
+            for day, day_bucket in sorted(analytics_by_day.items()):
+                model_day_bucket = analytics_by_model_day[(provider_id, model_name, day)]
+                series.append(
+                    {
+                        "provider_id": provider_id,
+                        "model": model_name,
+                        "date": day,
+                        "runs": model_day_bucket["runs"],
+                        "input_tokens": model_day_bucket["input_tokens"],
+                        "output_tokens": model_day_bucket["output_tokens"],
+                        "total_tokens": model_day_bucket["total_tokens"],
+                        "total_cost_usd": model_day_bucket["total_cost_usd"],
+                    }
+                )
+
+        timeline = [
+            {
+                "date": day,
+                "runs": bucket["runs"],
+                "input_tokens": bucket["input_tokens"],
+                "output_tokens": bucket["output_tokens"],
+                "total_tokens": bucket["total_tokens"],
+                "total_cost_usd": bucket["total_cost_usd"],
+            }
+            for day, bucket in sorted(analytics_by_day.items())
+        ]
+
+        return {
+            "models": list(usage.values()),
+            "analytics": {
+                "total_runs": analytics_total["runs"],
+                "total_input_tokens": analytics_total["input_tokens"],
+                "total_output_tokens": analytics_total["output_tokens"],
+                "total_tokens": analytics_total["total_tokens"],
+                "total_cost_usd": analytics_total["total_cost_usd"],
+                "model_share": model_share,
+                "timeline": timeline,
+                "series": series,
+            },
+        }
 
     @app.post("/api/models/test")
     def model_test(request: ModelTestRequest) -> dict[str, Any]:
@@ -140,3 +230,10 @@ def _usage_row(
         "total_tokens": 0,
         "total_cost_usd": None,
     }
+
+
+def _day_key(started_at: float) -> str:
+    ts = float(started_at)
+    if ts > 10_000_000_000:
+      ts /= 1000.0
+    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
