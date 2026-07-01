@@ -3313,6 +3313,68 @@ body {
   border: 1px solid var(--app-border);
 }
 
+.progress-block.reasoning-block {
+  padding: 0;
+  gap: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.progress-block.reasoning-block .progress-pulse {
+  margin-top: 1px;
+}
+
+.progress-block-copy {
+  min-width: 0;
+}
+
+.progress-block-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.progress-block.reasoning-block .progress-block-line {
+  font-size: 13px;
+}
+
+.progress-block.reasoning-block p {
+  margin: 4px 0 0;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.progress-block-line strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.progress-block-meta,
+.progress-block-status {
+  color: var(--muted-2);
+}
+
+.progress-block-status.running,
+.progress-block-status.pending {
+  color: var(--warning);
+}
+
+.progress-block-status.success {
+  color: var(--success);
+}
+
+.progress-block-status.error,
+.progress-block-status.cancelled {
+  color: var(--danger);
+}
+
 .progress-pulse {
   width: 28px;
   height: 28px;

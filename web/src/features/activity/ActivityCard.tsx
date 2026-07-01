@@ -51,14 +51,20 @@ export function ActivityCard({ item }: { item: ActivityItem }) {
 }
 
 export function ProgressBlock({ item }: { item: ActivityItem }) {
+  const label = item.running ? "正在推演这一步" : "思考已收束";
+  const summary = item.narrative || item.summary || "Agent 正在推进当前任务。";
   return (
-    <section className={`progress-block ${item.running ? "live" : ""}`}>
-      <div className="progress-pulse">
+    <section className={`progress-block reasoning-block ${item.running ? "live" : ""}`}>
+      <div className="progress-pulse" aria-hidden="true">
         <Sparkles size={14} />
       </div>
-      <div>
-        <strong>{item.running ? "正在分析下一步" : "运行进度"}</strong>
-        <p>{item.narrative || item.summary || "Agent 正在推进当前任务。"}</p>
+      <div className="progress-block-copy">
+        <div className="progress-block-line">
+          <strong>{label}</strong>
+          {item.durationLabel ? <span className="progress-block-meta">· {item.durationLabel}</span> : null}
+          <span className={`progress-block-status ${item.status}`}>{statusCopy(item.status)}</span>
+        </div>
+        <p>{summary}</p>
       </div>
     </section>
   );
@@ -93,7 +99,7 @@ function buildThinkingLines(item: ActivityItem) {
 
   for (const entry of item.entries || []) {
     const parts = [entry.label, entry.narrative || entry.detail, [entry.rawType, entry.durationLabel].filter(Boolean).join(" · ")].filter(Boolean);
-    if (parts.length) lines.push(parts.join(" — "));
+    if (parts.length) lines.push(parts.join(" · "));
     if (entry.attachments?.length) lines.push(`${entry.attachments.length} 个附件`);
   }
 
