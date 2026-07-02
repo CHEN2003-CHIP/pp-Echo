@@ -4480,20 +4480,18 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     }
     if (event.type === "approval_result") {
       flushStream();
-      if (!hasPersistedActivityBlocks) appendActivityEvent(event);
+      appendActivityEvent(event);
       continue;
     }
     if (event.type === "turn_end" || event.type === "agent_end") {
       flushStream();
-      if (!hasPersistedActivityBlocks) {
-        appendActivityEvent(event);
-        flushActivityGroup();
-      }
+      appendActivityEvent(event);
+      flushActivityGroup();
       continue;
     }
     if (event.is_error && event.message) {
       flushStream();
-      if (isActivityEvent(event) && !hasPersistedActivityBlocks) {
+      if (isActivityEvent(event)) {
         appendActivityEvent(event);
       } else {
         runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: formatErrorEvent(event), attachments: [] }, timestamp: event.timestamp });
@@ -4502,14 +4500,14 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     }
     if (isActivityEvent(event)) {
       flushStream();
-      if (!hasPersistedActivityBlocks) appendActivityEvent(event);
+      appendActivityEvent(event);
       continue;
     }
   }
 
   flushStream();
   flushActivityGroup();
-  if (!hasPersistedActivityBlocks) activityGroups.forEach((group, index) => {
+  activityGroups.forEach((group, index) => {
     const activity = combineActivityItemsForTranscript(buildActivityRuns(group), group);
     if (!activity) return;
     const bodyText = [activity.narrative || activity.summary || activity.detail, activity.detail].filter(Boolean).join("\n\n");
@@ -4633,7 +4631,13 @@ function persistedActivityBlockToTranscriptItem(block: PersistedActivityBlock): 
 }
 
 function insertActivityItemsBeforeAssistant(items: TranscriptItem[], persisted: TranscriptItem[]) {
-  const activityItems = [...persisted, ...items.filter((item) => item.role === "activity")];
+  const liveActivityItems = items.filter((item) => item.role === "activity");
+  const liveKeys = new Set(liveActivityItems.flatMap(activityDedupeKeys).filter(Boolean));
+  const filteredPersisted = persisted.filter((item) => {
+    const keys = activityDedupeKeys(item);
+    return keys.length === 0 || keys.every((key) => !liveKeys.has(key));
+  });
+  const activityItems = [...filteredPersisted, ...liveActivityItems];
   const nonActivityItems = items.filter((item) => item.role !== "activity");
   const activityByTurn = new Map<string, TranscriptItem[]>();
   const orphanActivities: TranscriptItem[] = [];
@@ -4702,6 +4706,16 @@ function insertOrphanActivityBeforeNearestAssistant(items: TranscriptItem[], act
 
 function activityDisplayOrder(left: TranscriptItem, right: TranscriptItem) {
   return (left.timestamp || 0) - (right.timestamp || 0);
+}
+
+function activityDedupeKeys(item: TranscriptItem) {
+  if (item.role !== "activity") return [];
+  const keys: string[] = [];
+  const activityId = item.activity?.activityId || item.activity?.id;
+  if (activityId) keys.push(`activity:${activityId}`);
+  const turnId = normalizeTurnId(item.turnId);
+  if (turnId) keys.push(`turn:${turnId}`);
+  return keys;
 }
 
 function persistedActivityStepKind(kind: string): ActivityStep["kind"] {

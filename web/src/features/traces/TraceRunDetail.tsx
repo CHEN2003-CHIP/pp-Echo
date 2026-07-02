@@ -1,66 +1,77 @@
 import { useState } from "react";
 import type { TraceDetail, TraceSpan } from "../../api";
-import { TraceApprovalPanel } from "./TraceApprovalPanel";
-import { TraceArtifactsPanel } from "./TraceArtifactsPanel";
-import { TraceCapabilityPanel } from "./TraceCapabilityPanel";
-import { TraceCheckpointPanel } from "./TraceCheckpointPanel";
-import { TraceContextBudgetPanel } from "./TraceContextBudgetPanel";
-import { TraceDiagnosisPanel } from "./TraceDiagnosisPanel";
+import { ContextInspector } from "./ContextInspector";
+import { EmptyState } from "./EmptyState";
+import { rawJson } from "./trace-display";
 import { TraceMemoryPanel } from "./TraceMemoryPanel";
-import { TraceModelRuntimeCard } from "./TraceModelRuntimeCard";
-import { TraceRawJsonPanel } from "./TraceRawJsonPanel";
-import { TraceSpanInspector } from "./TraceSpanInspector";
-import { TraceSummaryCards } from "./TraceSummaryCards";
+import { TraceTabs, type TraceTab } from "./TraceTabs";
 import { TraceTimeline } from "./TraceTimeline";
 import { TraceToolCallsPanel } from "./TraceToolCallsPanel";
-import { compactId, formatRelativeTime, statusLabel } from "./trace-utils";
-
-type TraceTab = "tools" | "context" | "approval" | "checkpoints" | "memory" | "artifacts" | "raw";
 
 export function TraceRunDetail({ detail, selectedSpan, onSelectSpan }: { detail: TraceDetail | null; selectedSpan: TraceSpan | null; onSelectSpan: (span: TraceSpan) => void }) {
-  const [tab, setTab] = useState<TraceTab>("tools");
-  if (!detail) return <main className="trace-inspect-detail"><div className="empty"><h2>No trace selected</h2><p>Select a run from the list.</p></div></main>;
-
-  const tabs: Array<[TraceTab, string]> = [["tools", "Tools"], ["context", "Context"], ["approval", "Approval"], ["checkpoints", "Checkpoints"], ["memory", "Memory"], ["artifacts", "Artifacts"], ["raw", "Raw JSON"]];
+  const [tab, setTab] = useState<TraceTab>("context");
+  if (!detail) {
+    return (
+      <main className="trace-main-stack">
+        <EmptyState title="No trace selected">Select a run from the list.</EmptyState>
+      </main>
+    );
+  }
 
   return (
-    <main className="trace-inspect-detail">
-      <section className="trace-run-head">
-        <div>
-          <h2>Run {compactId(detail.summary?.run_id || String(detail.run?.run_id || ""))}</h2>
-          <p>{detail.summary?.user_goal_preview || "No goal preview recorded."}</p>
-        </div>
-        <dl>
-          <div><dt>Status</dt><dd>{detail.summary ? statusLabel(detail.summary.status) : "-"}</dd></div>
-          <div><dt>Session</dt><dd>{detail.summary?.session_id ? compactId(detail.summary.session_id) : "-"}</dd></div>
-          <div><dt>Started</dt><dd>{formatRelativeTime(detail.summary?.started_at)}</dd></div>
-          <div><dt>Workspace</dt><dd>{detail.summary?.workspace || "-"}</dd></div>
-        </dl>
-      </section>
-      <TraceSummaryCards summary={detail.summary} />
-      <div className="trace-debug-console">
-        <aside className="trace-run-support">
-          <TraceModelRuntimeCard detail={detail} />
-          <TraceCapabilityPanel detail={detail} />
-        </aside>
-        <section className="trace-debug-main">
-          <TraceTimeline spans={detail.spans} selectedSpanId={selectedSpan?.span_id || null} onSelect={onSelectSpan} />
-          <div className="trace-tabs" role="tablist" aria-label="Trace detail panels">
-            {tabs.map(([value, label]) => <button key={value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>{label}</button>)}
+    <main className="trace-main-stack">
+      <TraceTimeline spans={detail.spans} selectedSpanId={selectedSpan?.span_id || null} onSelect={onSelectSpan} />
+
+      <section className="trace-card">
+        <div className="trace-card-header trace-card-header-with-tabs">
+          <div>
+            <h2>Run Details</h2>
+            <p>Context inspector, tools, memory, and sanitized raw trace JSON</p>
           </div>
+          <TraceTabs value={tab} onChange={setTab} />
+        </div>
+        <div className="trace-card-body">
+          {tab === "overview" ? <OverviewPanel detail={detail} /> : null}
+          {tab === "context" ? <ContextInspector detail={detail} /> : null}
           {tab === "tools" ? <TraceToolCallsPanel spans={detail.spans} selectedSpanId={selectedSpan?.span_id || null} onSelectSpan={onSelectSpan} /> : null}
-          {tab === "context" ? <TraceContextBudgetPanel detail={detail} /> : null}
-          {tab === "approval" ? <TraceApprovalPanel spans={detail.spans} /> : null}
-          {tab === "checkpoints" ? <TraceCheckpointPanel spans={detail.spans} /> : null}
           {tab === "memory" ? <TraceMemoryPanel spans={detail.spans} /> : null}
-          {tab === "artifacts" ? <TraceArtifactsPanel artifacts={detail.artifacts} /> : null}
-          {tab === "raw" ? <TraceRawJsonPanel detail={detail} /> : null}
-        </section>
-        <aside className="trace-debug-side">
-          <TraceSpanInspector span={selectedSpan} />
-          <TraceDiagnosisPanel diagnosis={detail.diagnosis} warnings={detail.warnings} />
-        </aside>
-      </div>
+          {tab === "raw" ? <RawJsonPanel detail={detail} /> : null}
+        </div>
+      </section>
     </main>
+  );
+}
+
+function OverviewPanel({ detail }: { detail: TraceDetail }) {
+  const summary = detail.summary;
+  return (
+    <div className="trace-overview-grid">
+      <article className="trace-soft-panel">
+        <h3>Run</h3>
+        <dl className="trace-kv-list">
+          <div><dt>Run ID</dt><dd>{summary?.run_id || "Not captured"}</dd></div>
+          <div><dt>Session</dt><dd>{summary?.session_id || "Not captured"}</dd></div>
+          <div><dt>Workspace</dt><dd>{summary?.workspace || "Not captured"}</dd></div>
+          <div><dt>Goal</dt><dd>{summary?.user_goal_preview || "No goal preview recorded."}</dd></div>
+        </dl>
+      </article>
+      <article className="trace-soft-panel">
+        <h3>Activity</h3>
+        <dl className="trace-kv-list">
+          <div><dt>Tools</dt><dd>{summary?.tool_calls || 0}</dd></div>
+          <div><dt>Memory</dt><dd>{summary?.memory_recall_count || 0}</dd></div>
+          <div><dt>Checkpoints</dt><dd>{summary?.checkpoint_count || 0}</dd></div>
+          <div><dt>Artifacts</dt><dd>{detail.artifacts.length}</dd></div>
+        </dl>
+      </article>
+    </div>
+  );
+}
+
+function RawJsonPanel({ detail }: { detail: TraceDetail }) {
+  return (
+    <section className="trace-raw-panel">
+      <pre className="trace-codebox trace-codebox-large">{rawJson(detail)}</pre>
+    </section>
   );
 }

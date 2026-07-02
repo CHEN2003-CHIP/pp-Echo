@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Copy, PanelLeftClose, PanelLeftOpen, RefreshCw } from "lucide-react";
 import { api, type TraceDetail, type TraceRunSummary, type TraceSpan } from "../../api";
+import { InspectorPanel } from "./InspectorPanel";
+import { summaryFromDetail } from "./trace-display";
+import { TraceInspectHeader } from "./TraceInspectHeader";
 import { TraceRunDetail } from "./TraceRunDetail";
 import { TraceRunList } from "./TraceRunList";
-import { compactId, statusLabel } from "./trace-utils";
+import { TraceSummaryMetrics } from "./TraceSummaryMetrics";
 
 export function TraceInspectPage({ activeSessionId, initialRunId, onBack }: { activeSessionId?: string; initialRunId?: string | null; onBack: () => void }) {
   const [runs, setRuns] = useState<TraceRunSummary[]>([]);
@@ -13,7 +15,6 @@ export function TraceInspectPage({ activeSessionId, initialRunId, onBack }: { ac
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [error, setError] = useState("");
-  const [isRunListCollapsed, setIsRunListCollapsed] = useState(false);
 
   const currentStatus = detail?.summary?.status || runs.find((run) => run.run_id === selectedRunId)?.status;
   const shouldPoll = currentStatus === "running" || currentStatus === "pending";
@@ -29,11 +30,12 @@ export function TraceInspectPage({ activeSessionId, initialRunId, onBack }: { ac
     return () => window.clearInterval(timer);
   }, [shouldPoll, selectedRunId]);
 
-  const headerRun = useMemo(() => runs.find((run) => run.run_id === selectedRunId), [runs, selectedRunId]);
+  const headerRun = useMemo(() => runs.find((run) => run.run_id === selectedRunId) || null, [runs, selectedRunId]);
+  const activeSummary = summaryFromDetail(detail, headerRun);
 
   async function refresh() {
     setError("");
-    let payload = await api.traces({ limit: 80, sessionId: activeSessionId || undefined }).catch(async () => api.traces({ limit: 80 }));
+    const payload = await api.traces({ limit: 80, sessionId: activeSessionId || undefined }).catch(async () => api.traces({ limit: 80 }));
     setRuns(payload.runs);
     const nextRunId = selectedRunId || initialRunId || payload.runs[0]?.run_id || null;
     setSelectedRunId(nextRunId);
@@ -52,21 +54,20 @@ export function TraceInspectPage({ activeSessionId, initialRunId, onBack }: { ac
 
   return (
     <div className="trace-inspect-page">
-      <header className="trace-inspect-toolbar">
-        <button onClick={onBack}><ArrowLeft size={16} />返回会话</button>
-        <button onClick={() => refresh().catch((err) => setError(errorMessage(err)))}><RefreshCw size={16} />刷新</button>
-        <button onClick={() => setIsRunListCollapsed((value) => !value)} title={isRunListCollapsed ? "Show run list" : "Collapse run list"}>
-          {isRunListCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-          {isRunListCollapsed ? "Runs" : "Hide runs"}
-        </button>
-        <span>run {selectedRunId ? compactId(selectedRunId) : "-"}</span>
-        <span>{currentStatus ? statusLabel(currentStatus) : "-"}</span>
-        <button onClick={copyJson} disabled={!detail}><Copy size={16} />复制 JSON</button>
-      </header>
+      <TraceInspectHeader
+        run={activeSummary}
+        selectedRunId={selectedRunId}
+        onBack={onBack}
+        onRefresh={() => refresh().catch((err) => setError(errorMessage(err)))}
+        onCopyJson={copyJson}
+        canCopy={Boolean(detail)}
+      />
       {error ? <div className="trace-inspect-error">{error}</div> : null}
-      <div className={`trace-inspect-layout ${isRunListCollapsed ? "trace-inspect-layout-collapsed" : ""}`}>
+      <TraceSummaryMetrics summary={activeSummary} />
+      <div className="trace-inspect-layout">
         <TraceRunList runs={runs} selectedRunId={selectedRunId} onSelect={setSelectedRunId} search={search} onSearch={setSearch} statusFilter={statusFilter} onStatusFilter={setStatusFilter} />
-        <TraceRunDetail detail={detail || (headerRun ? null : null)} selectedSpan={selectedSpan} onSelectSpan={setSelectedSpan} />
+        <TraceRunDetail detail={detail} selectedSpan={selectedSpan} onSelectSpan={setSelectedSpan} />
+        <InspectorPanel detail={detail} span={selectedSpan} />
       </div>
     </div>
   );

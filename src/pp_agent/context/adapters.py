@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any, Iterable, List, Optional
 
 from pp_agent.context.budget import ContextItemSummary
@@ -20,6 +22,9 @@ from pp_agent.domain import ChatMessage, TextPart, ToolCallPart
 CORE_MEMORY_METADATA_KEY = "core_memory_snapshot"
 RECALL_METADATA_KEY = "memory_recall"
 CONTEXT_TRACE_PAYLOAD_VERSION = 3
+MODEL_INPUT_PREVIEW_LIMIT = 1600
+MODEL_INPUT_SECTION_LIMIT = 4200
+SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password|credential|authorization)", re.IGNORECASE)
 
 
 def build_context_pack_from_messages(
@@ -92,6 +97,7 @@ def context_pack_to_trace_details(pack: ContextPack) -> dict[str, object]:
             "drop_reasons": dict(pack.budget_report.drop_reasons),
             "source_refs": [ref.summary() for ref in pack.source_refs],
             "sections": sections,
+            "model_input_preview": _model_input_preview_trace(pack),
             "pack_summary": {
                 "source_refs": [ref.summary() for ref in pack.source_refs],
                 "included_count": len(pack.budget_report.included_items),
@@ -119,7 +125,107 @@ def context_pack_to_trace_details(pack: ContextPack) -> dict[str, object]:
             "warnings": list(pack.warnings),
             **_memory_recall_trace(pack),
         },
+}
+
+
+def _model_input_preview_trace(pack: ContextPack) -> dict[str, object]:
+    """Build a bounded TraceInspect model-input preview without storing full prompts."""
+
+    sections: dict[str, dict[str, object]] = {}
+    order: list[str] = []
+    total_chars = 0
+    total_preview_chars = 0
+
+    def ensure_section(section: str, role: str) -> dict[str, object]:
+        if section not in sections:
+            sections[section] = {
+                "name": section,
+                "role": role,
+                "text": "",
+                "chars": 0,
+                "preview_chars": 0,
+                "source_count": 0,
+                "hashes": [],
+                "truncated": False,
+            }
+            order.append(section)
+        return sections[section]
+
+    def append_preview(section: str, role: str, header: str, text: str) -> None:
+        nonlocal total_chars, total_preview_chars
+        entry = ensure_section(section, role)
+        chars = len(text)
+        preview = _safe_model_input_preview(text)
+        current_text = str(entry["text"])
+        separator = "\n\n" if current_text else ""
+        next_text = f"{current_text}{separator}{header}\n{preview}".strip()
+        if len(next_text) > MODEL_INPUT_SECTION_LIMIT:
+            next_text = next_text[:MODEL_INPUT_SECTION_LIMIT].rstrip() + "\n[section preview truncated]"
+            entry["truncated"] = True
+        entry["text"] = next_text
+        entry["chars"] = int(entry["chars"]) + chars
+        entry["preview_chars"] = len(next_text)
+        entry["source_count"] = int(entry["source_count"]) + 1
+        (entry["hashes"] if isinstance(entry["hashes"], list) else []).append(hashlib.sha256(text.encode("utf-8")).hexdigest()[:16])
+        total_chars += chars
+        total_preview_chars += len(preview)
+
+    for index, message in enumerate(pack.final_messages or []):
+        text = _message_text(message)
+        if not text:
+            continue
+        section = _message_section(message)
+        append_preview(section, message.role, _message_preview_header(message, index), text)
+
+    for section, items in _pack_section_map(pack).items():
+        if section in sections:
+            continue
+        for item in items:
+            if item.content:
+                append_preview(section, "context", f"# {item.title}", item.content)
+    return {
+        "capture": "preview",
+        "truncated": any(bool(sections[name].get("truncated")) for name in order),
+        "total_chars": total_chars,
+        "preview_chars": total_preview_chars,
+        "sections": [sections[name] for name in order],
     }
+
+
+def _message_section(message: ChatMessage) -> str:
+    metadata = message.metadata or {}
+    explicit = str(metadata.get("context_section") or "").strip()
+    if explicit:
+        return explicit
+    if message.role == "system":
+        return "system"
+    if message.role == "tool":
+        return "runtime_notes"
+    return "conversation"
+
+
+def _message_preview_header(message: ChatMessage, index: int) -> str:
+    label = str((message.metadata or {}).get("source_id") or message.tool_name or message.role)
+    return f"[{index + 1}] {message.role}: {label}"
+
+
+def _safe_model_input_preview(text: str) -> str:
+    cleaned = _hide_private_reasoning(text)
+    if len(cleaned) <= MODEL_INPUT_PREVIEW_LIMIT:
+        return cleaned
+    return cleaned[:MODEL_INPUT_PREVIEW_LIMIT].rstrip() + "\n[message preview truncated]"
+
+
+def _hide_private_reasoning(text: str) -> str:
+    value = re.sub(r"<think>[\s\S]*?</think>", "[hidden private reasoning]", text, flags=re.IGNORECASE)
+    lines = []
+    for line in value.splitlines():
+        key = line.split(":", 1)[0].strip()
+        if SECRET_KEY_RE.search(key):
+            lines.append(f"{key}: [redacted]")
+        else:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 class SkillContextAdapter:

@@ -334,12 +334,11 @@ test("buildTranscript keeps multi-turn activity before each assistant", () => {
   assert.equal(transcript[4].activity.title, "T2");
 });
 
-test("buildTranscript does not duplicate activity when persisted blocks and runtime events both exist", () => {
+test("buildTranscript prefers live running activity when persisted blocks and runtime events both exist", () => {
   const transcript = app.buildTranscript(
     {
       messages: [
         { role: "user", content: [{ type: "text", text: "Show history" }], timestamp: 1 },
-        { role: "assistant", content: [{ type: "text", text: "Done" }], timestamp: 5 },
       ],
       activity_blocks: [
         {
@@ -360,14 +359,15 @@ test("buildTranscript does not duplicate activity when persisted blocks and runt
     },
     [
       { type: "turn_start", timestamp: 2, turn_id: 1 },
-      { type: "reasoning_summary", timestamp: 3, turn_id: 1, message: "Runtime public summary" },
-      { type: "turn_end", timestamp: 4, turn_id: 1 },
+      { type: "reasoning_start", timestamp: 3, run_id: "run-live", turn_id: 1, message: "Preparing model context and public progress." },
+      { type: "reasoning_delta", timestamp: 4, run_id: "run-live", turn_id: 1, delta: "Receiving public assistant output." },
     ],
   );
 
   const activityItems = transcript.filter((item) => item.role === "activity");
   assert.equal(activityItems.length, 1);
-  assert.equal(activityItems[0].activity.summary, "Persisted public summary");
+  assert.equal(activityItems[0].activity.running, true);
+  assert.ok(activityItems[0].activity.summary.includes("Receiving") || activityItems[0].body.text.includes("Receiving"));
 });
 
 test("buildTranscript keeps process narration as assistant text", () => {
