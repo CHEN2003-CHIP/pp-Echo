@@ -6,8 +6,10 @@ const ts = require("typescript");
 const projectRoot = path.resolve(__dirname, "..");
 const tempRoot = fs.mkdtempSync(path.join(projectRoot, ".rich-text-tests-"));
 fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ type: "commonjs" }), "utf8");
+process.env.TS_ALIAS_TEMP_ROOT = tempRoot;
+require("./ts-alias.cjs");
 
-for (const sourcePath of ["src/api.ts", "src/rich-text.tsx"]) {
+for (const sourcePath of ["src/api.ts", "src/lib/utils.ts", "src/components/ui/button.tsx", "src/components/message.tsx", "src/rich-text.tsx"]) {
   compileSource(sourcePath);
 }
 

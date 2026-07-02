@@ -3,6 +3,8 @@ import { sanitizeMediaUrl, type RichAttachment } from "../../rich-text";
 import type { ActivityItem, ActivityRunSummary, ActivityStatus, ActivityStep } from "./activity-types";
 import { eventActivityId, eventEndedAt, eventPhase, eventStableKey, eventStartedAt, eventStatus, firstNumber, firstString, formatDurationMs, phaseLabel, safeRawEvent, truncateText } from "./activity-utils";
 
+import { presentActivityRun, presentActivityStep } from "./activity-presenter";
+
 export function buildActivityRuns(events: RuntimeEvent[] = [], snapshot?: SessionSnapshot, approvals?: ApprovalsSummary): ActivityItem[] {
   const unique: RuntimeEvent[] = [];
   const seen = new Set<string>();
@@ -64,8 +66,8 @@ function buildActivityItem(id: string, events: RuntimeEvent[]): ActivityItem | n
   const endForDuration = endedAt || Date.now() / 1000;
   const durationLabel = startedAt && endForDuration ? formatDurationMs(Math.max(0, (endForDuration - startedAt) * 1000)) : "";
   const entries = sorted.map((event, index) => buildStep(event, index, startedAt));
-  const narrative = summarizeActivity(phase, sorted, entries);
-  const detail = entries.map((entry) => entry.detail).filter(Boolean).join("\n\n");
+  const narrative = presentActivityRun(id, phase, status, sorted, entries);
+  const detail = narrative.detail || entries.map((entry) => entry.detail).filter(Boolean).join("\n\n");
   const toolCount = phase === "tool" ? 1 : entries.filter((entry) => entry.kind === "tool" || entry.kind === "command").length;
   const approvalCount = phase === "approval" ? 1 : entries.filter((entry) => entry.kind === "approval").length;
   const errorCount = entries.filter((entry) => entry.status === "error").length;
@@ -81,6 +83,7 @@ function buildActivityItem(id: string, events: RuntimeEvent[]): ActivityItem | n
     title: narrative.title,
     summary: narrative.summary,
     narrative: narrative.narrative,
+    display: narrative.display,
     detail,
     timestamp: startedAt || first.timestamp,
     startedAt,
@@ -106,7 +109,7 @@ function buildStep(event: RuntimeEvent, index: number, fallbackStartedAt?: numbe
   const durationMs = typeof event.duration_ms === "number" ? event.duration_ms : startedAt && terminalEndedAt ? Math.max(0, (terminalEndedAt - startedAt) * 1000) : 0;
   const durationLabel = durationMs ? formatDurationMs(durationMs) : "";
   const kind = stepKind(event);
-  const narrative = naturalStepNarrative(event);
+  const narrative = presentActivityStep(event);
   return { id: eventStableKey(event, index), kind, label: narrative.title, detail: narrative.detail, narrative: narrative.body, timestamp: event.timestamp, startedAt, endedAt: terminalEndedAt, durationLabel, status, tone: status, attachments: toolResultAttachments(event.details || {}), rawType: event.type, safeRaw: safeRawEvent(event) };
 }
 

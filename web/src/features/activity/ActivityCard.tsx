@@ -4,7 +4,10 @@ import { RichMessageAttachments } from "../../rich-text";
 import type { ActivityItem, ActivityPhase, ActivityStatus } from "./activity-types";
 
 export function ActivityCard({ item }: { item: ActivityItem }) {
-  const lines = buildThinkingLines(item);
+  const display = item.display;
+  const title = display?.title || item.title;
+  const summary = display?.summary || item.narrative || item.summary || item.detail;
+  const detailLines = buildDetailLines(item);
   const [expanded, setExpanded] = useState(item.running);
 
   useEffect(() => {
@@ -17,9 +20,14 @@ export function ActivityCard({ item }: { item: ActivityItem }) {
     }
   }, [item.id, item.running, item.status]);
 
-  const summary = useMemo(
-    () => [item.title, item.durationLabel ? `· ${item.durationLabel}` : "", statusCopy(item.status)].filter(Boolean).join(" "),
-    [item.durationLabel, item.status, item.title],
+  const meta = useMemo(
+    () => [
+      item.durationLabel,
+      item.eventCount ? `${item.eventCount} events` : "",
+      item.toolCount ? `${item.toolCount} tools` : "",
+      statusCopy(item.status),
+    ].filter(Boolean).join(" / "),
+    [item.durationLabel, item.eventCount, item.status, item.toolCount],
   );
 
   return (
@@ -28,22 +36,20 @@ export function ActivityCard({ item }: { item: ActivityItem }) {
         <span className="activity-thought-icon" aria-hidden="true">
           <PhaseIcon phase={item.phase} />
         </span>
-        <span className="activity-thought-title">{item.title}</span>
-        {item.durationLabel ? <span className="activity-thought-meta">· {item.durationLabel}</span> : null}
-        <span className={`activity-thought-status ${item.status}`}>{statusCopy(item.status)}</span>
+        <span className="activity-thought-title">{title}</span>
+        {meta ? <span className="activity-thought-meta">{meta}</span> : null}
         <span className="activity-thought-toggle" aria-hidden="true">
           <ChevronDown size={13} />
         </span>
       </button>
-      {!expanded ? <div className="activity-thought-summary">{summary}</div> : null}
-      {expanded ? (
+      {summary ? <div className="activity-thought-summary">{summary}</div> : null}
+      {expanded && detailLines.length ? (
         <div className="activity-thought-body">
-          {lines.map((line, index) => (
-            <p className="activity-thought-line" key={`${item.id}-line-${index}`}>
-              {line}
-            </p>
+          <div className="activity-thought-note">过程细节</div>
+          {detailLines.map((line, index) => (
+            <p className="activity-thought-line" key={`${item.id}-line-${index}`}>{line}</p>
           ))}
-          {!lines.length && item.attachments?.length ? <RichMessageAttachments attachments={item.attachments} /> : null}
+          {item.attachments?.length ? <RichMessageAttachments attachments={item.attachments} /> : null}
         </div>
       ) : null}
     </section>
@@ -89,19 +95,24 @@ function phaseIcon(phase: ActivityPhase) {
 }
 
 function statusCopy(status: ActivityStatus) {
+  if (status === "running") return "进行中";
+  if (status === "pending") return "等待中";
+  if (status === "success") return "已完成";
+  if (status === "warning") return "需关注";
+  if (status === "error") return "失败";
+  if (status === "cancelled") return "已取消";
   return status;
 }
 
-function buildThinkingLines(item: ActivityItem) {
+function buildDetailLines(item: ActivityItem) {
   const lines: string[] = [];
-  const narrative = item.narrative || item.summary || item.detail || "";
-  if (narrative) lines.push(narrative);
-
   for (const entry of item.entries || []) {
-    const parts = [entry.label, entry.narrative || entry.detail, [entry.rawType, entry.durationLabel].filter(Boolean).join(" · ")].filter(Boolean);
-    if (parts.length) lines.push(parts.join(" · "));
+    const meta = [entry.rawType ? `type: ${entry.rawType}` : "", entry.durationLabel ? `duration: ${entry.durationLabel}` : "", entry.status ? `status: ${entry.status}` : ""].filter(Boolean).join(" / ");
+    const parts = [entry.label, entry.narrative || entry.detail, meta].filter(Boolean);
+    if (parts.length) lines.push(parts.join("\n"));
     if (entry.attachments?.length) lines.push(`${entry.attachments.length} 个附件`);
   }
+  if (!lines.length && item.detail) lines.push(item.detail);
 
   return lines;
 }

@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node scripts/rich-text.tests.cjs && node scripts/activity-normalizer.tests.cjs && node scripts/transcript.tests.cjs && node scripts/trace-model-runtime-card.tests.cjs && node scripts/agent-workspace.tests.cjs"
+    "test": "node scripts/rich-text.tests.cjs && node scripts/activity-presenter.tests.cjs && node scripts/activity-finding.tests.cjs && node scripts/activity-normalizer.tests.cjs && node scripts/transcript.tests.cjs && node scripts/trace-model-runtime-card.tests.cjs && node scripts/agent-workspace.tests.cjs"
   },
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.1.14",

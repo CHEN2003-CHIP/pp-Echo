@@ -334,6 +334,7 @@ export type TimelineEntry = {
   tool_name?: string | null;
   message?: string | null;
   is_error?: boolean;
+  plan_step?: { title: string; tool_name?: string | null; status?: string } | null;
   details?: Record<string, unknown>;
 };
 

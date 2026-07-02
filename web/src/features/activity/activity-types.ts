@@ -1,4 +1,5 @@
 import type { RichAttachment } from "../../rich-text";
+import type { ActivityDisplayItem } from "./activity-presenter";
 
 export type ActivityPhase =
   | "preparing"
@@ -46,6 +47,7 @@ export type ActivityItem = {
   title: string;
   summary: string;
   narrative?: string;
+  display?: ActivityDisplayItem;
   detail: string;
   timestamp?: number;
   startedAt?: number;

@@ -7,6 +7,9 @@ const tempRoot = process.env.TS_ALIAS_TEMP_ROOT ? path.resolve(process.env.TS_AL
 const originalResolveFilename = Module._resolveFilename;
 
 Module._resolveFilename = function resolveWithAlias(request, parent, isMain, options) {
+  if (isStreamdownTestImport(request)) {
+    return path.join(__dirname, "streamdown-test-stub.cjs");
+  }
   if (request.startsWith("@/")) {
     const redirected = path.join(projectRoot, "src", request.slice(2));
     const resolved = resolveLocalModule(redirected);
@@ -39,4 +42,8 @@ function resolveLocalModule(basePath) {
     }
   }
   return null;
+}
+
+function isStreamdownTestImport(request) {
+  return request === "streamdown" || request === "@streamdown/cjk" || request === "@streamdown/code" || request === "@streamdown/math" || request === "@streamdown/mermaid";
 }

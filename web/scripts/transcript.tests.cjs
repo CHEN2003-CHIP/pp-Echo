@@ -63,9 +63,50 @@ test("buildTranscript groups multiple tools in one turn", () => {
   const activityItems = transcript.filter((item) => item.role === "activity");
   assert.equal(activityItems.length, 1);
   assert.ok(activityItems[0].activity.entries.length >= 2);
-  assert.deepEqual(Array.from(new Set(activityItems[0].activity.entries.map((entry) => entry.label))), ["搜索网页", "读取网页"]);
+  const labels = Array.from(new Set(activityItems[0].activity.entries.map((entry) => entry.label)));
+  assert.ok(labels.some((label) => label.includes("查找") || label.includes("搜索")));
+  assert.ok(labels.some((label) => label.includes("读取网页")));
   assert.ok(activityItems[0].body.text.includes("News result"));
   assert.ok(activityItems[0].body.text.includes("Fetched page"));
+});
+
+test("buildTranscript restores activity from timeline-derived runtime events", () => {
+  const timeline = [
+    {
+      id: "tl-1",
+      session_id: "session-1",
+      created_at: 2,
+      event_type: "reasoning_summary",
+      turn_id: 1,
+      message: "我已经确认历史 reasoning 的恢复方向。",
+      details: { summary: "我已经确认历史 reasoning 的恢复方向。" },
+    },
+    {
+      id: "tl-2",
+      session_id: "session-1",
+      created_at: 3,
+      event_type: "tool_start",
+      turn_id: 1,
+      tool_name: "search_repo",
+      details: { query: "timeline hydrateSession events", tool_call_id: "call-1" },
+    },
+  ];
+  const events = timeline.map(app.timelineEntryToRuntimeEvent);
+  const transcript = app.buildTranscript(
+    {
+      history: { source: "stored" },
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Show history" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "Done" }], timestamp: 9 },
+      ],
+    },
+    events,
+  );
+  const activity = transcript.find((item) => item.role === "activity");
+  assert.ok(activity);
+  assert.ok(activity.activity.summary.includes("timeline") || activity.activity.summary.includes("历史"));
+  assert.equal(events[0].type, "reasoning_summary");
+  assert.equal(events[0].timestamp, 2);
 });
 
 test("buildTranscript keeps process narration as assistant text", () => {

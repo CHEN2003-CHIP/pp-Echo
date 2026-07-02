@@ -4,7 +4,6 @@ import {
   ArrowDown,
   Bot,
   BookOpen,
-  Boxes,
   Check,
   ChevronDown,
   ChevronRight,
@@ -52,6 +51,7 @@ import { SettingsCenter } from "./features/settings/SettingsCenter";
 import { ActivityCard } from "./features/activity/ActivityCard";
 import { ActivityDetailsPanel } from "./features/activity/ActivityDetailsPanel";
 import { buildActivityRuns } from "./features/activity/activity-normalizer";
+import { presentActivityRun } from "./features/activity/activity-presenter";
 import type { ActivityItem } from "./features/activity/activity-types";
 
 type ViewKey =
@@ -153,7 +153,6 @@ const navItems: Array<{
   { view: "search", label: "搜索", icon: Search, description: "会话检索" },
   { view: "workspace", label: "工作区", icon: FolderOpen, description: "工作区切换" },
   { view: "tasks", label: "任务", icon: LayoutDashboard, description: "审批与待办" },
-  { view: "board", label: "看板", icon: Boxes, description: "运行概览" },
   { view: "channels", label: "频道", icon: Bot, description: "MCP 与通道" },
   { view: "plugins", label: "插件", icon: Sparkles, description: "能力扩展" },
   { view: "memory", label: "记忆", icon: BookOpen, description: "记忆视图" },
@@ -169,14 +168,14 @@ const navItems: Array<{
 
 const shellNavGroups: Array<{ title: string; views: ViewKey[] }> = [
   { title: "对话", views: ["chat", "history", "group", "search"] },
-  { title: "执行", views: ["workspace", "tasks", "board", "channels"] },
+  { title: "执行", views: ["workspace", "tasks", "channels"] },
   { title: "扩展", views: ["plugins", "memory", "model"] },
   { title: "监控", views: ["logs", "attachments", "bots", "traceInspect", "usage", "skills", "users"] }
 ];
 
 const sidebarNavSections: Array<{ title: string; views: ViewKey[] }> = [
   { title: "Conversations", views: ["chat", "history", "group", "search"] },
-  { title: "Runtime", views: ["workspace", "tasks", "board", "channels"] },
+  { title: "Runtime", views: ["workspace", "tasks", "channels"] },
   { title: "Extensions", views: ["plugins", "memory", "model", "skills"] },
   { title: "Observability", views: ["logs", "attachments", "traceInspect"] },
   { title: "Bots", views: ["bots"] },
@@ -293,7 +292,7 @@ export function App() {
   const sessionStats = useMemo(() => computeSessionStats(sessions), [sessions]);
   const viewLabel = navItems.find((item) => item.view === activeView)?.label || "会话";
   const viewMeta = navItems.find((item) => item.view === activeView);
-  const middleMode = activeView === "history" ? "sessions" : activeView === "board" ? "observer" : null;
+  const middleMode = activeView === "history" ? "sessions" : null;
 
   async function refreshAll() {
     const [workspaceState, workspaceMeta, sessionList, approvals] = await Promise.all([api.workspaces(), api.workspaceStatus(), api.sessions(), api.approvals()]);
@@ -345,10 +344,21 @@ export function App() {
 
     setActiveSessionId(snapshot.session_id);
     setSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
+    await hydrateTimelineEvents(snapshot.session_id);
     refreshAttachments(snapshot.session_id);
     stopPollingExcept(snapshot.session_id);
     if (snapshot.history?.source !== "stored") {
       ensureEventPolling(snapshot.session_id);
+    }
+  }
+
+  async function hydrateTimelineEvents(sessionId: string) {
+    try {
+      const payload = await api.timeline(sessionId, 500);
+      const restored = payload.timeline.map(timelineEntryToRuntimeEvent);
+      setEvents((current) => ({ ...current, [sessionId]: mergeRuntimeEvents(current[sessionId] || [], restored) }));
+    } catch {
+      setEvents((current) => ({ ...current, [sessionId]: current[sessionId] || [] }));
     }
   }
 
@@ -504,16 +514,6 @@ export function App() {
         const firstSession = sessions[0]?.id;
         if (firstSession) hydrateSession(firstSession).catch(() => undefined);
       }
-      return;
-    }
-    if (view === "board") {
-      if (activeView === "board") {
-        setActiveView("chat");
-        setInspectorOpen(false);
-        return;
-      }
-      setActiveView("board");
-      setInspectorOpen(true);
       return;
     }
     setActiveView(view);
@@ -915,7 +915,7 @@ export function App() {
       </section>
 
       <main className="content-canvas">
-        {activeView === "chat" || activeView === "history" || activeView === "board" ? null : (
+        {activeView === "chat" || activeView === "history" ? null : (
         <header className="canvas-header">
           <div className="canvas-header-copy">
             <div className="canvas-crumbs">
@@ -950,7 +950,7 @@ export function App() {
               onOpenTrace={() => setActiveView("traceInspect")}
               onOpenChat={() => setActiveView("chat")}
             />
-          ) : activeView === "chat" || activeView === "history" || activeView === "board" ? (
+          ) : activeView === "chat" || activeView === "history" ? (
             <ChatWorkspace
               transcriptRef={transcriptRef}
               transcript={transcript}
@@ -4531,18 +4531,18 @@ function combineActivityItemsForTranscript(items: ActivityItem[], events: Runtim
   const toolCount = items.reduce((total, item) => total + item.toolCount, 0);
   const approvalCount = items.reduce((total, item) => total + item.approvalCount, 0);
   const errorCount = items.reduce((total, item) => total + item.errorCount, 0);
+  const phase = items.some((item) => item.phase === "preparing" || item.phase === "analyzing" || item.phase === "finalizing") ? "analyzing" : items.some((item) => item.phase === "planning") ? "planning" : "tool";
+  const narrative = presentActivityRun(`turn-activity:${startedAt || items[0].id}`, phase, status, events, entries);
   return {
     id: `turn-activity:${startedAt || items[0].id}`,
-    phase: items.some((item) => item.phase === "preparing" || item.phase === "analyzing" || item.phase === "finalizing") ? "analyzing" : items.some((item) => item.phase === "planning") ? "planning" : "tool",
+    phase,
     status,
     tone: status,
-    title: `${status === "error" ? "遇到问题" : running ? "正在推进" : "已完成"} · ${items.length} 个过程${durationLabel ? ` · ${durationLabel}` : ""}`,
-    summary: [
-      toolCount ? `${toolCount} tool call${toolCount === 1 ? "" : "s"}` : "",
-      approvalCount ? `${approvalCount} approval${approvalCount === 1 ? "" : "s"}` : "",
-      errorCount ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : "",
-    ].filter(Boolean).join(" · ") || `${entries.length} runtime event${entries.length === 1 ? "" : "s"}`,
-    detail,
+    title: narrative.title,
+    summary: narrative.summary,
+    narrative: narrative.narrative,
+    display: narrative.display,
+    detail: narrative.detail || detail,
     timestamp: startedAt,
     startedAt,
     endedAt: running ? undefined : endedAt,
@@ -5047,6 +5047,38 @@ function appendDiagnosticLines(lines: string[], label: string, value: unknown) {
     }).filter(Boolean);
     if (tail.length > 0) lines.push(`${label} recent: ${tail.join(" | ")}`);
   }
+}
+
+export function timelineEntryToRuntimeEvent(entry: TimelineEntry): RuntimeEvent {
+  return {
+    type: entry.event_type,
+    session_id: entry.session_id,
+    timestamp: entry.created_at,
+    turn_id: entry.turn_id ?? null,
+    phase: entry.phase ?? null,
+    tool_name: entry.tool_name ?? null,
+    message: entry.message ?? null,
+    is_error: Boolean(entry.is_error),
+    plan_step: entry.plan_step ?? null,
+    details: {
+      ...(entry.details || {}),
+      timeline_entry_id: entry.id,
+    },
+  };
+}
+
+function mergeRuntimeEvents(existing: RuntimeEvent[], incoming: RuntimeEvent[]) {
+  const merged = [...existing];
+  const seen = new Set(existing.map(runtimeEventDedupeKey).filter(Boolean));
+  for (const event of incoming) {
+    const key = runtimeEventDedupeKey(event);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    merged.push(event);
+  }
+  return merged
+    .sort((left, right) => (left.timestamp || 0) - (right.timestamp || 0))
+    .slice(-MAX_SESSION_EVENTS);
 }
 
 function runtimeEventDedupeKey(event: RuntimeEvent) {
