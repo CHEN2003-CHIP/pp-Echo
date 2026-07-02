@@ -61,6 +61,7 @@ from pp_agent.storage.checkpoints import CheckpointStore
 from pp_agent.storage.models import StoredModelConfig, StoredProviderConfig
 from pp_agent.storage.sessions import SessionRecord, SessionStore
 from pp_agent.storage.settings import Settings
+from pp_agent.storage.activity_blocks import ActivityBlockStore
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.metadata import ToolMetadata
 from pp_agent.tools.registry import ToolRegistration, ToolRegistry
@@ -465,6 +466,11 @@ def timeline_store_for(workspace: Path) -> TimelineStore:
     """
     settings = load_settings(workspace)
     return TimelineStore(settings.timeline_store_dir())
+
+
+def activity_block_store_for(workspace: Path) -> ActivityBlockStore:
+    settings = load_settings(workspace)
+    return ActivityBlockStore(settings.timeline_store_dir())
 
 
 def pending_action_store_for(workspace: Path) -> PendingActionStore:

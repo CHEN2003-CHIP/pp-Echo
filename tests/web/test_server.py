@@ -216,6 +216,124 @@ def test_web_api_session_timeline_endpoint(tmp_path: Path) -> None:
     assert response.json()["timeline"][0]["message"] == "timed out"
 
 
+def test_web_api_session_timeline_recovers_runtime_events_after_manager_restart(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session_store = SessionStore(workspace / ".pp-agent" / "sessions")
+    record = session_store.create("system prompt", StoredModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="show history")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="done")], timestamp=4.0),
+    ]
+    session_store.save(record)
+    timeline = server_module.bootstrap.timeline_store_for(workspace)
+    timeline.append(
+        record.id,
+        AgentEvent(
+            type="reasoning_summary",
+            session_id=record.id,
+            turn_id=1,
+            phase="planning",
+            message="Public reasoning summary",
+            details={"summary": "Public reasoning summary"},
+            timestamp=2.0,
+        ),
+    )
+    timeline.append(
+        record.id,
+        AgentEvent(
+            type="tool_start",
+            session_id=record.id,
+            turn_id=1,
+            phase="executing",
+            tool_name="read_file",
+            details={"path": "web/src/App.tsx", "tool_call_id": "call-1"},
+            timestamp=3.0,
+        ),
+    )
+
+    restarted_manager = WebSessionManager(workspace, runtime_factory=_factory)
+    client = TestClient(_app(tmp_path, restarted_manager))
+
+    sessions = client.get("/api/sessions")
+    snapshot = client.get(f"/api/sessions/{record.id}")
+    response = client.get(f"/api/sessions/{record.id}/timeline", params={"limit": 2000})
+
+    assert sessions.status_code == 200
+    assert any(item["id"] == record.id for item in sessions.json()["sessions"])
+    assert snapshot.status_code == 200
+    assert snapshot.json()["messages"][-1]["role"] == "assistant"
+    assert response.status_code == 200
+    entries = response.json()["timeline"]
+    assert [entry["event_type"] for entry in entries] == ["reasoning_summary", "tool_start"]
+    assert entries[0]["details"]["runtime_event"]["type"] == "reasoning_summary"
+    assert entries[0]["turn_id"] == 1
+    assert entries[1]["tool_name"] == "read_file"
+    assert entries[1]["details"]["path"] == "web/src/App.tsx"
+
+
+def test_web_api_activity_blocks_restored_after_server_restart(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session_store = SessionStore(workspace / ".pp-agent" / "sessions")
+    record = session_store.create("system prompt", StoredModelConfig())
+    record.messages = [
+        ChatMessage(role="user", content=[TextPart(text="show history")], timestamp=1.0),
+        ChatMessage(role="assistant", content=[TextPart(text="done")], timestamp=4.0),
+    ]
+    session_store.save(record)
+    handle_manager = WebSessionManager(workspace, runtime_factory=_factory)
+    handle = handle_manager.get_handle(record.id)
+    for subscriber in handle.agent._subscribers:
+        subscriber(AgentEvent(type="reasoning_summary", session_id=record.id, turn_id=1, message="Public summary", details={"summary": "Public summary"}, timestamp=2.0))
+        subscriber(AgentEvent(type="turn_end", session_id=record.id, turn_id=1, timestamp=3.0))
+
+    restarted_manager = WebSessionManager(workspace, runtime_factory=_factory)
+    client = TestClient(_app(tmp_path, restarted_manager))
+
+    snapshot = client.get(f"/api/sessions/{record.id}")
+    activity = client.get(f"/api/sessions/{record.id}/activity")
+
+    assert snapshot.status_code == 200
+    assert snapshot.json()["activity_blocks"][0]["summary"] == "Public summary"
+    assert activity.status_code == 200
+    assert activity.json()["activity_blocks"][0]["event_count"] == 2
+
+
+def test_web_api_session_timeline_limit_allows_long_history(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    timeline = server_module.bootstrap.timeline_store_for(workspace)
+    for index in range(650):
+        event_type = "reasoning_summary" if index == 20 else "tool_start" if index == 640 else "turn_start"
+        timeline.append(
+            "session-long",
+            AgentEvent(
+                type=event_type,
+                session_id="session-long",
+                turn_id=index,
+                tool_name="read_file" if event_type == "tool_start" else None,
+                details={"index": index},
+                timestamp=float(index),
+            ),
+        )
+    client = TestClient(_app(tmp_path, WebSessionManager(workspace, runtime_factory=_factory)))
+
+    response = client.get("/api/sessions/session-long/timeline", params={"limit": 2000})
+
+    assert response.status_code == 200
+    entries = response.json()["timeline"]
+    assert len(entries) == 650
+    assert any(entry["event_type"] == "reasoning_summary" for entry in entries)
+    assert any(entry["event_type"] == "tool_start" for entry in entries)
+
+
 def test_web_api_logs_reads_text_and_jsonl_logs(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

@@ -5,10 +5,11 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-from pp_agent.app import bootstrap
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.models import StoredModelConfig
+from pp_agent.tools.registry import ToolRegistry  # noqa: F401 - preloads registry before bootstrap's extension imports.
+from pp_agent.app import bootstrap
 from pp_agent.web.session_manager import WebSessionManager
 
 
@@ -236,6 +237,31 @@ def test_web_session_events_are_lightweight_for_browser(tmp_path: Path) -> None:
     assert "Web preview truncated" in event["message"]
     assert len(event["details"]["payload"]) < 13_000
     assert len(event["details"]["items"]) == 24
+
+
+def test_activity_block_persisted_after_turn_end(tmp_path: Path) -> None:
+    manager = WebSessionManager(tmp_path, runtime_factory=_factory)
+    handle = manager.get_handle("session-1")
+    events = [
+        AgentEvent(type="turn_start", session_id="session-1", turn_id=1, timestamp=1.0),
+        AgentEvent(type="reasoning_summary", session_id="session-1", turn_id=1, message="Public summary", details={"summary": "Public summary"}, timestamp=2.0),
+        AgentEvent(type="tool_start", session_id="session-1", turn_id=1, tool_name="read_file", details={"path": "web/src/App.tsx"}, timestamp=3.0),
+        AgentEvent(type="turn_end", session_id="session-1", turn_id=1, timestamp=4.0),
+    ]
+    for subscriber in handle.agent._subscribers:
+        for event in events:
+            subscriber(event)
+
+    blocks = bootstrap.activity_block_store_for(tmp_path).list_session("session-1")
+
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block.title
+    assert block.summary == "Public summary"
+    assert block.event_count == 4
+    assert block.source_event_ids
+    assert any(item.kind == "progress" for item in block.items)
+    assert any(item.kind == "tool" for item in block.items)
 
 
 def test_web_session_snapshot_uses_stored_snapshot_without_restoring_runtime(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from typing import Optional
 
 from pp_agent.app import bootstrap
 from pp_agent.domain import ChatMessage, TextPart
+from pp_agent.storage.activity_blocks import ActivityDisplayItem, PersistedActivityBlock
 from pp_agent.runtime.control_plane import list_pending_patch_artifacts, summarize_runtime_control
 from pp_agent.runtime import AgentEvent
 
@@ -47,6 +48,7 @@ class WebSessionHandle:
         self._worker: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._runtime_factory = runtime_factory
+        self._turn_events: dict[int, list[AgentEvent]] = {}
         self.agent = self._build_runtime(session_id)
 
     @property
@@ -84,6 +86,7 @@ class WebSessionHandle:
                 pending_artifacts=pending_artifacts,
             ),
             "messages": messages,
+            "activity_blocks": _activity_blocks_payload(self.workspace, self.session_id),
             "history": _web_history_payload(
                 self.agent.state.messages,
                 source="active",
@@ -202,8 +205,26 @@ class WebSessionHandle:
         return self._runtime_factory(
             self.workspace,
             session_id,
-            [lambda event: self._event_queue.put(QueuedWebEvent(session_id=self.session_id, event=event))],
+            [self._record_runtime_event],
         )
+
+    def _record_runtime_event(self, event: AgentEvent) -> None:
+        self._event_queue.put(QueuedWebEvent(session_id=self.session_id, event=event))
+        if _is_activity_block_event(event):
+            turn_id = int(event.turn_id or _event_detail_number(event, "turn_id") or 0)
+            if turn_id > 0:
+                self._turn_events.setdefault(turn_id, []).append(event)
+        if event.type in {"turn_end", "agent_end"} or event.is_error:
+            turn_id = int(event.turn_id or _event_detail_number(event, "turn_id") or 0)
+            if turn_id > 0:
+                self._persist_activity_block(turn_id)
+
+    def _persist_activity_block(self, turn_id: int) -> None:
+        events = self._turn_events.get(turn_id) or []
+        block = build_activity_block(self.session_id, turn_id, events)
+        if block is None:
+            return
+        bootstrap.activity_block_store_for(self.workspace).upsert(block)
 
     def _emit_local(self, event_type: str, message: str, details: Optional[dict] = None) -> None:
         self._event_queue.put(
@@ -337,6 +358,7 @@ class WebSessionManager:
                 pending_artifacts=pending_artifacts,
             ),
             "messages": messages,
+            "activity_blocks": _activity_blocks_payload(self.workspace, record.id),
             "history": _web_history_payload(
                 branch_messages,
                 source="stored",
@@ -413,6 +435,7 @@ def _stored_event_snapshot(workspace: Path, session_root: Path, session_id: str)
             pending_artifacts=pending_artifacts,
         ),
         "messages": rendered_messages,
+        "activity_blocks": _activity_blocks_payload(workspace, session_id),
         "history": _web_history_payload(
             messages,
             source="stored",
@@ -421,6 +444,11 @@ def _stored_event_snapshot(workspace: Path, session_root: Path, session_id: str)
             total_visible_count=total_visible_count,
         ),
     }
+
+
+def _activity_blocks_payload(workspace: Path, session_id: str) -> list[dict]:
+    blocks = bootstrap.activity_block_store_for(workspace).list_session(session_id, limit=200)
+    return [block.model_dump(mode="json") for block in blocks]
 
 
 def _parse_web_event_line(raw: str) -> tuple[str | None, dict]:
@@ -829,3 +857,136 @@ def _truncate_web_text(text: str, *, limit: int = MAX_WEB_TEXT_CHARS) -> str:
         return text
     omitted = len(text) - limit
     return f"{text[:limit]}\n\n[Web preview truncated {omitted} characters to keep the browser responsive.]"
+
+
+def build_activity_block(session_id: str, turn_id: int, events: list[AgentEvent]) -> PersistedActivityBlock | None:
+    public_events = [event for event in events if _is_activity_block_event(event)]
+    if not public_events:
+        return None
+    started = min((event.timestamp for event in public_events if event.timestamp), default=time.time())
+    ended = max((event.timestamp for event in public_events if event.timestamp), default=started)
+    status = "error" if any(event.is_error or event.type.endswith("_error") for event in public_events) else "done"
+    items = [_activity_display_item(event) for event in public_events]
+    source_ids = [_event_source_id(event, index) for index, event in enumerate(public_events)]
+    summary = _activity_block_summary(items)
+    return PersistedActivityBlock(
+        session_id=session_id,
+        turn_id=str(turn_id),
+        created_at=ended,
+        status=status,
+        title="分析进展",
+        summary=summary,
+        duration_ms=int(max(0, ended - started) * 1000) if ended and started else None,
+        event_count=len(public_events),
+        items=items,
+        source_event_ids=source_ids,
+    )
+
+
+def _is_activity_block_event(event: AgentEvent) -> bool:
+    if event.type == "message_delta":
+        return False
+    return (
+        event.type.startswith("reasoning_")
+        or event.type.startswith("planner_")
+        or event.type.startswith("tool_")
+        or event.type.startswith("subagent_")
+        or event.type.startswith("checkpoint_")
+        or event.type.startswith("queue_")
+        or event.type in {
+            "before_provider_request",
+            "provider_response",
+            "provider_error",
+            "context_built",
+            "approval_gate",
+            "approval_result",
+            "turn_start",
+            "turn_end",
+            "agent_end",
+            "error",
+        }
+    )
+
+
+def _activity_display_item(event: AgentEvent) -> ActivityDisplayItem:
+    title, summary = _event_display_copy(event)
+    details = _web_event_payload(event).get("details")
+    detail = _preview_text(json.dumps(details, ensure_ascii=False, sort_keys=True), limit=360) if isinstance(details, dict) and details else ""
+    return ActivityDisplayItem(
+        kind=_event_display_kind(event),
+        title=title,
+        summary=summary,
+        detail=detail,
+        status="error" if event.is_error or event.type.endswith("_error") else "success",
+        timestamp=event.timestamp or None,
+    )
+
+
+def _event_display_copy(event: AgentEvent) -> tuple[str, str]:
+    details = event.details or {}
+    if event.type == "reasoning_summary":
+        return "整理结论", _preview_text(str(details.get("summary") or event.message or "我把当前想法整理了一下。"), limit=220)
+    if event.type == "reasoning_delta":
+        return "继续分析", _preview_text(str(event.delta or event.message or "我在继续分析。"), limit=180)
+    if event.type == "before_provider_request":
+        return "准备模型请求", "我先整理上下文，再发出下一次模型请求。"
+    if event.type == "provider_response":
+        return "收到模型回应", "模型已经返回结果，我正在把它纳入当前过程。"
+    if event.type.startswith("planner_"):
+        return "规划步骤", _preview_text(str(event.message or details.get("summary") or "我在整理接下来的执行步骤。"), limit=180)
+    if event.type.startswith("tool_"):
+        label = event.tool_name or "tool"
+        return f"调用工具 {label}", _preview_text(str(event.message or details.get("path") or details.get("command") or label), limit=180)
+    if event.type == "context_built":
+        return "构建上下文", "已生成本轮请求使用的上下文包。"
+    if event.type == "turn_start":
+        return "开始处理", "本轮任务开始。"
+    if event.type == "turn_end":
+        return "完成本轮", "本轮任务已结束。"
+    if event.is_error or event.type == "error":
+        return "运行失败", _preview_text(str(event.message or details.get("error") or "这一步出了问题。"), limit=180)
+    return "运行事件", _preview_text(str(event.message or event.type), limit=180)
+
+
+def _event_display_kind(event: AgentEvent) -> str:
+    if event.type.startswith("reasoning_") or event.type in {"before_provider_request", "provider_response"}:
+        return "progress"
+    if event.type.startswith("planner_"):
+        return "planner"
+    if event.type.startswith("tool_"):
+        return "tool"
+    if event.type.startswith("subagent_"):
+        return "subagent"
+    if event.type.startswith("checkpoint_"):
+        return "checkpoint"
+    if "approval" in event.type:
+        return "approval"
+    if event.type == "context_built":
+        return "context"
+    return "event"
+
+
+def _activity_block_summary(items: list[ActivityDisplayItem]) -> str:
+    for item in items:
+        if item.kind == "progress" and item.summary:
+            return item.summary
+    for item in items:
+        if item.summary:
+            return item.summary
+    return "我已经记录了本轮的公开运行过程。"
+
+
+def _event_source_id(event: AgentEvent, index: int) -> str:
+    if event.event_id:
+        return event.event_id
+    if event.activity_id:
+        return event.activity_id
+    return f"{event.turn_id or ''}:{event.type}:{event.timestamp or ''}:{event.tool_name or ''}:{index}"
+
+
+def _event_detail_number(event: AgentEvent, key: str) -> int | None:
+    value = (event.details or {}).get(key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

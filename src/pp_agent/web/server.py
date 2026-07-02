@@ -243,15 +243,23 @@ def create_app(
         try:
             entries = bootstrap.timeline_store_for(active_workspace()).list_session(
                 session_id,
-                limit=max(1, min(500, int(limit))),
+                limit=max(1, min(2000, int(limit))),
             )
             return {"timeline": [entry.model_dump(mode="json") for entry in entries]}
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/api/sessions/{session_id}/activity")
+    def session_activity(session_id: str) -> dict:
+        try:
+            blocks = bootstrap.activity_block_store_for(active_workspace()).list_session(session_id, limit=200)
+            return {"activity_blocks": [block.model_dump(mode="json") for block in blocks]}
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/timeline")
     def recent_timeline(limit: int = 80) -> dict:
-        entries = bootstrap.timeline_store_for(active_workspace()).list_recent(limit=max(1, min(500, int(limit))))
+        entries = bootstrap.timeline_store_for(active_workspace()).list_recent(limit=max(1, min(2000, int(limit))))
         return {"timeline": [entry.model_dump(mode="json") for entry in entries]}
 
     @app.get("/api/sessions/{session_id}/tree")

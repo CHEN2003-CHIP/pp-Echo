@@ -40,7 +40,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { List, ListItem } from "@/components/ui/list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, ModelProviderPreset, UsageAnalytics, ModelUsageRow, OpenWorkspaceResponse, PendingAction, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
+import { api, ApprovalActionResponse, ApprovalsSummary, AttachmentRecord, CapabilityInventory, ConfigField, ConfigSnapshot, CoreMemoryAuditRecord, CoreMemoryRecord, CoreMemorySnapshot, LogEntry, MemoryFileRead, MemorySearchResponse, MemoryStatus, ModelProviderPreset, UsageAnalytics, ModelUsageRow, OpenWorkspaceResponse, PendingAction, PersistedActivityBlock, RuntimeEvent, SessionEntry, SessionSnapshot, TimelineEntry, WorkspaceGitStatus, WorkspaceStatus, WorkspacesState } from "./api";
 import { DefaultAssistantActions, Message, MessageContent, MessagePlainText, MessageResponse } from "@/components/message";
 import { extractMessageBody, RichMessageAttachments, sanitizeMediaUrl, type RichAttachment } from "./rich-text";
 import { TraceInspectPage } from "./features/traces/TraceInspectPage";
@@ -52,7 +52,7 @@ import { ActivityCard } from "./features/activity/ActivityCard";
 import { ActivityDetailsPanel } from "./features/activity/ActivityDetailsPanel";
 import { buildActivityRuns } from "./features/activity/activity-normalizer";
 import { presentActivityRun } from "./features/activity/activity-presenter";
-import type { ActivityItem } from "./features/activity/activity-types";
+import type { ActivityItem, ActivityStatus, ActivityStep } from "./features/activity/activity-types";
 
 type ViewKey =
   | "chat"
@@ -85,6 +85,7 @@ type TranscriptItem = {
   body: ReturnType<typeof extractMessageBody>;
   streaming?: boolean;
   timestamp?: number;
+  turnId?: string;
   activity?: ActivityItem;
 };
 
@@ -344,7 +345,11 @@ export function App() {
 
     setActiveSessionId(snapshot.session_id);
     setSnapshots((current) => ({ ...current, [snapshot.session_id]: snapshot }));
-    await hydrateTimelineEvents(snapshot.session_id);
+    if (snapshot.activity_blocks?.length) {
+      setEvents((current) => ({ ...current, [snapshot.session_id]: current[snapshot.session_id] || [] }));
+    } else {
+      await hydrateTimelineEvents(snapshot.session_id);
+    }
     refreshAttachments(snapshot.session_id);
     stopPollingExcept(snapshot.session_id);
     if (snapshot.history?.source !== "stored") {
@@ -354,10 +359,11 @@ export function App() {
 
   async function hydrateTimelineEvents(sessionId: string) {
     try {
-      const payload = await api.timeline(sessionId, 500);
+      const payload = await api.timeline(sessionId, MAX_SESSION_EVENTS);
       const restored = payload.timeline.map(timelineEntryToRuntimeEvent);
       setEvents((current) => ({ ...current, [sessionId]: mergeRuntimeEvents(current[sessionId] || [], restored) }));
-    } catch {
+    } catch (error) {
+      console.warn("[timeline] failed to hydrate runtime events", { sessionId, error });
       setEvents((current) => ({ ...current, [sessionId]: current[sessionId] || [] }));
     }
   }
@@ -1948,7 +1954,7 @@ function ChatWorkspace({
               className="composer-context-button"
               type="button"
               onClick={() => setContextPopoverOpen((current) => !current)}
-              title={`${contextSummary.modelContextUsage.percentLabel} · ${contextSummary.modelContextUsage.usedLabel} / ${contextSummary.modelContextUsage.totalLabel} tokens`}
+              title={`Model context: ${contextSummary.modelContextUsage.percentLabel} · ${contextSummary.modelContextUsage.usedLabel} / ${contextSummary.modelContextUsage.totalLabel} tokens\nPipeline budget: ${contextUsageTitle(contextSummary.pipelineBudgetUsage)}`}
               aria-label="Context usage"
             >
               <ContextRing value={contextSummary.modelContextUsage.percent} />
@@ -1958,20 +1964,22 @@ function ChatWorkspace({
               <div className="composer-context-popover">
                 <div className="composer-context-popover-head">
                   <strong>Context</strong>
-                  <span>{contextSummary.modelContextUsage.source === "actual" ? "Model window" : "Estimated"}</span>
+                  <span>{contextSummary.pipelineBudgetUsage.source === "actual" ? "Actual report" : "Before build"}</span>
                 </div>
                 <ContextUsageSection
                   title={contextSummary.modelContextUsage.source === "actual" ? "Model context" : "Estimated model context"}
                   percentLabel={contextSummary.modelContextUsage.percentLabel}
                   detail={`${contextSummary.modelContextUsage.usedLabel} / ${contextSummary.modelContextUsage.totalLabel} tokens`}
                   value={contextSummary.modelContextUsage.percent}
+                  badge={contextSummary.modelContextUsage.source === "actual" ? "Actual" : "Estimated"}
                 />
                 <ContextUsageSection
                   title="Pipeline budget"
                   percentLabel={contextSummary.pipelineBudgetUsage.percentLabel}
-                  detail={`${contextSummary.pipelineBudgetUsage.usedLabel} / ${contextSummary.pipelineBudgetUsage.totalLabel} chars`}
+                  detail={contextSummary.pipelineBudgetUsage.detailLabel}
                   value={contextSummary.pipelineBudgetUsage.percent}
-                  badge={contextSummary.pipelineBudgetUsage.truncated ? "Truncated" : undefined}
+                  badge={contextSummary.pipelineBudgetUsage.truncated ? "Truncated" : contextSummary.pipelineBudgetUsage.badgeLabel}
+                  available={contextSummary.pipelineBudgetUsage.isAvailable}
                 />
               </div>
             ) : null}
@@ -2514,16 +2522,18 @@ function ContextUsageSection({
   percentLabel,
   detail,
   value,
-  badge
+  badge,
+  available = true
 }: {
   title: string;
   percentLabel: string;
   detail: string;
-  value: number;
+  value?: number;
   badge?: string;
+  available?: boolean;
 }) {
   return (
-    <section className="composer-context-section">
+    <section className={available ? "composer-context-section" : "composer-context-section unavailable"}>
       <div className="composer-context-section-head">
         <span>{title}</span>
         {badge ? <em>{badge}</em> : null}
@@ -2532,9 +2542,11 @@ function ContextUsageSection({
         <strong>{percentLabel}</strong>
         <span>{detail}</span>
       </div>
-      <div className="composer-context-popover-bar" aria-hidden="true">
-        <span style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }} />
-      </div>
+      {available && typeof value === "number" ? (
+        <div className="composer-context-popover-bar" aria-hidden="true">
+          <span style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }} />
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -4390,13 +4402,16 @@ function normalizeMessageRole(role: string) {
 
 export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []): TranscriptItem[] {
   const committedMessages = snapshot?.messages || [];
+  const persistedActivityBlocks = snapshot?.activity_blocks || [];
+  const hasPersistedActivityBlocks = persistedActivityBlocks.length > 0;
   const stored: TranscriptItem[] = committedMessages
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message, index) => ({
       id: `stored:${index}`,
       role: message.role,
       body: extractMessageBody(message),
-      timestamp: typeof message.timestamp === "number" ? message.timestamp : index + 1
+      timestamp: typeof message.timestamp === "number" ? message.timestamp : index + 1,
+      turnId: inferredMessageTurnId(message, index, committedMessages)
     }))
     .filter((item) => item.body.text.trim() || item.body.attachments.length > 0);
 
@@ -4465,18 +4480,20 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     }
     if (event.type === "approval_result") {
       flushStream();
-      appendActivityEvent(event);
+      if (!hasPersistedActivityBlocks) appendActivityEvent(event);
       continue;
     }
     if (event.type === "turn_end" || event.type === "agent_end") {
       flushStream();
-      appendActivityEvent(event);
-      flushActivityGroup();
+      if (!hasPersistedActivityBlocks) {
+        appendActivityEvent(event);
+        flushActivityGroup();
+      }
       continue;
     }
     if (event.is_error && event.message) {
       flushStream();
-      if (isActivityEvent(event)) {
+      if (isActivityEvent(event) && !hasPersistedActivityBlocks) {
         appendActivityEvent(event);
       } else {
         runtime.push({ id: `error:${runtime.length}`, role: "error", body: { text: formatErrorEvent(event), attachments: [] }, timestamp: event.timestamp });
@@ -4485,31 +4502,35 @@ export function buildTranscript(snapshot?: SessionSnapshot, events: RuntimeEvent
     }
     if (isActivityEvent(event)) {
       flushStream();
-      appendActivityEvent(event);
+      if (!hasPersistedActivityBlocks) appendActivityEvent(event);
       continue;
     }
   }
 
   flushStream();
   flushActivityGroup();
-  activityGroups.forEach((group, index) => {
+  if (!hasPersistedActivityBlocks) activityGroups.forEach((group, index) => {
     const activity = combineActivityItemsForTranscript(buildActivityRuns(group), group);
     if (!activity) return;
     const bodyText = [activity.narrative || activity.summary || activity.detail, activity.detail].filter(Boolean).join("\n\n");
+    const turnId = groupTurnId(group);
     runtime.push({
       id: `activity-turn:${index}:${activity.startedAt || activity.endedAt || runtime.length}`,
       role: "activity",
       body: { text: bodyText, attachments: activity.entries?.flatMap((entry) => entry.attachments || []) || [] },
       timestamp: activity.endedAt || activity.startedAt,
-      activity
+      activity,
+      turnId
     });
   });
-  const items = [...stored, ...runtime].sort((left, right) => {
+  const baseItems = [...stored, ...runtime].sort((left, right) => {
     const leftTime = left.timestamp || 0;
     const rightTime = right.timestamp || 0;
     if (leftTime !== rightTime) return leftTime - rightTime;
     return 0;
   });
+  const persistedItems = persistedActivityBlocks.map(persistedActivityBlockToTranscriptItem);
+  const items = insertActivityItemsBeforeAssistant(baseItems, persistedItems);
   if (shouldShowProgressPlaceholder(items, events)) {
     items.push({ id: "progress-placeholder", role: "assistant", body: { text: "Analyzing the request", attachments: [] }, streaming: true });
   }
@@ -4555,6 +4576,184 @@ function combineActivityItemsForTranscript(items: ActivityItem[], events: Runtim
     approvalCount,
     errorCount
   };
+}
+
+function persistedActivityBlockToTranscriptItem(block: PersistedActivityBlock): TranscriptItem {
+  const timestamp = normalizePersistedTimestamp(block.created_at);
+  const status = block.status === "error" ? "error" : block.status === "running" ? "running" : "success";
+  const entries = (block.items || []).map((item, index) => {
+    const entryStatus: ActivityStatus = item.status === "error" ? "error" : item.status === "running" ? "running" : "success";
+    const entryTimestamp = normalizePersistedTimestamp(item.timestamp);
+    return {
+      id: `${block.id || block.turn_id}:item:${index}`,
+      kind: persistedActivityStepKind(item.kind),
+      label: item.title || item.kind || "Activity",
+      detail: item.detail || item.summary || "",
+      narrative: item.summary || item.detail || "",
+      timestamp: entryTimestamp,
+      startedAt: entryTimestamp,
+      endedAt: entryStatus === "running" ? undefined : entryTimestamp,
+      status: entryStatus,
+      tone: entryStatus,
+      rawType: item.kind,
+    };
+  });
+  const detail = entries.map((entry) => [entry.label, entry.detail].filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
+  const durationLabel = typeof block.duration_ms === "number" && block.duration_ms > 0 ? formatDuration(block.duration_ms) : "";
+  const activity: ActivityItem = {
+    id: `activity-block:${block.id || block.turn_id}`,
+    activityId: block.id || block.turn_id,
+    phase: entries.some((entry) => entry.kind === "tool" || entry.kind === "command") ? "tool" : entries.some((entry) => entry.kind === "planner") ? "planning" : "analyzing",
+    status,
+    tone: status,
+    title: block.title || "分析进展",
+    summary: block.summary || "我已经记录了本轮的公开运行过程。",
+    narrative: block.summary,
+    detail: detail || block.summary || "",
+    timestamp,
+    startedAt: entries.find((entry) => typeof entry.timestamp === "number")?.timestamp || timestamp,
+    endedAt: status === "running" ? undefined : timestamp,
+    durationMs: block.duration_ms || undefined,
+    durationLabel,
+    running: status === "running",
+    entries,
+    eventCount: block.event_count || entries.length,
+    toolCount: entries.filter((entry) => entry.kind === "tool" || entry.kind === "command").length,
+    approvalCount: entries.filter((entry) => entry.kind === "approval").length,
+    errorCount: status === "error" ? 1 : entries.filter((entry) => entry.status === "error").length,
+  };
+  return {
+    id: `persisted-activity:${block.id || block.turn_id}`,
+    role: "activity",
+    body: { text: [activity.summary, activity.detail].filter(Boolean).join("\n\n"), attachments: [] },
+    timestamp,
+    activity,
+    turnId: normalizeTurnId(block.turn_id),
+  };
+}
+
+function insertActivityItemsBeforeAssistant(items: TranscriptItem[], persisted: TranscriptItem[]) {
+  const activityItems = [...persisted, ...items.filter((item) => item.role === "activity")];
+  const nonActivityItems = items.filter((item) => item.role !== "activity");
+  const activityByTurn = new Map<string, TranscriptItem[]>();
+  const orphanActivities: TranscriptItem[] = [];
+  for (const item of activityItems) {
+    const turnId = normalizeTurnId(item.turnId);
+    if (turnId) {
+      const bucket = activityByTurn.get(turnId) || [];
+      bucket.push(item);
+      activityByTurn.set(turnId, bucket);
+    } else {
+      orphanActivities.push(item);
+    }
+  }
+  activityByTurn.forEach((bucket) => bucket.sort(activityDisplayOrder));
+  orphanActivities.sort(activityDisplayOrder);
+
+  const result: TranscriptItem[] = [];
+  const used = new Set<string>();
+  for (const item of nonActivityItems) {
+    if (item.role === "assistant") {
+      const turnId = normalizeTurnId(item.turnId);
+      const matches = turnId ? activityByTurn.get(turnId) || [] : [];
+      for (const activity of matches) {
+        if (used.has(activity.id)) continue;
+        result.push(activity);
+        used.add(activity.id);
+      }
+      if (!turnId && orphanActivities.length) {
+        const activity = orphanActivities.shift();
+        if (activity && !used.has(activity.id)) {
+          result.push(activity);
+          used.add(activity.id);
+        }
+      }
+    }
+    result.push(item);
+  }
+  const remaining = [...activityByTurn.values()].flat().filter((item) => !used.has(item.id));
+  for (const item of [...orphanActivities, ...remaining].sort(activityDisplayOrder)) {
+    insertOrphanActivityBeforeNearestAssistant(result, item);
+    used.add(item.id);
+  }
+  return result;
+}
+
+function insertOrphanActivityBeforeNearestAssistant(items: TranscriptItem[], activity: TranscriptItem) {
+  const activityTime = activity.timestamp || 0;
+  let bestIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  items.forEach((item, index) => {
+    if (item.role !== "assistant") return;
+    const distance = Math.abs((item.timestamp || 0) - activityTime);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+  if (bestIndex >= 0) {
+    items.splice(bestIndex, 0, activity);
+    return;
+  }
+  const sortedIndex = items.findIndex((item) => (item.timestamp || 0) > activityTime);
+  if (sortedIndex >= 0) items.splice(sortedIndex, 0, activity);
+  else items.push(activity);
+}
+
+function activityDisplayOrder(left: TranscriptItem, right: TranscriptItem) {
+  return (left.timestamp || 0) - (right.timestamp || 0);
+}
+
+function persistedActivityStepKind(kind: string): ActivityStep["kind"] {
+  if (kind === "tool" || kind === "command" || kind === "planner" || kind === "subagent" || kind === "checkpoint" || kind === "approval" || kind === "memory" || kind === "system" || kind === "message" || kind === "event") return kind;
+  if (kind === "progress" || kind === "context") return "progress";
+  return "event";
+}
+
+function normalizePersistedTimestamp(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value > 10_000_000_000 ? value / 1000 : value;
+  if (typeof value === "string") {
+    const asNumeric = Number(value);
+    if (Number.isFinite(asNumeric)) return asNumeric > 10_000_000_000 ? asNumeric / 1000 : asNumeric;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed / 1000;
+  }
+  return undefined;
+}
+
+function inferredMessageTurnId(message: SessionSnapshot["messages"][number], index: number, messages: SessionSnapshot["messages"]) {
+  const explicit = normalizeTurnId(readMessageTurnId(message));
+  if (explicit) return explicit;
+  let turn = 0;
+  for (let current = 0; current <= index; current += 1) {
+    const item = messages[current];
+    if (item.role === "user") turn += 1;
+    if (current === index) break;
+  }
+  return turn > 0 ? String(turn) : "";
+}
+
+function readMessageTurnId(message: SessionSnapshot["messages"][number]) {
+  const direct = (message as unknown as Record<string, unknown>).turn_id;
+  if (direct != null) return direct;
+  const metadata = message.metadata || {};
+  return metadata.turn_id ?? metadata.turnId;
+}
+
+function groupTurnId(events: RuntimeEvent[]) {
+  for (const event of events) {
+    const turnId = normalizeTurnId(event.turn_id ?? event.details?.turn_id);
+    if (turnId) return turnId;
+  }
+  return "";
+}
+
+function normalizeTurnId(value: unknown) {
+  if (value === undefined || value === null) return "";
+  const text = String(value).trim();
+  if (!text) return "";
+  const match = text.match(/^turn-(\d+)$/i);
+  return match ? match[1] : text;
 }
 
 export function buildTurnMarkers(transcript: TranscriptItem[]): TurnMarker[] {
@@ -5050,33 +5249,53 @@ function appendDiagnosticLines(lines: string[], label: string, value: unknown) {
 }
 
 export function timelineEntryToRuntimeEvent(entry: TimelineEntry): RuntimeEvent {
+  const details = parseDetailsSafely(entry.details);
+  const embedded = isRecord(details.runtime_event)
+    ? details.runtime_event
+    : isRecord(details.event)
+      ? details.event
+      : {};
+  const nestedDetails = isRecord(embedded.details) ? embedded.details : isRecord(details.details) ? details.details : {};
+  const rawType =
+    asString(embedded.type) ||
+    asString(details.type) ||
+    asString(details.runtime_event_type) ||
+    asString(entry.event_type);
+  const type = normalizeTimelineRuntimeType(rawType, entry, details);
+
   return {
-    type: entry.event_type,
+    ...embedded,
+    type,
     session_id: entry.session_id,
-    timestamp: entry.created_at,
-    turn_id: entry.turn_id ?? null,
-    phase: entry.phase ?? null,
-    tool_name: entry.tool_name ?? null,
-    message: entry.message ?? null,
-    is_error: Boolean(entry.is_error),
-    plan_step: entry.plan_step ?? null,
+    timestamp: normalizeRuntimeTimestamp(
+      asNumber(embedded.timestamp) ??
+      asNumber(details.timestamp) ??
+      entry.created_at
+    ),
+    turn_id: asNumber(embedded.turn_id) ?? asNumber(details.turn_id) ?? entry.turn_id ?? null,
+    phase: asString(embedded.phase) ?? asString(details.phase) ?? entry.phase ?? null,
+    tool_name: asString(embedded.tool_name) ?? asString(details.tool_name) ?? entry.tool_name ?? null,
+    message: asString(embedded.message) ?? asString(details.message) ?? entry.message ?? null,
+    is_error: Boolean(embedded.is_error ?? details.is_error ?? entry.is_error),
+    plan_step: isPlanStep(embedded.plan_step) ? embedded.plan_step : isPlanStep(details.plan_step) ? details.plan_step : entry.plan_step ?? null,
     details: {
-      ...(entry.details || {}),
+      ...details,
+      ...nestedDetails,
+      timeline_id: entry.id,
       timeline_entry_id: entry.id,
+      timeline_event_type: entry.event_type,
     },
   };
 }
 
-function mergeRuntimeEvents(existing: RuntimeEvent[], incoming: RuntimeEvent[]) {
-  const merged = [...existing];
-  const seen = new Set(existing.map(runtimeEventDedupeKey).filter(Boolean));
-  for (const event of incoming) {
+export function mergeRuntimeEvents(existing: RuntimeEvent[], incoming: RuntimeEvent[]) {
+  const merged = new Map<string, RuntimeEvent>();
+  for (const event of [...existing, ...incoming]) {
     const key = runtimeEventDedupeKey(event);
-    if (key && seen.has(key)) continue;
-    if (key) seen.add(key);
-    merged.push(event);
+    if (merged.has(key)) continue;
+    merged.set(key, event);
   }
-  return merged
+  return [...merged.values()]
     .sort((left, right) => (left.timestamp || 0) - (right.timestamp || 0))
     .slice(-MAX_SESSION_EVENTS);
 }
@@ -5085,11 +5304,95 @@ function runtimeEventDedupeKey(event: RuntimeEvent) {
   const details = event.details || {};
   const trace = details.trace && typeof details.trace === "object" ? details.trace as Record<string, unknown> : {};
   const activity = details.activity && typeof details.activity === "object" ? details.activity as Record<string, unknown> : {};
-  const explicit = event.event_id || trace.event_id || activity.event_id || details.event_id;
+  const explicit = event.event_id || details.timeline_id || details.timeline_entry_id || trace.event_id || activity.event_id || details.event_id;
   if (typeof explicit === "string" && explicit.trim()) return explicit;
   if (typeof explicit === "number") return String(explicit);
   return runtimeEventKey(event);
 }
+
+function parseDetailsSafely(details: unknown): Record<string, unknown> {
+  if (isRecord(details)) return details;
+  if (typeof details !== "string") return {};
+  try {
+    const parsed = JSON.parse(details);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeTimelineRuntimeType(rawType: string | undefined, entry: TimelineEntry, details: Record<string, unknown>) {
+  const type = rawType || "";
+  if (
+    type.startsWith("reasoning_") ||
+    type.startsWith("planner_") ||
+    type.startsWith("tool_") ||
+    type === "before_provider_request" ||
+    type === "provider_response" ||
+    type === "context_built" ||
+    type === "approval_gate" ||
+    type === "approval_result" ||
+    type === "error"
+  ) {
+    return type;
+  }
+
+  const text = `${entry.event_type ?? ""} ${entry.phase ?? ""} ${entry.message ?? ""} ${asString(details.phase) ?? ""} ${asString(details.message) ?? ""}`.toLowerCase();
+  if (entry.tool_name || details.tool_name) {
+    if (
+      details.result ||
+      details.output ||
+      details.stdout ||
+      details.stderr ||
+      text.includes("result") ||
+      text.includes("finish") ||
+      text.includes("complete")
+    ) {
+      return "tool_result";
+    }
+    return "tool_start";
+  }
+  if (text.includes("reasoning")) return "reasoning_summary";
+  if (text.includes("planner") || text.includes("plan")) return "planner_update";
+  if (text.includes("provider")) return "provider_response";
+  if (text.includes("context")) return "context_built";
+  if (text.includes("approval")) return "approval_gate";
+  if (text.includes("error") || entry.is_error || details.is_error) return "error";
+  return type || "runtime_event";
+}
+
+function normalizeRuntimeTimestamp(value: unknown) {
+  const numeric = asNumber(value);
+  if (numeric != null) return numeric > 10_000_000_000 ? numeric / 1000 : numeric;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed / 1000;
+  }
+  return Date.now() / 1000;
+}
+
+function asString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function asNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPlanStep(value: unknown): value is RuntimeEvent["plan_step"] {
+  return isRecord(value) && typeof value.title === "string";
+}
+
+type ContextUsageSource = "actual" | "configured" | "estimated" | "unavailable";
 
 type ContextSummary = {
   modelContextUsage: {
@@ -5099,30 +5402,45 @@ type ContextSummary = {
     percentLabel: string;
     usedLabel: string;
     totalLabel: string;
-    source: "actual" | "estimated";
+    source: ContextUsageSource;
+    isAvailable: boolean;
   };
   pipelineBudgetUsage: {
-    usedChars: number;
-    totalChars: number;
-    percent: number;
+    usedChars?: number;
+    totalChars?: number;
+    percent?: number;
     percentLabel: string;
     usedLabel: string;
     totalLabel: string;
+    detailLabel: string;
+    badgeLabel?: string;
+    source: ContextUsageSource;
+    isAvailable: boolean;
     truncated: boolean;
   };
 };
 
-function buildContextSummary(snapshot?: SessionSnapshot, events: RuntimeEvent[] = [], activeModel = ""): ContextSummary {
+export function buildContextSummary(snapshot?: SessionSnapshot, events: RuntimeEvent[] = [], activeModel = ""): ContextSummary {
   const totalTokens = Math.max(1, firstNumber(latestContextValue(events, "context_window_tokens"), latestContextValue(events, "context_window"), inferModelContextWindowTokens(activeModel), 128_000) || 128_000);
   const actualInputTokens = firstNumber(latestContextValue(events, "input_tokens"), latestContextValue(events, "prompt_tokens"));
   const estimatedInputTokens = estimateModelInputTokens(snapshot, events);
   const usedTokens = Math.max(0, actualInputTokens ?? estimatedInputTokens);
   const modelPercent = totalTokens > 0 ? Math.min(1, usedTokens / totalTokens) : 0;
 
-  const totalChars = Math.max(1, firstNumber(latestContextValue(events, "context_total_budget"), snapshot?.history?.max_total_text_chars, 30_900) || 30_900);
-  const usedChars = Math.max(0, firstNumber(latestContextValue(events, "context_used"), snapshot?.history?.returned_message_count ? snapshot.history.returned_message_count * 1000 : undefined, snapshot?.history?.visible_message_count ? snapshot.history.visible_message_count * 1000 : undefined) || 0);
-  const pipelinePercent = totalChars > 0 ? Math.min(1, usedChars / totalChars) : 0;
-  const pipelineTruncated = Boolean(latestContextFlag(events, "truncated") || latestContextDroppedCount(events) > 0);
+  const actualPipelineTotal = latestContextValue(events, "context_total_budget", "context_built");
+  const actualPipelineUsed = latestContextValue(events, "context_used", "context_built");
+  const configuredPipelineTotal = latestConfiguredPipelineBudget(snapshot, events);
+  const pipelineTruncated = Boolean(actualPipelineTotal != null && (latestContextFlag(events, "truncated") || latestContextDroppedCount(events) > 0));
+  const pipelineTotal = actualPipelineTotal ?? configuredPipelineTotal;
+  const pipelineUsed = actualPipelineTotal != null ? Math.max(0, actualPipelineUsed ?? 0) : undefined;
+  const pipelinePercent = pipelineTotal && pipelineUsed != null ? Math.min(1, pipelineUsed / pipelineTotal) : undefined;
+  const pipelineSource: ContextUsageSource = actualPipelineTotal != null ? "actual" : configuredPipelineTotal != null ? "configured" : "unavailable";
+  const pipelineAvailable = pipelineSource !== "unavailable";
+  const pipelineDetailLabel = pipelineSource === "actual" && pipelineUsed != null && pipelineTotal != null
+    ? `${formatCompactNumber(pipelineUsed)} / ${formatCompactNumber(pipelineTotal)} chars`
+    : pipelineSource === "configured" && pipelineTotal != null
+      ? `${formatCompactNumber(pipelineTotal)} chars configured`
+      : "Will appear after context is built";
 
   return {
     modelContextUsage: {
@@ -5133,35 +5451,85 @@ function buildContextSummary(snapshot?: SessionSnapshot, events: RuntimeEvent[] 
       usedLabel: formatCompactNumber(usedTokens),
       totalLabel: formatCompactNumber(totalTokens),
       source: actualInputTokens != null ? "actual" : "estimated",
+      isAvailable: true,
     },
     pipelineBudgetUsage: {
-      usedChars,
-      totalChars,
+      usedChars: pipelineUsed,
+      totalChars: pipelineTotal,
       percent: pipelinePercent,
-      percentLabel: formatPercent(pipelinePercent),
-      usedLabel: formatCompactNumber(usedChars),
-      totalLabel: formatCompactNumber(totalChars),
+      percentLabel: pipelinePercent != null ? formatPercent(pipelinePercent) : "Not built yet",
+      usedLabel: pipelineUsed != null ? formatCompactNumber(pipelineUsed) : "",
+      totalLabel: pipelineTotal != null ? formatCompactNumber(pipelineTotal) : "Not built yet",
+      detailLabel: pipelineDetailLabel,
+      badgeLabel: pipelineSource === "actual" ? "Actual" : pipelineSource === "configured" ? "Configured" : "Not built",
+      source: pipelineSource,
+      isAvailable: pipelineAvailable,
       truncated: pipelineTruncated,
     },
   };
 }
 
-function latestContextValue(events: RuntimeEvent[], key: "context_used" | "context_total_budget" | "context_window" | "context_window_tokens" | "input_tokens" | "prompt_tokens" | "output_tokens" | "total_cost_usd") {
+function latestContextValue(events: RuntimeEvent[], key: "context_used" | "context_total_budget" | "context_window" | "context_window_tokens" | "input_tokens" | "prompt_tokens" | "output_tokens" | "total_cost_usd", eventType?: "context_built") {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     const details = event.details || {};
-    if (event.type === "context_built" || event.type === "context.build" || event.type === "provider_response") {
-      const value = details[key];
+    const isContextBuilt = event.type === "context_built" || event.type === "context.build";
+    if (isContextBuilt || (!eventType && event.type === "provider_response")) {
+      const value = details[key] ?? contextValueAlias(details, key);
       const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
       if (Number.isFinite(n)) return n;
       const context = details.context && typeof details.context === "object" ? details.context as Record<string, unknown> : {};
       const report = context.budget_report && typeof context.budget_report === "object" ? context.budget_report as Record<string, unknown> : {};
-      const fallback = report[key === "context_used" ? "used" : key === "context_total_budget" ? "total_budget" : key];
+      const fallback = report[key === "context_used" ? "used" : key === "context_total_budget" ? "total_budget" : key] ?? contextValueAlias(report, key);
       const fallbackNumber = typeof fallback === "number" ? fallback : typeof fallback === "string" ? Number(fallback) : NaN;
       if (Number.isFinite(fallbackNumber)) return fallbackNumber;
     }
   }
   return undefined;
+}
+
+function contextValueAlias(source: Record<string, unknown>, key: "context_used" | "context_total_budget" | "context_window" | "context_window_tokens" | "input_tokens" | "prompt_tokens" | "output_tokens" | "total_cost_usd") {
+  if (key === "context_used") return source.used ?? source.total_used ?? source.packed_size ?? source.estimated_chars;
+  if (key === "context_total_budget") return source.total_budget;
+  return undefined;
+}
+
+function latestConfiguredPipelineBudget(snapshot?: SessionSnapshot, events: RuntimeEvent[] = []) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const details = events[index].details || {};
+    const configured = firstNumber(
+      readNumberPath(details, ["context_pipeline", "total_budget"]),
+      readNumberPath(details, ["contextPipeline", "totalBudget"]),
+      readNumberPath(details, ["config", "context_pipeline", "total_budget"]),
+      readNumberPath(details, ["settings", "context_pipeline", "total_budget"]),
+      readNumberPath(details, ["effective_config", "context_pipeline", "total_budget"]),
+    );
+    if (configured != null) return configured;
+  }
+  const snapshotRecord = snapshot as unknown as Record<string, unknown> | undefined;
+  return firstNumber(
+    readNumberPath(snapshotRecord, ["context_pipeline", "total_budget"]),
+    readNumberPath(snapshotRecord, ["config", "context_pipeline", "total_budget"]),
+    readNumberPath(snapshotRecord, ["settings", "context_pipeline", "total_budget"]),
+    readNumberPath(snapshotRecord, ["effective_config", "context_pipeline", "total_budget"]),
+  );
+}
+
+function readNumberPath(source: unknown, path: string[]) {
+  let current = source;
+  for (const part of path) {
+    if (!isRecord(current)) return undefined;
+    current = current[part];
+  }
+  return asNumber(current);
+}
+
+function contextUsageTitle(usage: ContextSummary["pipelineBudgetUsage"]) {
+  if (usage.source === "actual" && usage.percentLabel && usage.usedLabel && usage.totalLabel) {
+    return `${usage.percentLabel} · ${usage.usedLabel} / ${usage.totalLabel} chars`;
+  }
+  if (usage.source === "configured" && usage.totalLabel) return `${usage.totalLabel} chars configured`;
+  return "Not built yet";
 }
 
 function latestContextFlag(events: RuntimeEvent[], key: "truncated") {

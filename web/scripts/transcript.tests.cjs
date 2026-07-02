@@ -109,6 +109,267 @@ test("buildTranscript restores activity from timeline-derived runtime events", (
   assert.equal(events[0].timestamp, 2);
 });
 
+test("timelineEntryToRuntimeEvent unwraps embedded runtime events and merge dedupes timeline/live events", () => {
+  const timelineEvent = app.timelineEntryToRuntimeEvent({
+    id: "tl-embedded-tool",
+    session_id: "session-1",
+    created_at: "2026-07-02T00:00:03Z",
+    event_type: "runtime_event",
+    details: JSON.stringify({
+      runtime_event: {
+        type: "tool_start",
+        tool_name: "read_file",
+        details: { path: "web/src/App.tsx", tool_call_id: "call-read" },
+      },
+    }),
+  });
+  assert.equal(timelineEvent.type, "tool_start");
+  assert.equal(timelineEvent.tool_name, "read_file");
+  assert.equal(timelineEvent.details.path, "web/src/App.tsx");
+  assert.equal(timelineEvent.details.timeline_id, "tl-embedded-tool");
+  assert.ok(timelineEvent.timestamp > 0);
+
+  const merged = app.mergeRuntimeEvents(
+    [{ ...timelineEvent, message: "live copy" }],
+    [timelineEvent],
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].message, "live copy");
+});
+
+test("buildTranscript restores runtime_event details from stored timeline entries", () => {
+  const events = [
+    app.timelineEntryToRuntimeEvent({
+      id: "tl-reasoning",
+      session_id: "session-1",
+      created_at: 2,
+      event_type: "runtime_event",
+      details: {
+        type: "reasoning_summary",
+        message: "Confirmed the stored timeline can restore public reasoning summary.",
+        summary: "Confirmed the stored timeline can restore public reasoning summary.",
+      },
+    }),
+    app.timelineEntryToRuntimeEvent({
+      id: "tl-tool",
+      session_id: "session-1",
+      created_at: 3,
+      event_type: "runtime_event",
+      details: {
+        type: "tool_start",
+        tool_name: "search_repo",
+        details: { query: "timeline hydrateSession events", tool_call_id: "call-1" },
+      },
+    }),
+  ];
+  const transcript = app.buildTranscript(
+    {
+      history: { source: "stored" },
+      messages: [{ role: "user", content: [{ type: "text", text: "Show history" }], timestamp: 1 }],
+    },
+    events,
+  );
+  const activity = transcript.find((item) => item.role === "activity");
+  assert.ok(activity);
+  assert.ok(activity.activity.summary.includes("timeline") || activity.body.text.includes("timeline"));
+  assert.equal(events[0].type, "reasoning_summary");
+  assert.equal(events[1].type, "tool_start");
+  assert.equal(events[1].tool_name, "search_repo");
+  assert.equal(events[1].details.query, "timeline hydrateSession events");
+});
+
+test("buildTranscript falls back to messages-only when restored timeline is empty", () => {
+  const transcript = app.buildTranscript(
+    {
+      history: { source: "stored" },
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Show history" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "Messages still render" }], timestamp: 2 },
+      ],
+    },
+    [],
+  );
+  assert.equal(transcript.length, 2);
+  assert.equal(transcript.some((item) => item.role === "activity"), false);
+  assert.ok(transcript.some((item) => item.body.text.includes("Messages still render")));
+});
+
+test("buildTranscript uses persisted activity blocks before assistant final message", () => {
+  const transcript = app.buildTranscript(
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Show history" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "Done" }], timestamp: 4 },
+      ],
+      activity_blocks: [
+        {
+          record_type: "activity_block",
+          version: 1,
+          id: "block-1",
+          session_id: "session-1",
+          turn_id: "1",
+          created_at: 3,
+          status: "done",
+          title: "分析进展",
+          summary: "Public summary",
+          duration_ms: 2000,
+          event_count: 2,
+          source_event_ids: ["evt-1", "evt-2"],
+          items: [
+            { kind: "progress", title: "整理结论", summary: "Public summary", detail: "safe display detail", status: "success", timestamp: 2 },
+          ],
+        },
+      ],
+    },
+    [],
+  );
+
+  const roles = transcript.map((item) => item.role);
+  assert.deepEqual(roles, ["user", "activity", "assistant"]);
+  const activity = transcript.find((item) => item.role === "activity");
+  assert.ok(activity);
+  assert.equal(activity.activity.title, "分析进展");
+  assert.equal(activity.activity.summary, "Public summary");
+  assert.equal(activity.activity.running, false);
+});
+
+test("buildTranscript keeps late persisted activity block before same-turn assistant", () => {
+  const transcript = app.buildTranscript(
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Question" }], timestamp: 1000 },
+        { role: "assistant", content: [{ type: "text", text: "Final answer" }], timestamp: 2000, metadata: { turn_id: "t1" } },
+      ],
+      activity_blocks: [
+        {
+          record_type: "activity_block",
+          version: 1,
+          id: "block-late",
+          session_id: "session-1",
+          turn_id: "t1",
+          created_at: 3000,
+          status: "done",
+          title: "Analysis progress",
+          summary: "Late but same turn",
+          event_count: 1,
+          source_event_ids: ["e1"],
+          items: [{ kind: "progress", title: "Analyzed", summary: "Late but same turn", status: "success", timestamp: 2500 }],
+        },
+      ],
+    },
+    [],
+  );
+
+  assert.deepEqual(transcript.map((item) => item.role), ["user", "activity", "assistant"]);
+  assert.ok(transcript.findIndex((item) => item.role === "activity") < transcript.findIndex((item) => item.role === "assistant"));
+});
+
+test("buildTranscript places runtime fallback activity before assistant even when turn_end is late", () => {
+  const transcript = app.buildTranscript(
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Question" }], timestamp: 1000 },
+        { role: "assistant", content: [{ type: "text", text: "Final answer" }], timestamp: 2000, metadata: { turn_id: "t1" } },
+      ],
+    },
+    [
+      { type: "context_built", timestamp: 1200, turn_id: 1, details: { turn_id: "t1" } },
+      { type: "provider_response", timestamp: 1800, turn_id: 1, details: { turn_id: "t1" } },
+      { type: "turn_end", timestamp: 3000, turn_id: 1, details: { turn_id: "t1" } },
+    ],
+  );
+
+  assert.deepEqual(transcript.map((item) => item.role), ["user", "activity", "assistant"]);
+});
+
+test("buildTranscript inserts orphan activity before nearest assistant when assistant lacks turn id", () => {
+  const transcript = app.buildTranscript(
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Question" }], timestamp: 1000 },
+        { role: "assistant", content: [{ type: "text", text: "Final answer" }], timestamp: 2000 },
+      ],
+      activity_blocks: [
+        {
+          record_type: "activity_block",
+          version: 1,
+          id: "block-orphan",
+          session_id: "session-1",
+          turn_id: "missing-turn",
+          created_at: 3000,
+          status: "done",
+          title: "Analysis progress",
+          summary: "Orphan block",
+          event_count: 1,
+          source_event_ids: ["e1"],
+          items: [{ kind: "progress", title: "Analyzed", summary: "Orphan block", status: "success", timestamp: 2500 }],
+        },
+      ],
+    },
+    [],
+  );
+
+  assert.deepEqual(transcript.map((item) => item.role), ["user", "activity", "assistant"]);
+});
+
+test("buildTranscript keeps multi-turn activity before each assistant", () => {
+  const transcript = app.buildTranscript(
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Q1" }], timestamp: 1000 },
+        { role: "assistant", content: [{ type: "text", text: "A1" }], timestamp: 2000 },
+        { role: "user", content: [{ type: "text", text: "Q2" }], timestamp: 4000 },
+        { role: "assistant", content: [{ type: "text", text: "A2" }], timestamp: 5000 },
+      ],
+      activity_blocks: [
+        { record_type: "activity_block", version: 1, id: "b1", session_id: "s", turn_id: "1", created_at: 3000, status: "done", title: "T1", summary: "S1", event_count: 1, source_event_ids: ["e1"], items: [] },
+        { record_type: "activity_block", version: 1, id: "b2", session_id: "s", turn_id: "2", created_at: 6000, status: "done", title: "T2", summary: "S2", event_count: 1, source_event_ids: ["e2"], items: [] },
+      ],
+    },
+    [],
+  );
+
+  assert.deepEqual(transcript.map((item) => item.role), ["user", "activity", "assistant", "user", "activity", "assistant"]);
+  assert.equal(transcript[1].activity.title, "T1");
+  assert.equal(transcript[4].activity.title, "T2");
+});
+
+test("buildTranscript does not duplicate activity when persisted blocks and runtime events both exist", () => {
+  const transcript = app.buildTranscript(
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Show history" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "Done" }], timestamp: 5 },
+      ],
+      activity_blocks: [
+        {
+          record_type: "activity_block",
+          version: 1,
+          id: "block-1",
+          session_id: "session-1",
+          turn_id: "1",
+          created_at: 4,
+          status: "done",
+          title: "分析进展",
+          summary: "Persisted public summary",
+          event_count: 3,
+          source_event_ids: ["evt-1", "evt-2", "evt-3"],
+          items: [{ kind: "progress", title: "整理结论", summary: "Persisted public summary", status: "success", timestamp: 2 }],
+        },
+      ],
+    },
+    [
+      { type: "turn_start", timestamp: 2, turn_id: 1 },
+      { type: "reasoning_summary", timestamp: 3, turn_id: 1, message: "Runtime public summary" },
+      { type: "turn_end", timestamp: 4, turn_id: 1 },
+    ],
+  );
+
+  const activityItems = transcript.filter((item) => item.role === "activity");
+  assert.equal(activityItems.length, 1);
+  assert.equal(activityItems[0].activity.summary, "Persisted public summary");
+});
+
 test("buildTranscript keeps process narration as assistant text", () => {
   const transcript = app.buildTranscript(
     {

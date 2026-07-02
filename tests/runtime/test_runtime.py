@@ -7,6 +7,7 @@ from pp_agent.llm import ModelConfig
 from pp_agent.runtime.events import RuntimeMonitor
 from pp_agent.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks
 from pp_agent.runtime.runtime import AgentSession
+from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.storage.timeline import TimelineStore
@@ -1375,6 +1376,37 @@ def test_agent_session_timeline_entries_share_runtime_snapshot_contract(tmp_path
     checked = [entry for entry in persisted if entry.event_type in expected_event_types]
     assert checked
     assert all(entry.phase in formal_phases for entry in checked)
+
+
+def test_timeline_store_restores_runtime_event_fields_from_disk(tmp_path: Path) -> None:
+    timeline = TimelineStore(tmp_path / "timelines")
+    timeline.append(
+        "session-1",
+        AgentEvent(
+            type="tool_start",
+            session_id="session-1",
+            turn_id=7,
+            phase="executing",
+            tool_name="read_file",
+            message="Reading App.tsx",
+            details={"path": "web/src/App.tsx", "tool_call_id": "call-1"},
+            timestamp=12.5,
+        ),
+    )
+
+    restored = TimelineStore(tmp_path / "timelines").list_session("session-1", limit=10)
+
+    assert len(restored) == 1
+    entry = restored[0]
+    assert entry.event_type == "tool_start"
+    assert entry.created_at == 12.5
+    assert entry.turn_id == 7
+    assert entry.phase == "executing"
+    assert entry.tool_name == "read_file"
+    assert entry.message == "Reading App.tsx"
+    assert entry.details["path"] == "web/src/App.tsx"
+    assert entry.details["runtime_event"]["type"] == "tool_start"
+    assert entry.details["runtime_event"]["turn_id"] == 7
 
 
 def test_agent_session_restore_uses_active_head_branch_messages(tmp_path: Path) -> None:

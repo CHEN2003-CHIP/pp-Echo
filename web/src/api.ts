@@ -63,6 +63,31 @@ export type RuntimeEvent = {
   is_error?: boolean;
 };
 
+export type PersistedActivityDisplayItem = {
+  kind: string;
+  title: string;
+  summary?: string;
+  detail?: string;
+  status?: string;
+  timestamp?: number | string | null;
+};
+
+export type PersistedActivityBlock = {
+  record_type: "activity_block";
+  version: number;
+  id?: string;
+  session_id: string;
+  turn_id: string;
+  created_at: number | string;
+  status: "running" | "done" | "error" | string;
+  title: string;
+  summary: string;
+  duration_ms?: number | null;
+  event_count: number;
+  items: PersistedActivityDisplayItem[];
+  source_event_ids: string[];
+};
+
 export type SessionSnapshot = {
   session_id: string;
   busy: boolean;
@@ -94,6 +119,7 @@ export type SessionSnapshot = {
     pending_artifacts?: Array<{ token: string; changed_paths?: string[] }>;
   };
   messages: SnapshotMessage[];
+  activity_blocks?: PersistedActivityBlock[];
 };
 
 export type PendingAction = {
@@ -874,6 +900,7 @@ export const api = {
   createSession: () => request<SessionSnapshot>("/api/sessions", { method: "POST" }),
   snapshot: (sessionId: string) => request<SessionSnapshot>(`/api/sessions/${sessionId}`),
   events: (sessionId: string) => request<{ events: RuntimeEvent[] }>(`/api/sessions/${sessionId}/events`),
+  activity: (sessionId: string) => request<{ activity_blocks: PersistedActivityBlock[] }>(`/api/sessions/${sessionId}/activity`),
   timeline: (sessionId?: string, limit = 80) =>
     request<{ timeline: TimelineEntry[] }>(
       sessionId

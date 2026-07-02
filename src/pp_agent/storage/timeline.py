@@ -45,19 +45,20 @@ class TimelineStore:
 
     def append(self, session_id: str, event: Any) -> TimelineEntry:
         runtime = event.details.get("runtime")
+        timestamp = getattr(event, "timestamp", None)
         entry = TimelineEntry(
             id=str(uuid.uuid4()),
             session_id=session_id,
-            created_at=time.time(),
+            created_at=float(timestamp) if isinstance(timestamp, (int, float)) else time.time(),
             event_type=event.type,
-            turn_id=self._turn_id_from_runtime(runtime),
-            phase=self._phase_from_runtime(runtime),
+            turn_id=self._turn_id_from_event(event, runtime),
+            phase=self._phase_from_event(event, runtime),
             tool_name=event.tool_name,
             message=event.message,
             is_error=event.is_error,
             runtime=RuntimeStatusSnapshot.model_validate(runtime) if runtime else None,
             plan_step=event.plan_step.model_copy(deep=True) if event.plan_step is not None else None,
-            details=self._filtered_details(event.details),
+            details=self._filtered_details(event),
         )
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry.model_dump(mode="json"), ensure_ascii=False) + "\n")
@@ -88,13 +89,24 @@ class TimelineStore:
         return entries
 
     @staticmethod
-    def _filtered_details(details: dict[str, object]) -> dict[str, object]:
+    def _filtered_details(event: Any) -> dict[str, object]:
+        details = getattr(event, "details", {}) or {}
         payload = dict(details)
         payload.pop("runtime", None)
+        runtime_event = event.model_dump(mode="json") if hasattr(event, "model_dump") else {}
+        if isinstance(runtime_event, dict):
+            runtime_event.setdefault("details", payload)
+            payload.setdefault("runtime_event", runtime_event)
         return payload
 
     @staticmethod
-    def _turn_id_from_runtime(runtime: object) -> int:
+    def _turn_id_from_event(event: Any, runtime: object) -> int:
+        value = getattr(event, "turn_id", None)
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            pass
         if not isinstance(runtime, dict):
             return 0
         value = runtime.get("turn_id")
@@ -104,7 +116,10 @@ class TimelineStore:
             return 0
 
     @staticmethod
-    def _phase_from_runtime(runtime: object) -> Optional[str]:
+    def _phase_from_event(event: Any, runtime: object) -> Optional[str]:
+        value = getattr(event, "phase", None)
+        if isinstance(value, str) and value:
+            return value
         if not isinstance(runtime, dict):
             return None
         value = runtime.get("phase")
