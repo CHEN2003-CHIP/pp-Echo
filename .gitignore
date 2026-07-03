@@ -48,7 +48,15 @@ htmlcov/
 .tox/
 .nox/
 _tmp_test_ws/
+web/.activity-finding-tests-*/
+web/.activity-presenter-tests-*/
+web/.activity-tests-*/
+web/.agent-workspace-tests-*/
+web/.context-summary-tests-*/
 web/.rich-text-tests-*/
+web/.tmp-inspect-*/
+web/.trace-model-runtime-tests-*/
+web/.transcript-tests-*/
 
 # Local runtime state
 .pp-agent/

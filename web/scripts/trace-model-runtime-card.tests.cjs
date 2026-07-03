@@ -4,9 +4,10 @@ const path = require("path");
 const ts = require("typescript");
 const React = require("react");
 const ReactDOMServer = require("react-dom/server");
+const { createTempRoot } = require("./test-temp-root.cjs");
 
 const projectRoot = path.resolve(__dirname, "..");
-const tempRoot = fs.mkdtempSync(path.join(projectRoot, ".trace-model-runtime-tests-"));
+const tempRoot = createTempRoot("trace-model-runtime-tests");
 fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ type: "commonjs" }), "utf8");
 
 for (const sourcePath of sourceFiles(path.join(projectRoot, "src"))) {

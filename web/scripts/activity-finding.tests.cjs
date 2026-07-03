@@ -2,9 +2,10 @@ const assert = require("assert/strict");
 const fs = require("fs");
 const path = require("path");
 const ts = require("typescript");
+const { createTempRoot } = require("./test-temp-root.cjs");
 
 const projectRoot = path.resolve(__dirname, "..");
-const tempRoot = fs.mkdtempSync(path.join(projectRoot, ".activity-finding-tests-"));
+const tempRoot = createTempRoot("activity-finding-tests");
 fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ type: "commonjs" }), "utf8");
 
 compileSource("src/features/activity/activity-findings.ts");
