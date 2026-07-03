@@ -439,7 +439,14 @@ export function App() {
     setEvents((current) => {
       const existing = current[sessionId] || [];
       const key = runtimeEventDedupeKey(event);
-      if (key && existing.some((item) => runtimeEventDedupeKey(item) === key)) return current;
+      const existingIndex = key ? existing.findIndex((item) => runtimeEventDedupeKey(item) === key) : -1;
+      if (existingIndex >= 0) {
+        const merged = mergeRuntimeEvent(existing[existingIndex], event);
+        if (merged === existing[existingIndex]) return current;
+        const next = [...existing];
+        next[existingIndex] = merged;
+        return { ...current, [sessionId]: next };
+      }
       return { ...current, [sessionId]: [...existing, event].slice(-MAX_SESSION_EVENTS) };
     });
     setStatus(event.message || event.type);
@@ -4675,12 +4682,39 @@ function insertActivityItemsBeforeAssistant(items: TranscriptItem[], persisted: 
     }
     result.push(item);
   }
-  const remaining = [...activityByTurn.values()].flat().filter((item) => !used.has(item.id));
-  for (const item of [...orphanActivities, ...remaining].sort(activityDisplayOrder)) {
+  const remaining = [...activityByTurn.values()].flat().filter((item) => !used.has(item.id)).sort(activityDisplayOrder);
+  for (const item of remaining) {
+    if (insertActivityAfterTurnUser(result, item)) {
+      used.add(item.id);
+    }
+  }
+  const stillRemaining = remaining.filter((item) => !used.has(item.id));
+  for (const item of [...orphanActivities, ...stillRemaining].sort(activityDisplayOrder)) {
     insertOrphanActivityBeforeNearestAssistant(result, item);
     used.add(item.id);
   }
   return result;
+}
+
+function insertActivityAfterTurnUser(items: TranscriptItem[], activity: TranscriptItem) {
+  const turnId = normalizeTurnId(activity.turnId);
+  if (!turnId) return false;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.role !== "user" || normalizeTurnId(item.turnId) !== turnId) continue;
+    let insertIndex = index + 1;
+    while (
+      insertIndex < items.length &&
+      items[insertIndex].role === "activity" &&
+      normalizeTurnId(items[insertIndex].turnId) === turnId &&
+      activityDisplayOrder(items[insertIndex], activity) <= 0
+    ) {
+      insertIndex += 1;
+    }
+    items.splice(insertIndex, 0, activity);
+    return true;
+  }
+  return false;
 }
 
 function insertOrphanActivityBeforeNearestAssistant(items: TranscriptItem[], activity: TranscriptItem) {
@@ -5306,12 +5340,33 @@ export function mergeRuntimeEvents(existing: RuntimeEvent[], incoming: RuntimeEv
   const merged = new Map<string, RuntimeEvent>();
   for (const event of [...existing, ...incoming]) {
     const key = runtimeEventDedupeKey(event);
-    if (merged.has(key)) continue;
-    merged.set(key, event);
+    const current = merged.get(key);
+    merged.set(key, current ? mergeRuntimeEvent(current, event) : event);
   }
   return [...merged.values()]
     .sort((left, right) => (left.timestamp || 0) - (right.timestamp || 0))
     .slice(-MAX_SESSION_EVENTS);
+}
+
+function mergeRuntimeEvent(existing: RuntimeEvent, incoming: RuntimeEvent) {
+  const mergedDetails = { ...(existing.details || {}), ...(incoming.details || {}) };
+  const merged: RuntimeEvent = {
+    ...existing,
+    ...incoming,
+    details: Object.keys(mergedDetails).length ? mergedDetails : undefined,
+  };
+  if (!merged.message) merged.message = existing.message || incoming.message;
+  if (!merged.delta) merged.delta = existing.delta || incoming.delta;
+  if (!merged.status) merged.status = existing.status || incoming.status;
+  if (!merged.started_at) merged.started_at = existing.started_at || incoming.started_at;
+  if (!merged.ended_at) merged.ended_at = existing.ended_at || incoming.ended_at;
+  if (!merged.duration_ms) merged.duration_ms = existing.duration_ms || incoming.duration_ms;
+  if (runtimeEventsEqual(existing, merged)) return existing;
+  return merged;
+}
+
+function runtimeEventsEqual(left: RuntimeEvent, right: RuntimeEvent) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function runtimeEventDedupeKey(event: RuntimeEvent) {

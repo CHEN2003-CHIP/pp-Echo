@@ -137,6 +137,46 @@ test("timelineEntryToRuntimeEvent unwraps embedded runtime events and merge dedu
   assert.equal(merged[0].message, "live copy");
 });
 
+test("mergeRuntimeEvents updates duplicate live reasoning events with later payload details", () => {
+  const merged = app.mergeRuntimeEvents(
+    [
+      {
+        type: "reasoning_delta",
+        session_id: "session-1",
+        event_id: "evt-reasoning",
+        turn_id: 1,
+        run_id: "run-live",
+        timestamp: 2,
+        status: "running",
+      },
+    ],
+    [
+      {
+        type: "reasoning_delta",
+        session_id: "session-1",
+        event_id: "evt-reasoning",
+        turn_id: 1,
+        run_id: "run-live",
+        timestamp: 2,
+        status: "running",
+        message: "Receiving public assistant output.",
+        delta: "Receiving public assistant output.",
+        details: { summary: "The model has started returning visible output." },
+      },
+    ],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].delta, "Receiving public assistant output.");
+  assert.equal(merged[0].details.summary, "The model has started returning visible output.");
+
+  const transcript = app.buildTranscript({ messages: [] }, merged);
+  const activity = transcript.find((item) => item.role === "activity");
+  assert.ok(activity);
+  assert.equal(activity.activity.running, true);
+  assert.ok(activity.body.text.includes("Receiving public assistant output."));
+});
+
 test("buildTranscript restores runtime_event details from stored timeline entries", () => {
   const events = [
     app.timelineEntryToRuntimeEvent({
@@ -332,6 +372,44 @@ test("buildTranscript keeps multi-turn activity before each assistant", () => {
   assert.deepEqual(transcript.map((item) => item.role), ["user", "activity", "assistant", "user", "activity", "assistant"]);
   assert.equal(transcript[1].activity.title, "T1");
   assert.equal(transcript[4].activity.title, "T2");
+});
+
+test("buildTranscript anchors live activity to the current user turn before assistant exists", () => {
+  const transcript = app.buildTranscript(
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Q1" }], timestamp: 1000 },
+        { role: "assistant", content: [{ type: "text", text: "A1" }], timestamp: 2000 },
+        { role: "user", content: [{ type: "text", text: "Q2" }], timestamp: 4000 },
+      ],
+      activity_blocks: [
+        {
+          record_type: "activity_block",
+          version: 1,
+          id: "b1",
+          session_id: "s",
+          turn_id: "1",
+          created_at: 1500,
+          status: "done",
+          title: "T1",
+          summary: "S1",
+          event_count: 1,
+          source_event_ids: ["e1"],
+          items: [],
+        },
+      ],
+    },
+    [
+      { type: "turn_start", timestamp: 4100, turn_id: 2 },
+      { type: "reasoning_start", timestamp: 4200, turn_id: 2, run_id: "run-2", message: "Preparing model context and public progress." },
+      { type: "reasoning_delta", timestamp: 4300, turn_id: 2, run_id: "run-2", delta: "Receiving public assistant output." },
+    ],
+  );
+
+  assert.deepEqual(transcript.map((item) => item.role), ["user", "activity", "assistant", "user", "activity", "assistant"]);
+  assert.equal(transcript[4].turnId, "2");
+  assert.equal(transcript[4].activity.running, true);
+  assert.equal(transcript[5].id, "progress-placeholder");
 });
 
 test("buildTranscript prefers live running activity when persisted blocks and runtime events both exist", () => {
