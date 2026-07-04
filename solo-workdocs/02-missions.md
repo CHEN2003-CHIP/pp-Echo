@@ -2,6 +2,10 @@
 
 Mission 是一段时间内最重要的推进目标。每个 Mission 使用 Mission -> Task -> Check。
 
+`solo-workdocs/02-missions.md` 只作为 Mission 索引、模板和状态总览。
+
+`solo-workdocs/mission-docs/` 用于保存每个 Mission 的详细调研、设计、执行和复盘文档。
+
 ## Mission 管理方法
 
 ### Mission
@@ -123,15 +127,19 @@ Mission 02 先拆成 Mission 02A：设计与现状调研。本阶段不直接开
 
 目标：
 
-调研当前仓库中与文件读取、文件写入、工具执行、审批、安全边界和变更摘要相关的现状，并设计一套最小可行的安全文件编辑闭环。
+调研 pp-Echo 当前文件编辑相关能力，并对标 OpenCode、Cline、Aider、OpenHands、SWE-agent 等成熟项目，提炼适合 pp-Echo 当前阶段的安全文件编辑闭环设计。
 
 范围：
 
-- 阅读 `AGENTS.md`、`.pp-echo/project-map.json` 和相关 `MODULE.md`。
+- 阅读 `AGENTS.md`、`.pp-echo/project-map.json` 和相关 `MODULE.md`、查看参考项目相关docs、repo和相关代码。
 - 梳理当前已有文件编辑、工具调用、审批、trace 或 coding workflow 能力。
 - 定义一次安全文件编辑任务的输入、边界、步骤和输出。
 - 定义 diff 摘要、验证结果、失败反馈、人工确认点。
 - 判断 Mission 02B 是否需要代码修改，以及可能涉及哪些模块。
+
+交付物：
+
+`solo-workdocs/mission-docs/06-mission-02A-safe-file-edit-research-and-design.md`
 
 不做什么：
 
@@ -144,11 +152,17 @@ Mission 02 先拆成 Mission 02A：设计与现状调研。本阶段不直接开
 
 验收标准：
 
-- 输出一份 Mission 02A 调研与设计 summary。
-- 明确当前能力、缺口和风险。
-- 明确安全文件编辑闭环的最小流程。
-- 明确后续若要开发，应该触碰哪些模块、需要哪些测试。
-- 明确哪些操作必须人工确认。
+- 完成本项目现状调研；
+- 完成成熟项目对标矩阵；
+- 明确 Mission 02B 最小实现范围；
+- 明确本阶段不做什么；
+- 明确安全边界；
+- 明确测试计划；
+- 拆出后续实现任务；
+- 不修改核心源码；
+- 不添加依赖；
+- 不运行安装命令；
+- 不提交 commit。
 
 完成定义：
 
