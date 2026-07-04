@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Bot, ChevronRight, Copy, Globe2, Play, RefreshCw, Search, Square, TestTube2, X } from "lucide-react";
 import { api, BotDetail, BotSummary, CapabilityInventory } from "../../api";
 
-type DetailTab = "overview" | "events" | "sessions" | "trace" | "config" | "security" | "logs";
+type DetailTab = "overview" | "events" | "chat" | "sessions" | "trace" | "config" | "security" | "logs";
 type BotFilter = "all" | "running" | "waiting" | "error" | "disabled";
 
 const tabs: Array<{ id: DetailTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "events", label: "Events" },
+  { id: "chat", label: "Chat" },
   { id: "sessions", label: "Sessions" },
   { id: "trace", label: "Trace" },
   { id: "config", label: "Config" },
@@ -239,6 +240,7 @@ export function BotCenterPage() {
               <div className="bot-detail-scroll">
                 {tab === "overview" ? <Overview detail={detail} capabilities={capabilities} /> : null}
                 {tab === "events" ? <Events detail={detail} /> : null}
+                {tab === "chat" ? <ChatHistory detail={detail} /> : null}
                 {tab === "sessions" ? <Sessions detail={detail} /> : null}
                 {tab === "trace" ? <Trace detail={detail} /> : null}
                 {tab === "config" ? (
@@ -293,6 +295,24 @@ function Overview({ detail, capabilities }: { detail: BotDetail; capabilities: C
 
 function Events({ detail }: { detail: BotDetail }) {
   return <JsonList items={detail.events} empty="No events yet." />;
+}
+
+function ChatHistory({ detail }: { detail: BotDetail }) {
+  if (!detail.messages.length) return <div className="bot-empty">No chat messages yet.</div>;
+  return (
+    <div className="bot-chat-history">
+      {detail.messages.map((message, index) => {
+        const role = botMessageRole(message);
+        const time = botMessageTime(message);
+        return (
+          <div className={`bot-chat-row ${role}`} key={botMessageKey(message, index)}>
+            <div className="bot-chat-bubble">{botMessageText(message)}</div>
+            {time ? <span className="bot-chat-meta">{time}</span> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function Sessions({ detail }: { detail: BotDetail }) {
@@ -395,6 +415,46 @@ function JsonList({ items, empty }: { items: Array<Record<string, unknown>>; emp
       ))}
     </div>
   );
+}
+
+function botMessageKey(message: Record<string, unknown>, index: number) {
+  return String(message.id || message.message_id || message.event_id || message.trace_id || index);
+}
+
+function botMessageRole(message: Record<string, unknown>) {
+  const raw = String(message.role || message.direction || message.source || message.author || message.sender_type || "").toLowerCase();
+  if (/(assistant|bot|agent|outbound|reply|system)/i.test(raw)) return "assistant";
+  if (/(user|human|inbound|client|member|sender)/i.test(raw)) return "user";
+  return "user";
+}
+
+function botMessageText(message: Record<string, unknown>) {
+  const direct = firstText(message.content, message.text, message.message, message.body, message.prompt, message.reply);
+  if (direct) return direct;
+  return JSON.stringify(maskSensitive(message), null, 2);
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = valueToText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function valueToText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(valueToText).filter(Boolean).join("\n").trim();
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return firstText(record.text, record.content, record.message, record.body);
+  }
+  return "";
+}
+
+function botMessageTime(message: Record<string, unknown>) {
+  return firstText(message.timestamp, message.created_at, message.received_at, message.sent_at, message.time);
 }
 
 function matchesBotFilter(bot: BotSummary, filter: BotFilter) {
