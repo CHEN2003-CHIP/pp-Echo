@@ -82,7 +82,6 @@ node_modules/
 !src/pp_agent/memory/
 !src/pp_agent/memory/*.py
 MEMORY.md
-AGENTS.md
 test.py
 
 # Project Intelligence Layer local guidance.
