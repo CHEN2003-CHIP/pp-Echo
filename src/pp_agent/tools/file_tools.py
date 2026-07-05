@@ -35,6 +35,7 @@ SEARCH_BLOCK_RE = re.compile(
 UNIFIED_HUNK_RE = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@")
 DEFAULT_READ_FILE_MAX_CHARS = 20_000
 APPLY_PATCH_CANDIDATE_TOOL = "apply_patch_candidate"
+MAX_EDIT_FILE_BYTES = 1024 * 1024
 MAX_PATCH_SNAPSHOT_BYTES = 5 * 1024 * 1024
 WorkspaceApplyLock = None
 WorkspaceApplyLockError = None
@@ -183,6 +184,41 @@ def _slice_file_preview(text: str, *, offset: int, max_chars: int) -> tuple[str,
     return preview, truncated
 
 
+def validate_text_edit_target(path: Path, *, content: str | None = None, max_bytes: int = MAX_EDIT_FILE_BYTES) -> str:
+    if path.is_symlink():
+        raise PermissionError(f"Refusing to edit symlink path: {path}")
+    if path.exists():
+        if not path.is_file():
+            raise ValueError(f"Refusing to edit non-file path: {path}")
+        size = path.stat().st_size
+        if size > max_bytes:
+            raise ValueError(f"Refusing to edit large file: {path} ({size} bytes > {max_bytes} bytes)")
+        raw = path.read_bytes()
+        if b"\x00" in raw:
+            raise ValueError(f"Refusing to edit binary file: {path}")
+        try:
+            before = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Refusing to edit non-UTF-8 text file: {path}") from exc
+    else:
+        before = ""
+    if content is not None:
+        raw_content = content.encode("utf-8")
+        if len(raw_content) > max_bytes:
+            raise ValueError(f"Refusing to write large content: {path} ({len(raw_content)} bytes > {max_bytes} bytes)")
+        if "\x00" in content:
+            raise ValueError(f"Refusing to write binary-like content: {path}")
+    return before
+
+
+def reject_symlink_edit_path(workspace: Path, raw_path: str) -> None:
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    if candidate.is_symlink():
+        raise PermissionError(f"Refusing to edit symlink path: {candidate}")
+
+
 class WriteFileTool(BaseTool):
     def __init__(self, workspace: Path, policy_evaluator=None, *, current_session_id: str | None = None) -> None:
         super().__init__(workspace, policy_evaluator)
@@ -193,13 +229,14 @@ class WriteFileTool(BaseTool):
         return ToolSpec(name="write_file", description="Stage a new file write for host-side approval.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean"}}, "required": ["path", "content"]}, requires_confirmation=True, permission_domain=PermissionDomain.EDIT, sensitive=True)
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self.enforce_policy_for_path(PermissionDomain.EDIT, arguments["path"])
         overwrite = bool(arguments.get("overwrite", False))
         existed = path.exists()
-        before = path.read_text(encoding="utf-8") if existed else ""
+        after = str(arguments["content"])
+        before = validate_text_edit_target(path, content=after)
         if existed and not overwrite:
             raise ValueError("File already exists. Re-run with overwrite=true after confirming the diff.")
-        after = arguments["content"]
         diff = self._diff(before, after, path)
         store = PendingActionStore(self.pending_root())
         effect = build_file_effect(
@@ -248,8 +285,9 @@ class EditFileTool(BaseTool):
         return ToolSpec(name="edit_file", description="Stage a safe diff-style edit using SEARCH/REPLACE blocks or a unified diff for host-side approval.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "diff": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path"]}, requires_confirmation=True, permission_domain=PermissionDomain.EDIT, sensitive=True)
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self.enforce_policy_for_path(PermissionDomain.EDIT, arguments["path"])
-        original = path.read_text(encoding="utf-8")
+        original = validate_text_edit_target(path)
         try:
             if arguments.get("diff"):
                 updated, replacements = self._apply_search_replace_diff(original, arguments["diff"])

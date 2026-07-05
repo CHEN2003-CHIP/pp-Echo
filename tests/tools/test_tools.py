@@ -12,6 +12,7 @@ from pp_agent.runtime.session_host import SessionHost
 from pp_agent.tools import session_tools
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.settings import ToolPolicyConfig
+from pp_agent.tools.file_tools import MAX_EDIT_FILE_BYTES
 from pp_agent.tools.registry import ToolRegistry
 
 
@@ -85,6 +86,61 @@ def test_write_file_requires_explicit_overwrite(tmp_path: Path) -> None:
     assert overwrite.details["diff"]
 
 
+def test_write_file_rejects_large_new_content_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(ValueError, match="large content"):
+        registry.execute("write_file", {"path": "large.txt", "content": "x" * (MAX_EDIT_FILE_BYTES + 1)})
+
+    assert not (tmp_path / "large.txt").exists()
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
+
+
+def test_write_file_rejects_large_existing_file_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "large.txt"
+    target.write_bytes(b"x" * (MAX_EDIT_FILE_BYTES + 1))
+
+    with pytest.raises(ValueError, match="large file"):
+        registry.execute("write_file", {"path": "large.txt", "content": "small", "overwrite": True})
+
+    assert target.stat().st_size == MAX_EDIT_FILE_BYTES + 1
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
+
+
+def test_write_file_rejects_binary_existing_file_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "binary.dat"
+    target.write_bytes(b"abc\x00def")
+
+    with pytest.raises(ValueError, match="binary file"):
+        registry.execute("write_file", {"path": "binary.dat", "content": "text", "overwrite": True})
+
+    assert target.read_bytes() == b"abc\x00def"
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
+
+
+def test_write_file_rejects_symlink_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "target.txt"
+    target.write_text("safe", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable in this environment")
+
+    with pytest.raises(PermissionError, match="symlink"):
+        registry.execute("write_file", {"path": "link.txt", "content": "changed", "overwrite": True})
+
+    assert target.read_text(encoding="utf-8") == "safe"
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
+
+
 def test_pending_edit_conflict_is_detected(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     staged_write = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
@@ -130,6 +186,63 @@ def test_edit_file_rejects_invalid_diff_format(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="SEARCH/REPLACE block or unified diff hunk"):
         registry.execute("edit_file", {"path": "notes.txt", "diff": "@@ invalid @@"})
+
+
+def test_edit_file_rejects_large_file_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "large.txt"
+    target.write_bytes(b"x" * (MAX_EDIT_FILE_BYTES + 1))
+
+    with pytest.raises(ValueError, match="large file"):
+        registry.execute("edit_file", {"path": "large.txt", "old_text": "x", "new_text": "y"})
+
+    assert target.stat().st_size == MAX_EDIT_FILE_BYTES + 1
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
+
+
+def test_edit_file_rejects_binary_file_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "binary.dat"
+    target.write_bytes(b"abc\x00def")
+
+    with pytest.raises(ValueError, match="binary file"):
+        registry.execute("edit_file", {"path": "binary.dat", "old_text": "abc", "new_text": "xyz"})
+
+    assert target.read_bytes() == b"abc\x00def"
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
+
+
+def test_edit_file_rejects_non_utf8_file_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "latin1.txt"
+    target.write_bytes("caf\xe9".encode("latin-1"))
+
+    with pytest.raises(ValueError, match="non-UTF-8"):
+        registry.execute("edit_file", {"path": "latin1.txt", "old_text": "caf", "new_text": "coffee"})
+
+    assert target.read_bytes() == "caf\xe9".encode("latin-1")
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
+
+
+def test_edit_file_rejects_symlink_before_staging(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "target.txt"
+    target.write_text("alpha", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable in this environment")
+
+    with pytest.raises(PermissionError, match="symlink"):
+        registry.execute("edit_file", {"path": "link.txt", "old_text": "alpha", "new_text": "beta"})
+
+    assert target.read_text(encoding="utf-8") == "alpha"
+    pending = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list()
+    assert pending == []
 
 
 def test_staged_shell_and_reject_flow(tmp_path: Path) -> None:

@@ -35,6 +35,8 @@ from pp_agent.tools.file_tools import (
     ReadFileTool,
     RejectPendingActionTool,
     WriteFileTool,
+    reject_symlink_edit_path,
+    validate_text_edit_target,
 )
 from pp_agent.tools.effects import (
     analyze_extension_call,
@@ -999,13 +1001,14 @@ class ToolRegistry:
         raise PermissionError(f"Tool '{name}' is not supported in isolated worktree mode.")
 
     def _execute_worktree_write(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self._resolve_worktree_path(arguments["path"])
         overwrite = bool(arguments.get("overwrite", False))
         existed = path.exists()
-        before = path.read_text(encoding="utf-8") if existed else ""
+        after = str(arguments["content"])
+        before = validate_text_edit_target(path, content=after)
         if existed and not overwrite:
             raise ValueError("File already exists. Re-run with overwrite=true after confirming the diff.")
-        after = str(arguments["content"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(after, encoding="utf-8")
         effect = build_file_effect(
@@ -1025,8 +1028,9 @@ class ToolRegistry:
         )
 
     def _execute_worktree_edit(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self._resolve_worktree_path(arguments["path"])
-        original = path.read_text(encoding="utf-8")
+        original = validate_text_edit_target(path)
         if arguments.get("diff"):
             updated, replacements = EditFileTool._apply_search_replace_diff(original, arguments["diff"])
         else:
