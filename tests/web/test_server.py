@@ -394,9 +394,10 @@ def test_web_api_logs_include_session_jsonl_entries(tmp_path: Path) -> None:
     assert any(item["session_id"] == record.id for item in response.json()["logs"])
 
 
-def test_web_api_memory_status_search_and_read(tmp_path: Path) -> None:
+def test_web_api_memory_status_search_and_read(tmp_path: Path, monkeypatch) -> None:
     from fastapi.testclient import TestClient
 
+    monkeypatch.setenv("PP_AGENT_HOME", str(tmp_path / "app-data"))
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "MEMORY.md").write_text("# Memory\n\nUse focused pytest for web changes.\n", encoding="utf-8")

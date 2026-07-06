@@ -1,15 +1,16 @@
 ﻿from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import locale
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 from pp_agent.domain import ToolSpec
-from pp_agent.attachments.importer import AttachmentWorkspaceImporter
 from pp_agent.runtime.execution_context import (
     attach_runtime_context_to_patch_candidate_args,
     check_runtime_guardrails,
@@ -35,6 +36,7 @@ SEARCH_BLOCK_RE = re.compile(
 UNIFIED_HUNK_RE = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@")
 DEFAULT_READ_FILE_MAX_CHARS = 20_000
 APPLY_PATCH_CANDIDATE_TOOL = "apply_patch_candidate"
+MAX_EDIT_FILE_BYTES = 1024 * 1024
 MAX_PATCH_SNAPSHOT_BYTES = 5 * 1024 * 1024
 WorkspaceApplyLock = None
 WorkspaceApplyLockError = None
@@ -183,6 +185,123 @@ def _slice_file_preview(text: str, *, offset: int, max_chars: int) -> tuple[str,
     return preview, truncated
 
 
+def validate_text_edit_target(path: Path, *, content: str | None = None, max_bytes: int = MAX_EDIT_FILE_BYTES) -> str:
+    if path.is_symlink():
+        raise PermissionError(f"Refusing to edit symlink path: {path}")
+    if path.exists():
+        if not path.is_file():
+            raise ValueError(f"Refusing to edit non-file path: {path}")
+        size = path.stat().st_size
+        if size > max_bytes:
+            raise ValueError(f"Refusing to edit large file: {path} ({size} bytes > {max_bytes} bytes)")
+        raw = path.read_bytes()
+        if b"\x00" in raw:
+            raise ValueError(f"Refusing to edit binary file: {path}")
+        try:
+            before = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Refusing to edit non-UTF-8 text file: {path}") from exc
+    else:
+        before = ""
+    if content is not None:
+        raw_content = content.encode("utf-8")
+        if len(raw_content) > max_bytes:
+            raise ValueError(f"Refusing to write large content: {path} ({len(raw_content)} bytes > {max_bytes} bytes)")
+        if "\x00" in content:
+            raise ValueError(f"Refusing to write binary-like content: {path}")
+    return before
+
+
+def reject_symlink_edit_path(workspace: Path, raw_path: str) -> None:
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    if candidate.is_symlink():
+        raise PermissionError(f"Refusing to edit symlink path: {candidate}")
+
+
+def _stable_json_digest(payload: dict[str, Any]) -> str:
+    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _workspace_relative_path(workspace: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(workspace.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def unified_text_diff(before: str, after: str, path: Path) -> str:
+    return "\n".join(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=f"a/{path.name}",
+            tofile=f"b/{path.name}",
+            lineterm="",
+        )
+    )
+
+
+def patch_proposal_digest(proposal: dict[str, Any]) -> str:
+    stable = {key: value for key, value in proposal.items() if key != "proposal_digest"}
+    stable["diff_digest"] = hashlib.sha256(str(proposal.get("unified_diff") or "").encode("utf-8")).hexdigest()
+    return _stable_json_digest(stable)
+
+
+def build_patch_proposal(
+    *,
+    workspace: Path,
+    action_type: str,
+    target_path: Path,
+    before: str,
+    after: str,
+    is_new_file: bool,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    unified_diff = unified_text_diff(before, after, target_path)
+    target_label = _workspace_relative_path(workspace, target_path)
+    proposal = {
+        "kind": "patch_proposal",
+        "version": 1,
+        "action_type": action_type,
+        "target_path": target_label,
+        "before_digest": content_digest(before),
+        "after_digest": content_digest(after),
+        "unified_diff": unified_diff,
+        "diff_digest": hashlib.sha256(unified_diff.encode("utf-8")).hexdigest(),
+        "is_new_file": bool(is_new_file),
+        "overwrite": bool(overwrite),
+        "preview": {
+            "changed_files": [target_label],
+            "truncated": False,
+            "risk_flags": [],
+        },
+    }
+    proposal["proposal_digest"] = patch_proposal_digest(proposal)
+    return proposal
+
+
+def diff_preview_from_patch_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
+    unified_diff = str(proposal.get("unified_diff") or "")
+    normalized = dict(proposal)
+    normalized["diff_digest"] = hashlib.sha256(unified_diff.encode("utf-8")).hexdigest()
+    normalized["proposal_digest"] = patch_proposal_digest(normalized)
+    preview = dict(normalized.get("preview") or {})
+    return {
+        "kind": "diff_preview",
+        "action_type": normalized.get("action_type"),
+        "target_path": normalized.get("target_path"),
+        "diff_text": unified_diff,
+        "diff_digest": normalized["diff_digest"],
+        "proposal_digest": normalized["proposal_digest"],
+        "changed_files": preview.get("changed_files") or [normalized.get("target_path")],
+        "truncated": bool(preview.get("truncated", False)),
+        "risk_flags": list(preview.get("risk_flags") or []),
+    }
+
+
 class WriteFileTool(BaseTool):
     def __init__(self, workspace: Path, policy_evaluator=None, *, current_session_id: str | None = None) -> None:
         super().__init__(workspace, policy_evaluator)
@@ -193,14 +312,24 @@ class WriteFileTool(BaseTool):
         return ToolSpec(name="write_file", description="Stage a new file write for host-side approval.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean"}}, "required": ["path", "content"]}, requires_confirmation=True, permission_domain=PermissionDomain.EDIT, sensitive=True)
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self.enforce_policy_for_path(PermissionDomain.EDIT, arguments["path"])
         overwrite = bool(arguments.get("overwrite", False))
         existed = path.exists()
-        before = path.read_text(encoding="utf-8") if existed else ""
+        after = str(arguments["content"])
+        before = validate_text_edit_target(path, content=after)
         if existed and not overwrite:
             raise ValueError("File already exists. Re-run with overwrite=true after confirming the diff.")
-        after = arguments["content"]
-        diff = self._diff(before, after, path)
+        proposal = build_patch_proposal(
+            workspace=self.workspace,
+            action_type="write_file",
+            target_path=path,
+            before=before,
+            after=after,
+            is_new_file=not existed,
+            overwrite=overwrite,
+        )
+        diff = proposal["unified_diff"]
         store = PendingActionStore(self.pending_root())
         effect = build_file_effect(
             workspace=self.workspace,
@@ -216,7 +345,7 @@ class WriteFileTool(BaseTool):
             target_path=path,
             before=before,
             after=after,
-            details={"overwrite": overwrite, "diff": diff},
+            details={"overwrite": overwrite, "diff": diff, "patch_proposal": proposal},
             effect=effect,
             session_id=self.current_session_id,
             origin={"source": "tool", "tool_name": self.spec.name, "kind": "file_write"},
@@ -227,7 +356,11 @@ class WriteFileTool(BaseTool):
             content=f"Write staged-only,Not write to disk yet.\n,Staged write for {path}.\n Approve with token {payload['token']}",
             details={"path": str(path), 
                      "token": payload["token"], 
-                     "diff": diff, "staged": True, 
+                     "diff": diff,
+                     "patch_proposal": proposal,
+                     "proposal_digest": proposal["proposal_digest"],
+                     "diff_digest": proposal["diff_digest"],
+                     "staged": True,
                      "workspace": self.workspace,
                      "path": str(path),
                      "effect": effect},
@@ -235,7 +368,7 @@ class WriteFileTool(BaseTool):
 
     @staticmethod
     def _diff(before: str, after: str, path: Path) -> str:
-        return "\n".join(difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile=f"a/{path.name}", tofile=f"b/{path.name}", lineterm=""))
+        return unified_text_diff(before, after, path)
 
 
 class EditFileTool(BaseTool):
@@ -248,8 +381,9 @@ class EditFileTool(BaseTool):
         return ToolSpec(name="edit_file", description="Stage a safe diff-style edit using SEARCH/REPLACE blocks or a unified diff for host-side approval.", parameters={"type": "object", "properties": {"path": {"type": "string"}, "diff": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path"]}, requires_confirmation=True, permission_domain=PermissionDomain.EDIT, sensitive=True)
 
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self.enforce_policy_for_path(PermissionDomain.EDIT, arguments["path"])
-        original = path.read_text(encoding="utf-8")
+        original = validate_text_edit_target(path)
         try:
             if arguments.get("diff"):
                 updated, replacements = self._apply_search_replace_diff(original, arguments["diff"])
@@ -264,7 +398,16 @@ class EditFileTool(BaseTool):
                 replacements = 1
         except ValueError as exc:
             raise ValueError(self._edit_failure_message(path, original, arguments, str(exc))) from exc
-        diff = "\n".join(difflib.unified_diff(original.splitlines(), updated.splitlines(), fromfile=f"a/{path.name}", tofile=f"b/{path.name}", lineterm=""))
+        proposal = build_patch_proposal(
+            workspace=self.workspace,
+            action_type="edit_file",
+            target_path=path,
+            before=original,
+            after=updated,
+            is_new_file=False,
+            overwrite=False,
+        )
+        diff = proposal["unified_diff"]
         store = PendingActionStore(self.pending_root())
         effect = build_file_effect(
             workspace=self.workspace,
@@ -279,7 +422,7 @@ class EditFileTool(BaseTool):
             target_path=path,
             before=original,
             after=updated,
-            details={"replacements": replacements, "diff": diff},
+            details={"replacements": replacements, "diff": diff, "patch_proposal": proposal},
             effect=effect,
             session_id=self.current_session_id,
             origin={"source": "tool", "tool_name": self.spec.name, "kind": "file_edit"},
@@ -290,7 +433,10 @@ class EditFileTool(BaseTool):
             content=f"Write staged-only,Not write to disk yet.\n,Staged edit for {path}. Approve with token {payload['token']}",
             details={"path": str(path), 
                      "replacements": replacements, 
-                     "diff": diff, 
+                     "diff": diff,
+                     "patch_proposal": proposal,
+                     "proposal_digest": proposal["proposal_digest"],
+                     "diff_digest": proposal["diff_digest"],
                      "workspace": self.workspace,
                      "path": str(path),
                      "token": payload["token"], 
@@ -430,6 +576,9 @@ class PreviewPendingActionTool(BaseTool):
     def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         store = PendingActionStore(self.pending_root())
         payload = store.load(arguments["token"])
+        result_payload = dict(payload)
+        result_details = dict(payload.get("details") or {})
+        diff_preview: dict[str, Any] | None = None
         if payload["action_type"] == "run_shell":
             content = payload.get("command") or ""
         elif payload["action_type"] == "apply_patch_artifact":
@@ -457,7 +606,13 @@ class PreviewPendingActionTool(BaseTool):
             summary = payload.get("details", {}).get("summary", []) or []
             content = "\n".join(summary) or "Planner approval with no summary available."
         else:
-            content = payload.get("details", {}).get("diff", "") or "No diff available."
+            proposal = result_details.get("patch_proposal")
+            if isinstance(proposal, dict):
+                diff_preview = diff_preview_from_patch_proposal(proposal)
+                result_details["diff_preview"] = diff_preview
+                content = diff_preview["diff_text"] or "No diff available."
+            else:
+                content = payload.get("details", {}).get("diff", "") or "No diff available."
         effect = payload.get("effect")
         if effect is not None:
             analysis = effect.get("analysis", {})
@@ -498,7 +653,125 @@ class PreviewPendingActionTool(BaseTool):
                 content = "\n".join(lines).strip()
             else:
                 content = ("\n".join(lines) + f"\n\n{content}").strip()
-        return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=content, details=payload)
+        result_payload["details"] = result_details
+        return ToolExecutionResult(tool_call_id="", tool_name=self.spec.name, content=content, details=result_payload)
+
+
+class RollbackFileCheckpointTool(BaseTool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="rollback_file_checkpoint",
+            description="Restore a single file from a file edit checkpoint by checkpoint_id.",
+            parameters={
+                "type": "object",
+                "properties": {"checkpoint_id": {"type": "string"}},
+                "required": ["checkpoint_id"],
+            },
+            requires_confirmation=True,
+            permission_domain=PermissionDomain.APPROVAL,
+            sensitive=True,
+            model_callable=False,
+        )
+
+    def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        checkpoint_id = str(arguments.get("checkpoint_id") or "").strip()
+        checkpoint = self._load_checkpoint(checkpoint_id)
+        target_label = str(checkpoint.get("target_path") or "")
+        if not target_label:
+            raise ValueError("Checkpoint is missing target_path.")
+        reject_symlink_edit_path(self.workspace, target_label)
+        path = self.enforce_policy_for_path(PermissionDomain.EDIT, target_label)
+        before_state = str(checkpoint.get("before_state") or "")
+        if before_state == "present":
+            result = self._restore_present_checkpoint(checkpoint, path)
+        elif before_state == "absent":
+            result = self._restore_absent_checkpoint(path)
+        else:
+            raise ValueError(f"Unsupported checkpoint before_state: {before_state}")
+        details = {
+            "checkpoint_id": checkpoint_id,
+            "target_path": _workspace_relative_path(self.workspace, path),
+            "absolute_path": str(path),
+            "action_type": checkpoint.get("action_type"),
+            "before_state": before_state,
+            **result,
+        }
+        return ToolExecutionResult(
+            tool_call_id="",
+            tool_name=self.spec.name,
+            content=(
+                f"Rollback {details['status']}.\n"
+                f"Checkpoint: {checkpoint_id}\n"
+                f"Target: {details['target_path']}"
+            ),
+            details=details,
+        )
+
+    def _load_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
+        if not checkpoint_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", checkpoint_id):
+            raise ValueError("Invalid checkpoint_id.")
+        checkpoint_root = self.pending_root() / "file-checkpoints"
+        metadata_path = checkpoint_root / f"{checkpoint_id}.json"
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"File checkpoint not found: {checkpoint_id}")
+        try:
+            checkpoint = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"File checkpoint metadata is invalid: {checkpoint_id}") from exc
+        if not isinstance(checkpoint, dict) or checkpoint.get("checkpoint_id") != checkpoint_id:
+            raise ValueError("File checkpoint metadata does not match checkpoint_id.")
+        return checkpoint
+
+    def _restore_present_checkpoint(self, checkpoint: dict[str, Any], path: Path) -> dict[str, Any]:
+        if path.is_symlink():
+            raise PermissionError(f"Refusing to rollback symlink path: {path}")
+        if path.exists() and not path.is_file():
+            raise ValueError(f"Refusing to rollback non-file path: {path}")
+        before_text = self._read_checkpoint_content(checkpoint)
+        expected_digest = checkpoint.get("before_digest")
+        if expected_digest and content_digest(before_text) != expected_digest:
+            raise ValueError("File checkpoint content digest does not match metadata.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.rollback.tmp")
+        try:
+            with temp_path.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(before_text)
+            temp_path.replace(path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+        return {"status": "restored", "restored_digest": content_digest(before_text)}
+
+    def _restore_absent_checkpoint(self, path: Path) -> dict[str, Any]:
+        if path.is_symlink():
+            raise PermissionError(f"Refusing to rollback symlink path: {path}")
+        if not path.exists():
+            return {"status": "already_absent", "restored_state": "absent"}
+        if not path.is_file():
+            raise ValueError(f"Refusing to rollback non-file path: {path}")
+        path.unlink()
+        return {"status": "restored_absent", "restored_state": "absent"}
+
+    def _read_checkpoint_content(self, checkpoint: dict[str, Any]) -> str:
+        raw_content_path = str(checkpoint.get("content_path") or "")
+        if not raw_content_path:
+            raise FileNotFoundError("File checkpoint content is missing.")
+        content_path = Path(raw_content_path)
+        if not content_path.is_absolute():
+            content_path = self.pending_root() / "file-checkpoints" / content_path
+        checkpoint_root = (self.pending_root() / "file-checkpoints").resolve()
+        resolved = content_path.resolve()
+        if resolved != checkpoint_root and checkpoint_root not in resolved.parents:
+            raise PermissionError("File checkpoint content path is outside checkpoint storage.")
+        if resolved.is_symlink():
+            raise PermissionError("Refusing to read symlink checkpoint content.")
+        if not resolved.exists():
+            raise FileNotFoundError("File checkpoint content is missing.")
+        if not resolved.is_file():
+            raise ValueError("File checkpoint content is not a regular file.")
+        with resolved.open("r", encoding="utf-8", newline="") as handle:
+            return handle.read()
 
 
 class ApprovePendingActionTool(BaseTool):
@@ -549,6 +822,9 @@ class ApprovePendingActionTool(BaseTool):
         grant = payload.get("approval_grant")
         if grant is None:
             payload["approval_grant"] = create_approval_grant(effect)
+            proposal_digest = self._current_proposal_digest(payload)
+            if proposal_digest:
+                payload["approval_grant"]["proposal_digest"] = proposal_digest
             payload["lifecycle"] = self._lifecycle("grant_attached")
             store.save(arguments["token"], payload)
             payload = store.load(arguments["token"])
@@ -578,8 +854,14 @@ class ApprovePendingActionTool(BaseTool):
         if action_type in {"write_file", "edit_file"}:
             try:
                 path = self.enforce_policy_for_path(PermissionDomain.EDIT, payload["target_path"])
+                checkpoint = self._create_file_edit_checkpoint(token=arguments["token"], payload=payload, path=path)
+                payload_details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+                payload_details["checkpoint"] = checkpoint
+                payload["details"] = payload_details
+                store.save(arguments["token"], payload)
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(payload["after"], encoding="utf-8")
+                with path.open("w", encoding="utf-8", newline="") as handle:
+                    handle.write(payload["after"])
             except Exception as exc:
                 return self._record_execution_failure(store, arguments["token"], effect, exc)
             return self._consume_success(
@@ -597,6 +879,8 @@ class ApprovePendingActionTool(BaseTool):
                     "workspace_root": str(self.workspace),
                     "token": arguments["token"],
                     "diff": payload["details"].get("diff", ""),
+                    "checkpoint": checkpoint,
+                    "checkpoint_id": checkpoint["checkpoint_id"],
                     "persisted": True,
                     "lifecycle": {"state": "grant_consumed"},
                     "effect": effect,
@@ -709,6 +993,8 @@ class ApprovePendingActionTool(BaseTool):
             )
         if action_type == "attachment_import":
             try:
+                from pp_agent.attachments.importer import AttachmentWorkspaceImporter
+
                 importer = AttachmentWorkspaceImporter(self.workspace)
                 result = importer.complete_import_after_approval(payload.get("details", {}))
             except Exception as exc:
@@ -1535,11 +1821,78 @@ class ApprovePendingActionTool(BaseTool):
             raise ValueError("Approval invalidated: approval grant does not match the current effect.")
         if grant.get("payload_digest") != effect.get("payload_digest"):
             raise ValueError("Approval invalidated: payload digest no longer matches the approved effect.")
+        if payload.get("action_type") in {"write_file", "edit_file"}:
+            self._validate_file_patch_proposal(payload, grant)
         current_effect = self._current_effect(payload, effect)
         if current_effect["payload_digest"] != effect["payload_digest"]:
             raise ValueError("Approval invalidated: payload digest changed after approval.")
         if current_effect["summary"] != effect["summary"]:
             raise ValueError("Approval invalidated: effect summary changed after approval.")
+
+    @staticmethod
+    def _current_proposal_digest(payload: dict[str, Any]) -> str | None:
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        proposal = details.get("patch_proposal") if isinstance(details, dict) else None
+        if not isinstance(proposal, dict):
+            return None
+        return patch_proposal_digest(proposal)
+
+    def _create_file_edit_checkpoint(self, *, token: str, payload: dict[str, Any], path: Path) -> dict[str, Any]:
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        proposal = details.get("patch_proposal") if isinstance(details, dict) else {}
+        is_new_file = bool(proposal.get("is_new_file")) if isinstance(proposal, dict) else False
+        existed = not is_new_file
+        before_text = str(payload.get("before") or "")
+        checkpoint_id = f"file-edit-{uuid.uuid4().hex}"
+        checkpoint_root = self.pending_root() / "file-checkpoints"
+        checkpoint_root.mkdir(parents=True, exist_ok=True)
+        content_path: Path | None = None
+        if existed:
+            content_path = checkpoint_root / f"{checkpoint_id}.content.txt"
+            with content_path.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(before_text)
+        target_label = _workspace_relative_path(self.workspace, path)
+        checkpoint = {
+            "kind": "file_edit_checkpoint",
+            "version": 1,
+            "checkpoint_id": checkpoint_id,
+            "token": token,
+            "action_type": payload.get("action_type"),
+            "target_path": target_label,
+            "absolute_path": str(path),
+            "before_state": "present" if existed else "absent",
+            "existed": existed,
+            "before_digest": content_digest(before_text) if existed else None,
+            "content_path": str(content_path) if content_path is not None else None,
+            "created_at": time.time(),
+        }
+        metadata_path = checkpoint_root / f"{checkpoint_id}.json"
+        checkpoint["metadata_path"] = str(metadata_path)
+        metadata_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        return checkpoint
+
+    def _validate_file_patch_proposal(self, payload: dict[str, Any], grant: dict[str, Any]) -> None:
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        proposal = details.get("patch_proposal") if isinstance(details, dict) else None
+        if not isinstance(proposal, dict):
+            raise ValueError("Approval invalidated: patch proposal is missing.")
+        approved_digest = str(grant.get("proposal_digest") or "")
+        if not approved_digest:
+            raise ValueError("Approval invalidated: approved proposal digest is missing.")
+        current_digest = patch_proposal_digest(proposal)
+        if current_digest != approved_digest:
+            raise ValueError("Approval invalidated: proposal digest mismatch.")
+        path = self.enforce_policy_for_path(PermissionDomain.EDIT, payload["target_path"])
+        expected_before_digest = str(proposal.get("before_digest") or "")
+        if bool(proposal.get("is_new_file")):
+            if path.exists():
+                raise ValueError("Approval invalidated: target unexpectedly exists for new file proposal (baseline changed from absent to present).")
+            return
+        if not path.exists():
+            raise ValueError("Approval invalidated: target missing if expected existing file (baseline changed from present to absent).")
+        current = validate_text_edit_target(path)
+        if content_digest(current) != expected_before_digest:
+            raise ValueError("Approval invalidated: baseline changed for patch proposal (file baseline content changed).")
 
     @staticmethod
     def _lifecycle(state: str, failure_reason_code: str | None = None, failure_reason_detail: str | None = None) -> dict[str, Any]:
@@ -1726,7 +2079,7 @@ class ApprovePendingActionTool(BaseTool):
             else:
                 if not path.exists():
                     raise ValueError("Approval invalidated: file baseline changed from present to absent.")
-                current = path.read_text(encoding="utf-8")
+                current = validate_text_edit_target(path)
                 if content_digest(current) != baseline["content_digest"]:
                     raise ValueError("Approval invalidated: file baseline content changed.")
             return build_file_effect(
@@ -1796,6 +2149,7 @@ class ApprovePendingActionTool(BaseTool):
             target_path = str(details.get("target_path") or "")
             if not attachment_id or not session_id or not target_path:
                 raise ValueError("Approval invalidated: attachment import details are incomplete.")
+            from pp_agent.attachments.importer import AttachmentWorkspaceImporter
             from pp_agent.attachments.service import AttachmentService
 
             record = AttachmentService(self.workspace)._require_active(session_id, attachment_id)

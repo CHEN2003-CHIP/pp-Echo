@@ -164,6 +164,9 @@ class PendingActionStore:
         if effect is None:
             raise ValueError("Pending action is missing an effect record.")
         payload["approval_grant"] = create_approval_grant(effect, granted_by=granted_by)
+        proposal_digest = _proposal_digest_from_payload(payload)
+        if proposal_digest:
+            payload["approval_grant"]["proposal_digest"] = proposal_digest
         payload["lifecycle"] = lifecycle_snapshot("grant_attached")
         self.save(token, payload)
         return payload
@@ -240,6 +243,17 @@ def create_approval_grant(effect: dict[str, Any], *, granted_by: str = "host") -
         "invalidated_at": None,
         "consumed_at": None,
     }
+
+
+def _proposal_digest_from_payload(payload: dict[str, Any]) -> str | None:
+    details = payload.get("details")
+    if not isinstance(details, dict):
+        return None
+    proposal = details.get("patch_proposal")
+    if not isinstance(proposal, dict):
+        return None
+    digest = proposal.get("proposal_digest")
+    return str(digest) if digest else None
 
 
 def is_active_pending_action(item: dict[str, Any]) -> bool:

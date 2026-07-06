@@ -155,7 +155,7 @@ def _model_input_preview_trace(pack: ContextPack) -> dict[str, object]:
         nonlocal total_chars, total_preview_chars
         entry = ensure_section(section, role)
         chars = len(text)
-        preview = _safe_model_input_preview(text)
+        preview = _safe_trace_preview_for_section(section, text)
         current_text = str(entry["text"])
         separator = "\n\n" if current_text else ""
         next_text = f"{current_text}{separator}{header}\n{preview}".strip()
@@ -214,6 +214,13 @@ def _safe_model_input_preview(text: str) -> str:
     if len(cleaned) <= MODEL_INPUT_PREVIEW_LIMIT:
         return cleaned
     return cleaned[:MODEL_INPUT_PREVIEW_LIMIT].rstrip() + "\n[message preview truncated]"
+
+
+def _safe_trace_preview_for_section(section: str, text: str) -> str:
+    if section in {"attachments", "attachment_previews"}:
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return f"[attachment preview redacted for trace; chars={len(text)}; hash={digest}]"
+    return _safe_model_input_preview(text)
 
 
 def _hide_private_reasoning(text: str) -> str:

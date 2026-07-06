@@ -34,7 +34,10 @@ from pp_agent.tools.file_tools import (
     PreviewPendingActionTool,
     ReadFileTool,
     RejectPendingActionTool,
+    RollbackFileCheckpointTool,
     WriteFileTool,
+    reject_symlink_edit_path,
+    validate_text_edit_target,
 )
 from pp_agent.tools.effects import (
     analyze_extension_call,
@@ -75,7 +78,7 @@ if TYPE_CHECKING:
 
 
 _WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "execute_safe_rewind"}
-_APPROVAL_EXECUTE_TOOLS = {"approve_pending_action", "reject_pending_action"}
+_APPROVAL_EXECUTE_TOOLS = {"approve_pending_action", "reject_pending_action", "rollback_file_checkpoint"}
 _ATTACHMENT_TOOLS = {
     "list_attachments",
     "inspect_attachment",
@@ -347,6 +350,7 @@ class ToolRegistry:
             "edit_file": self.policy.confirm_edit_file,
             "approve_pending_action": True,
             "reject_pending_action": True,
+            "rollback_file_checkpoint": True,
             "run_shell": self.policy.confirm_run_shell,
         }
         self._registrations = self._build_builtin_registrations()
@@ -999,15 +1003,17 @@ class ToolRegistry:
         raise PermissionError(f"Tool '{name}' is not supported in isolated worktree mode.")
 
     def _execute_worktree_write(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self._resolve_worktree_path(arguments["path"])
         overwrite = bool(arguments.get("overwrite", False))
         existed = path.exists()
-        before = path.read_text(encoding="utf-8") if existed else ""
+        after = str(arguments["content"])
+        before = validate_text_edit_target(path, content=after)
         if existed and not overwrite:
             raise ValueError("File already exists. Re-run with overwrite=true after confirming the diff.")
-        after = str(arguments["content"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(after, encoding="utf-8")
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(after)
         effect = build_file_effect(
             workspace=self.workspace,
             tool_name="write_file",
@@ -1025,8 +1031,9 @@ class ToolRegistry:
         )
 
     def _execute_worktree_edit(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        reject_symlink_edit_path(self.workspace, str(arguments["path"]))
         path = self._resolve_worktree_path(arguments["path"])
-        original = path.read_text(encoding="utf-8")
+        original = validate_text_edit_target(path)
         if arguments.get("diff"):
             updated, replacements = EditFileTool._apply_search_replace_diff(original, arguments["diff"])
         else:
@@ -1038,7 +1045,8 @@ class ToolRegistry:
             if updated == original:
                 raise ValueError("old_text was not found in file")
             replacements = 1
-        path.write_text(updated, encoding="utf-8")
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(updated)
         effect = build_file_effect(
             workspace=self.workspace,
             tool_name="edit_file",
@@ -1148,6 +1156,7 @@ class ToolRegistry:
             self._registration("preview_pending_action", self._spec_preview_pending_action, lambda: PreviewPendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self)),
             self._registration("approve_pending_action", self._spec_approve_pending_action, lambda: ApprovePendingActionTool(self.workspace, self.policy_evaluator, tool_registry=self, sandbox_executor=self.sandbox_executor)),
             self._registration("reject_pending_action", self._spec_reject_pending_action, lambda: RejectPendingActionTool(self.workspace, self.policy_evaluator)),
+            self._registration("rollback_file_checkpoint", self._spec_rollback_file_checkpoint, lambda: RollbackFileCheckpointTool(self.workspace, self.policy_evaluator)),
             self._registration("list_pending_actions", self._spec_list_pending_actions, lambda: ListPendingActionsTool(self.workspace, self.policy_evaluator)),
             self._registration("list_files", self._spec_list_files, lambda: ListFilesTool(self.workspace, self.policy_evaluator)),
             self._registration("search_text", self._spec_search_text, lambda: SearchTextTool(self.workspace, self.policy_evaluator)),
@@ -1465,6 +1474,18 @@ class ToolRegistry:
             name="reject_pending_action",
             description="Reject and remove a staged file edit or shell command by token.",
             parameters={"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]},
+            requires_confirmation=True,
+            permission_domain=PermissionDomain.APPROVAL,
+            sensitive=True,
+            model_callable=False,
+        )
+
+    @staticmethod
+    def _spec_rollback_file_checkpoint() -> ToolSpec:
+        return ToolSpec(
+            name="rollback_file_checkpoint",
+            description="Restore a single file from a file edit checkpoint by checkpoint_id.",
+            parameters={"type": "object", "properties": {"checkpoint_id": {"type": "string"}}, "required": ["checkpoint_id"]},
             requires_confirmation=True,
             permission_domain=PermissionDomain.APPROVAL,
             sensitive=True,

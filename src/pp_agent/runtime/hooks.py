@@ -2,6 +2,8 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
+from typing import TYPE_CHECKING
 from typing import Literal
 from typing import Optional
 
@@ -18,7 +20,11 @@ from pp_agent.runtime.lifecycle import (
 )
 from pp_agent.runtime.state import AgentState
 from pp_agent.tools.base import ToolExecutionResult
-from pp_agent.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from pp_agent.tools.registry import ToolRegistry
+else:
+    ToolRegistry = Any
 
 
 class BeforeToolCallDecision(BaseModel):

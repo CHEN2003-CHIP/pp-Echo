@@ -9,6 +9,7 @@ from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.subagents.capabilities import SubAgentProfile, ToolCapabilityPolicy, WorkspacePolicy
 from pp_agent.subagents.worktree import WorktreeManager
 from pp_agent.tools.base import ToolExecutionResult
+from pp_agent.tools.file_tools import MAX_EDIT_FILE_BYTES
 from pp_agent.tools.policy import PermissionDomain
 from pp_agent.tools.registry import ToolRegistry
 
@@ -68,6 +69,18 @@ def test_worktree_write_file_produces_patch_artifact_and_parent_approve_applies(
     approval = ToolRegistry(tmp_path).host_execute("approve_pending_action", {"token": payload["token"]})
     assert approval.is_error is False
     assert (tmp_path / "demo.txt").read_text(encoding="utf-8") == "child\n"
+
+
+def test_worktree_write_file_reuses_safe_edit_guard(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = WorktreeManager(tmp_path)
+    handle = manager.create(run_id="run-guard", agent="code-worker", node_id="code_patch", attempt=1)
+    registry = ToolRegistry(Path(handle.worktree_path), capability_profile=_worktree_profile())
+
+    with pytest.raises(ValueError, match="large content"):
+        registry.execute("write_file", {"path": "large.txt", "content": "x" * (MAX_EDIT_FILE_BYTES + 1)})
+
+    assert not (Path(handle.worktree_path) / "large.txt").exists()
 
 
 def test_worktree_shell_denies_network_and_allows_workspace_local_patch(tmp_path: Path) -> None:

@@ -1,5 +1,46 @@
 # 03 Decisions
 
+## ADR-002：Mission 02B 采用单文件安全编辑闭环
+
+状态：Accepted
+
+日期：2026-07-05
+
+背景：
+
+Mission 02B 需要把普通 `write_file` / `edit_file` 从“能改文件”推进到“可预览、可批准、可校验、可 checkpoint、可手动 rollback”的产品化闭环。但 pp-Echo 仍处于 solo MVP 阶段，不适合过早抽象复杂 domain model 或多文件事务系统。
+
+决策：
+
+- 当前周期只做单文件安全编辑闭环。
+- `patch_proposal` 暂时保持轻量 dict，不抽 dataclass / domain model。
+- `diff_preview` 从 `patch_proposal` 派生。
+- approval 绑定 `proposal_digest`，apply 前校验 proposal digest 和 baseline。
+- v0.2 当前 checkpoint runtime storage 使用 `.pp-agent/pending-edits/file-checkpoints/`。该位置是当前实现约定，未来可随 retention、session storage、workspace state 设计演进迁移。
+- `rollback_file_checkpoint` 保持 host-only，不暴露给模型普通 tool list。
+- `rollback_file_checkpoint` 归入 approval execute/control capability。
+- rollback status 保留 `restored` / `restored_absent` / `already_absent`。
+- Windows newline 使用保真写读，不让平台自动转换 proposal/checkpoint 中的换行。
+
+原因：
+
+- 单文件闭环足够支撑当前 Coding Agent MVP 的第一版安全写盘体验。
+- 轻量 dict 更符合当前 solo MVP 的维护成本。
+- host-only rollback 避免模型直接触发恢复操作。
+- newline 保真可以避免 Windows 平台下 digest/baseline 因换行转换产生误判。
+
+影响：
+
+- 多文件事务、Git rollback、自动 rollback、完整 audit log 延后。
+- 后续如果 `patch_proposal` 字段继续增长，再考虑正式 contract / dataclass。
+- checkpoint retention / cleanup policy 需要后续补齐。
+
+后续检查点：
+
+- Mission 03 前做一次 git diff review 和人工范围确认。
+- 在支持 symlink 的环境补跑 symlink tests。
+- 在进入更大范围功能前补一次全量或更大范围回归测试。
+
 本文件记录 Solo AI-native 项目治理决策。复杂技术架构 ADR 仍可放在 `docs/adr/`。
 
 ## ADR 模板
