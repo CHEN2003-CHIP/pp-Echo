@@ -1,5 +1,50 @@
 # 02 Missions
 
+## Mission 02B：安全文件编辑闭环最小实现
+
+状态：Completed / 待人工最终 review
+
+详情文档：
+
+- `solo-workdocs/mission-docs/07-mission-02B-safe-file-edit-closeout.md`
+
+目标：
+
+形成最小单文件安全文件编辑闭环：
+
+`stage -> preview -> approve -> digest/baseline check -> checkpoint -> write -> rollback`
+
+已完成：
+
+- 02B-1：`write_file` / `edit_file` 安全 guard。
+- 02B-2：`patch_proposal` / `diff_preview` 收敛。
+- 02B-3：approval digest / baseline 校验。
+- 02B-4：checkpoint before edit。
+- 02B-4.5：focused test 独立收集循环导入修复。
+- 02B-5：`rollback_file_checkpoint` 单文件 rollback。
+- 02B-6：ToolRegistry / capability / host-only 边界检查。
+- 02B-7：最小 e2e 验证。
+
+验收结果：
+
+- 02B-7 e2e tests：`3 passed`。
+- 02B-1/2/3/4/5/6/7 focused 集合：`40 passed, 3 skipped`。
+- worktree guard 独立测试：`1 passed`。
+
+不做：
+
+- 多文件事务。
+- Git rollback。
+- 自动 rollback。
+- 完整 audit log 重构。
+- checkpoint 存储位置重构。
+- AST 编辑。
+- 自动 commit。
+- 三方 API。
+- IDE。
+- GitHub PR。
+- Mission 03。
+
 Mission 是一段时间内最重要的推进目标。每个 Mission 使用 Mission -> Task -> Check。
 
 `solo-workdocs/02-missions.md` 只作为 Mission 索引、模板和状态总览。

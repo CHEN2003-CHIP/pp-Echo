@@ -1,5 +1,18 @@
 # 04 Risks
 
+## Mission 02B 后续风险
+
+| 风险 | 风险等级 | 触发信号 | 应对策略 |
+| --- | --- | --- | --- |
+| 尚未跑全量测试 | 中 | focused tests 通过但全量 suite 未验证 | Mission 03 前或提交前补一次全量/更大范围回归 |
+| symlink tests 未在当前 Windows 环境完整执行 | 中 | symlink 相关测试 `skipped` | 在支持 symlink 的环境补跑；保留当前 symlink 一律拒绝策略 |
+| rollback 缺少完整 audit log | 中 | 用户无法从统一审计视图追踪 rollback 操作 | 后续补最小 rollback audit metadata，再评估是否需要完整 audit log |
+| checkpoint content 依赖 pending-edits 文件存在 | 中 | `.pp-agent/pending-edits/file-checkpoints/` 被清理或损坏 | 后续设计 checkpoint retention / cleanup policy |
+| patch candidate 多文件路径仍使用原有写入方式 | 中 | 多文件候选绕过 02B 单文件闭环 | 多文件事务放入后续 Mission，不在 02B 中扩大 |
+| 动态 extension 直接写盘仍需治理 | 中 | extension 或 runtime 外路径直接写文件 | 后续 Mission 检查 extension direct write policy |
+| `patch_proposal` dict 字段增长失控 | 低 | 测试开始依赖隐式字段或字段语义不清 | 字段稳定后再抽正式 contract / dataclass |
+| checkpoint 缺少 retention / cleanup policy | 中 | pending checkpoint 越积越多或被误删 | 后续定义保留周期、清理命令和用户确认点 |
+
 风险清单用于提前发现失控信号。每周复盘时检查一次。
 
 ## 风险清单
