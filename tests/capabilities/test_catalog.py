@@ -113,13 +113,14 @@ def test_capability_catalog_list_and_get_are_stable(tmp_path: Path, monkeypatch:
 
     builtin_tools = catalog.list(kind="builtin_tool")
     builtin_names = [item.name for item in builtin_tools]
-    assert builtin_names[:15] == [
+    assert builtin_names[:16] == [
         "read_file",
         "write_file",
         "edit_file",
         "preview_pending_action",
         "approve_pending_action",
         "reject_pending_action",
+        "rollback_file_checkpoint",
         "list_pending_actions",
         "list_files",
         "search_text",
@@ -130,7 +131,14 @@ def test_capability_catalog_list_and_get_are_stable(tmp_path: Path, monkeypatch:
         "inspect_attachment",
         "search_attachment",
     ]
-    assert builtin_names[20:23] == ["preview_safe_rewind", "execute_safe_rewind", "run_shell"]
+    rollback = catalog.get("builtin_tool", "rollback_file_checkpoint")
+    assert rollback.metadata["category"] == "approvals"
+    assert rollback.metadata["requires_confirmation"] is True
+    assert rollback.metadata["model_callable"] is False
+    assert rollback.risk_level == "safe"
+    assert rollback.permissions_required == ["approval"]
+    assert rollback.effects == ["workspace_write"]
+    assert builtin_names[21:24] == ["preview_safe_rewind", "execute_safe_rewind", "run_shell"]
     assert "memory_search" in builtin_names
     assert "memory_get" in builtin_names
     assert catalog.get("builtin_tool", "run_shell").source == "builtin:run_shell"

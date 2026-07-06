@@ -1,18 +1,21 @@
 from pathlib import Path
 import difflib
+import json
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
 from pp_agent.domain import ToolCall
 from pp_agent.extensions.api import ExtensionAPI
 from pp_agent.extensions.descriptor import ExtensionDescriptor
-from pp_agent.tools.effects import analyze_file_call, analyze_mcp_call, build_shell_effect
+from pp_agent.tools.effects import analyze_file_call, analyze_mcp_call, build_shell_effect, content_digest
 from pp_agent.runtime.session_host import SessionHost
 from pp_agent.tools import session_tools
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.settings import ToolPolicyConfig
-from pp_agent.tools.file_tools import MAX_EDIT_FILE_BYTES
+from pp_agent.subagents.capabilities import CapabilityAdmissionGate, SubAgentProfile, ToolCapabilityPolicy, WorkspacePolicy
+from pp_agent.tools.file_tools import ApprovePendingActionTool, MAX_EDIT_FILE_BYTES, unified_text_diff
 from pp_agent.tools.registry import ToolRegistry
 
 
@@ -762,11 +765,50 @@ def test_host_only_approval_tools_are_hidden_from_model_calls(tmp_path: Path) ->
 
     assert "approve_pending_action" not in model_tools
     assert "reject_pending_action" not in model_tools
+    assert "rollback_file_checkpoint" not in model_tools
     assert "preview_pending_action" not in model_tools
     assert "list_pending_actions" not in model_tools
 
     with pytest.raises(PermissionError, match="host-only"):
         registry.execute("approve_pending_action", {"token": "tok-1"})
+    with pytest.raises(PermissionError, match="host-only"):
+        registry.execute("rollback_file_checkpoint", {"checkpoint_id": "file-edit-1"})
+
+
+def test_rollback_file_checkpoint_registry_metadata_is_host_control(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    metadata = registry.metadata()["rollback_file_checkpoint"]
+
+    assert metadata.category == "approvals"
+    assert metadata.permission_domain == "approval"
+    assert metadata.requires_confirmation is True
+    assert metadata.sensitive is True
+    assert metadata.model_callable is False
+    assert metadata.tool_family is None
+    assert metadata.exact_effect_mode == "none"
+
+
+def test_capability_profiles_treat_rollback_as_approval_execute_tool(tmp_path: Path) -> None:
+    staged_profile = SubAgentProfile(
+        name="staged-worker",
+        tool=ToolCapabilityPolicy(allowlist=["rollback_file_checkpoint"]),
+        workspace=WorkspacePolicy(mode="staged_edits"),
+    )
+    worktree_profile = SubAgentProfile(
+        name="worktree-worker",
+        tool=ToolCapabilityPolicy(allowlist=["rollback_file_checkpoint"]),
+        workspace=WorkspacePolicy(mode="worktree", allow_write_tools=True),
+    )
+
+    assert CapabilityAdmissionGate.allow_tool(staged_profile, "rollback_file_checkpoint") is False
+    assert CapabilityAdmissionGate.allow_tool(worktree_profile, "rollback_file_checkpoint") is False
+    assert ToolRegistry(tmp_path, capability_profile=staged_profile).metadata()["rollback_file_checkpoint"].model_callable is False
+    with pytest.raises(PermissionError, match="capability profile"):
+        ToolRegistry(tmp_path, capability_profile=worktree_profile).host_execute(
+            "rollback_file_checkpoint",
+            {"checkpoint_id": "file-edit-1"},
+        )
 
 
 def test_approved_effect_executes_with_digest_bound_grant(tmp_path: Path) -> None:
@@ -805,6 +847,16 @@ def test_attach_approval_grant_moves_pending_action_to_grant_attached(tmp_path: 
     assert payload["lifecycle"]["state"] == "grant_attached"
 
 
+def test_approval_grant_binds_patch_proposal_digest(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    payload = store.attach_approval_grant(staged.details["token"])
+
+    assert payload["approval_grant"]["proposal_digest"] == payload["details"]["patch_proposal"]["proposal_digest"]
+
+
 def test_consumed_approval_is_archived_and_idempotent(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
@@ -818,6 +870,317 @@ def test_consumed_approval_is_archived_and_idempotent(tmp_path: Path) -> None:
     assert archived["lifecycle"]["state"] == "grant_consumed"
     assert repeated.details["idempotent"] is True
     assert repeated.details["success"] is True
+
+
+def test_approve_applies_same_write_file_patch_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.details["approval_grant"]["proposal_digest"] == staged.details["proposal_digest"]
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha"
+
+
+def test_approve_applies_same_edit_file_patch_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    write = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    registry.host_execute("approve_pending_action", {"token": write.details["token"]})
+
+    staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.details["approval_grant"]["proposal_digest"] == staged.details["proposal_digest"]
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "beta"
+
+
+def test_edit_file_apply_creates_checkpoint_before_write(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+
+    staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    checkpoint = result.details["checkpoint"]
+    assert result.details["checkpoint_id"] == checkpoint["checkpoint_id"]
+    assert checkpoint["action_type"] == "edit_file"
+    assert checkpoint["target_path"] == "notes.txt"
+    assert checkpoint["existed"] is True
+    assert checkpoint["before_state"] == "present"
+    assert checkpoint["before_digest"] == content_digest("alpha")
+    assert Path(checkpoint["content_path"]).read_text(encoding="utf-8") == "alpha"
+    assert Path(checkpoint["metadata_path"]).exists()
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "beta"
+
+
+def test_overwrite_write_file_apply_creates_checkpoint_before_write(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "beta", "overwrite": True})
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    checkpoint = result.details["checkpoint"]
+    assert checkpoint["action_type"] == "write_file"
+    assert checkpoint["target_path"] == "notes.txt"
+    assert checkpoint["existed"] is True
+    assert checkpoint["before_digest"] == content_digest("alpha")
+    assert Path(checkpoint["content_path"]).read_text(encoding="utf-8") == "alpha"
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "beta"
+
+
+def test_new_write_file_apply_creates_absent_checkpoint(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    checkpoint = result.details["checkpoint"]
+    assert checkpoint["action_type"] == "write_file"
+    assert checkpoint["target_path"] == "notes.txt"
+    assert checkpoint["existed"] is False
+    assert checkpoint["before_state"] == "absent"
+    assert checkpoint["before_digest"] is None
+    assert checkpoint["content_path"] is None
+    assert Path(checkpoint["metadata_path"]).exists()
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha"
+
+
+def test_checkpoint_failure_rejects_write_and_preserves_original(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+
+    def fail_checkpoint(self, *, token, payload, path):
+        raise RuntimeError("checkpoint failed")
+
+    monkeypatch.setattr(ApprovePendingActionTool, "_create_file_edit_checkpoint", fail_checkpoint)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "beta", "overwrite": True})
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.is_error is True
+    assert "checkpoint failed" in result.content
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha"
+    payload = store.load(staged.details["token"])
+    assert payload["lifecycle"]["state"] == "execution_failed"
+
+
+def _write_file_checkpoint(
+    workspace: Path,
+    checkpoint_id: str,
+    *,
+    target_path: str,
+    before_state: str,
+    before_text: Optional[str] = None,
+    action_type: str = "edit_file",
+) -> dict[str, object]:
+    root = workspace / ".pp-agent" / "pending-edits" / "file-checkpoints"
+    root.mkdir(parents=True, exist_ok=True)
+    content_path = None
+    before_digest = None
+    if before_text is not None:
+        content_path = root / f"{checkpoint_id}.content.txt"
+        content_path.write_text(before_text, encoding="utf-8")
+        before_digest = content_digest(before_text)
+    payload: dict[str, object] = {
+        "kind": "file_edit_checkpoint",
+        "version": 1,
+        "checkpoint_id": checkpoint_id,
+        "token": "manual-test-token",
+        "action_type": action_type,
+        "target_path": target_path,
+        "absolute_path": str(workspace / target_path),
+        "before_state": before_state,
+        "existed": before_state == "present",
+        "before_digest": before_digest,
+        "content_path": str(content_path) if content_path is not None else None,
+        "created_at": 1.0,
+    }
+    metadata_path = root / f"{checkpoint_id}.json"
+    payload["metadata_path"] = str(metadata_path)
+    metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
+def test_rollback_edit_file_checkpoint_restores_old_content(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+    staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    applied = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    result = registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": applied.details["checkpoint_id"]})
+
+    assert result.details["checkpoint_id"] == applied.details["checkpoint_id"]
+    assert result.details["target_path"] == "notes.txt"
+    assert result.details["status"] == "restored"
+    assert result.details["restored_digest"] == content_digest("alpha")
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha"
+
+
+def test_rollback_overwrite_write_file_checkpoint_restores_old_content(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "beta", "overwrite": True})
+    applied = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    result = registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": applied.details["checkpoint_id"]})
+
+    assert result.details["action_type"] == "write_file"
+    assert result.details["status"] == "restored"
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha"
+
+
+def test_rollback_new_write_file_checkpoint_deletes_new_file(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    applied = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    result = registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": applied.details["checkpoint_id"]})
+
+    assert result.details["before_state"] == "absent"
+    assert result.details["status"] == "restored_absent"
+    assert result.details["restored_state"] == "absent"
+    assert (tmp_path / "notes.txt").exists() is False
+
+
+def test_rollback_absent_checkpoint_returns_already_absent(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    _write_file_checkpoint(tmp_path, "file-edit-already-absent", target_path="notes.txt", before_state="absent")
+
+    result = registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": "file-edit-already-absent"})
+
+    assert result.details["status"] == "already_absent"
+    assert result.details["target_path"] == "notes.txt"
+    assert (tmp_path / "notes.txt").exists() is False
+
+
+def test_rollback_rejects_missing_checkpoint_id(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="File checkpoint not found"):
+        registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": "missing"})
+
+
+def test_rollback_rejects_missing_checkpoint_content(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("beta", encoding="utf-8")
+    _write_file_checkpoint(tmp_path, "file-edit-missing-content", target_path="notes.txt", before_state="present")
+
+    with pytest.raises(FileNotFoundError, match="checkpoint content is missing"):
+        registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": "file-edit-missing-content"})
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "beta"
+
+
+def test_rollback_rejects_symlink_target(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    target = tmp_path / "target.txt"
+    target.write_text("safe", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable in this environment")
+    _write_file_checkpoint(tmp_path, "file-edit-symlink", target_path="link.txt", before_state="absent")
+
+    with pytest.raises(PermissionError, match="symlink"):
+        registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": "file-edit-symlink"})
+
+    assert target.read_text(encoding="utf-8") == "safe"
+
+
+def test_rollback_rejects_directory_target(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").mkdir()
+    _write_file_checkpoint(tmp_path, "file-edit-directory", target_path="notes.txt", before_state="absent")
+
+    with pytest.raises(ValueError, match="non-file path"):
+        registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": "file-edit-directory"})
+
+    assert (tmp_path / "notes.txt").is_dir()
+
+
+def test_rollback_rejects_protected_path(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    _write_file_checkpoint(tmp_path, "file-edit-protected", target_path=".env", before_state="absent")
+
+    with pytest.raises(PermissionError):
+        registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": "file-edit-protected"})
+
+    assert (tmp_path / ".env").exists() is False
+
+
+def test_e2e_safe_write_new_file_preview_approve_checkpoint_and_rollback(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\n"})
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+
+    assert staged.details["staged"] is True
+    assert preview.details["details"]["diff_preview"]["kind"] == "diff_preview"
+    assert preview.details["details"]["diff_preview"]["proposal_digest"] == staged.details["proposal_digest"]
+    assert (tmp_path / "notes.txt").exists() is False
+
+    applied = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert applied.details["checkpoint_id"]
+    assert applied.details["checkpoint"]["before_state"] == "absent"
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\n"
+
+    rolled_back = registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": applied.details["checkpoint_id"]})
+
+    assert rolled_back.details["status"] == "restored_absent"
+    assert rolled_back.details["restored_state"] == "absent"
+    assert (tmp_path / "notes.txt").exists() is False
+
+
+def test_e2e_safe_write_overwrite_preview_approve_checkpoint_and_rollback(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("alpha\n", encoding="utf-8")
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "beta\n", "overwrite": True})
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+
+    assert preview.details["details"]["diff_preview"]["diff_text"] == staged.details["patch_proposal"]["unified_diff"]
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\n"
+
+    applied = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert applied.details["checkpoint"]["before_state"] == "present"
+    assert Path(applied.details["checkpoint"]["content_path"]).read_text(encoding="utf-8") == "alpha\n"
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "beta\n"
+
+    rolled_back = registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": applied.details["checkpoint_id"]})
+
+    assert rolled_back.details["status"] == "restored"
+    assert rolled_back.details["restored_digest"] == applied.details["checkpoint"]["before_digest"]
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\n"
+
+
+def test_e2e_safe_edit_preview_approve_checkpoint_and_rollback(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+
+    staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "beta", "new_text": "gamma"})
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+
+    assert preview.details["details"]["diff_preview"]["proposal_digest"] == staged.details["proposal_digest"]
+    assert "gamma" not in (tmp_path / "notes.txt").read_text(encoding="utf-8")
+
+    applied = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert applied.details["checkpoint"]["before_state"] == "present"
+    assert Path(applied.details["checkpoint"]["content_path"]).read_text(encoding="utf-8") == "alpha\nbeta\n"
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\ngamma\n"
+
+    rolled_back = registry.host_execute("rollback_file_checkpoint", {"checkpoint_id": applied.details["checkpoint_id"]})
+
+    assert rolled_back.details["status"] == "restored"
+    assert rolled_back.details["restored_digest"] == applied.details["checkpoint"]["before_digest"]
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
 def test_modified_file_effect_is_rejected_after_prior_approval(tmp_path: Path) -> None:
@@ -839,6 +1202,23 @@ def test_modified_file_effect_is_rejected_after_prior_approval(tmp_path: Path) -
     assert updated["latest_audit"]["lifecycle_state"] == "grant_invalidated"
 
 
+def test_modified_patch_proposal_is_rejected_after_prior_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    token = staged.details["token"]
+    payload = store.attach_approval_grant(token)
+    payload["details"]["patch_proposal"]["unified_diff"] += "\n+tampered"
+    store.save(token, payload)
+
+    with pytest.raises(ValueError, match="proposal digest mismatch"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    updated = store.load(token)
+    assert updated["lifecycle"]["state"] == "grant_invalidated"
+    assert updated["approval_grant"]["status"] == "invalidated"
+
+
 def test_file_baseline_distinguishes_absent_to_present(tmp_path: Path) -> None:
     registry = ToolRegistry(tmp_path)
     store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
@@ -852,6 +1232,20 @@ def test_file_baseline_distinguishes_absent_to_present(tmp_path: Path) -> None:
 
     updated = store.load(token)
     assert updated["lifecycle"]["state"] == "grant_invalidated"
+
+
+def test_new_write_file_rejects_target_unexpectedly_created_after_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha"})
+    token = staged.details["token"]
+    store.attach_approval_grant(token)
+    (tmp_path / "notes.txt").write_text("external", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="target unexpectedly exists"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "external"
 
 
 def test_file_baseline_distinguishes_present_to_absent(tmp_path: Path) -> None:
@@ -868,6 +1262,49 @@ def test_file_baseline_distinguishes_present_to_absent(tmp_path: Path) -> None:
 
     updated = store.load(token)
     assert updated["lifecycle"]["state"] == "grant_invalidated"
+
+
+def test_edit_file_rejects_external_change_after_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+    staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    token = staged.details["token"]
+    store.attach_approval_grant(token)
+    (tmp_path / "notes.txt").write_text("external", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="baseline changed"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "external"
+
+
+def test_overwrite_write_file_rejects_external_change_after_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "beta", "overwrite": True})
+    token = staged.details["token"]
+    store.attach_approval_grant(token)
+    (tmp_path / "notes.txt").write_text("external", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="baseline changed"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "external"
+
+
+def test_existing_file_proposal_rejects_missing_target_after_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    (tmp_path / "notes.txt").write_text("alpha", encoding="utf-8")
+    staged = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    token = staged.details["token"]
+    store.attach_approval_grant(token)
+    (tmp_path / "notes.txt").unlink()
+
+    with pytest.raises(ValueError, match="target missing"):
+        registry.host_execute("approve_pending_action", {"token": token})
 
 
 def test_modified_shell_effect_is_rejected_after_prior_approval(tmp_path: Path) -> None:
@@ -1989,6 +2426,100 @@ def test_preview_pending_action_shows_shared_analysis_for_file_effects(tmp_path:
     assert "Confidence: high" in preview.content
     assert "Lifecycle state: staged_not_granted" in preview.content
     assert "Protected path hint: False" in preview.content
+
+
+def test_write_file_staged_action_has_patch_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\n"})
+    payload = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").load(staged.details["token"])
+    proposal = payload["details"]["patch_proposal"]
+
+    assert proposal["kind"] == "patch_proposal"
+    assert proposal["action_type"] == "write_file"
+    assert proposal["target_path"] == "notes.txt"
+    assert proposal["is_new_file"] is True
+    assert proposal["overwrite"] is False
+    assert proposal["unified_diff"] == payload["details"]["diff"]
+    assert proposal["proposal_digest"]
+    assert proposal["diff_digest"]
+
+
+def test_edit_file_staged_action_has_patch_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged_write = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\n"})
+    registry.host_execute("approve_pending_action", {"token": staged_write.details["token"]})
+
+    staged_edit = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    payload = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").load(staged_edit.details["token"])
+    proposal = payload["details"]["patch_proposal"]
+
+    assert proposal["kind"] == "patch_proposal"
+    assert proposal["action_type"] == "edit_file"
+    assert proposal["target_path"] == "notes.txt"
+    assert proposal["is_new_file"] is False
+    assert proposal["overwrite"] is False
+    assert proposal["unified_diff"] == payload["details"]["diff"]
+    assert proposal["proposal_digest"]
+    assert proposal["diff_digest"]
+
+
+def test_diff_preview_is_derived_from_patch_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\n"})
+
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    proposal = preview.details["details"]["patch_proposal"]
+    diff_preview = preview.details["details"]["diff_preview"]
+
+    assert preview.content.endswith(proposal["unified_diff"])
+    assert diff_preview["kind"] == "diff_preview"
+    assert diff_preview["diff_text"] == proposal["unified_diff"]
+    assert diff_preview["diff_digest"] == proposal["diff_digest"]
+    assert diff_preview["proposal_digest"] == proposal["proposal_digest"]
+    assert diff_preview["changed_files"] == ["notes.txt"]
+
+
+def test_write_file_and_edit_file_use_shared_unified_diff_generation(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    write = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\n"})
+    write_proposal = write.details["patch_proposal"]
+    assert write_proposal["unified_diff"] == unified_text_diff("", "alpha\n", tmp_path / "notes.txt")
+
+    registry.host_execute("approve_pending_action", {"token": write.details["token"]})
+    edit = registry.execute("edit_file", {"path": "notes.txt", "old_text": "alpha", "new_text": "beta"})
+    edit_proposal = edit.details["patch_proposal"]
+    assert edit_proposal["unified_diff"] == unified_text_diff("alpha\n", "beta\n", tmp_path / "notes.txt")
+
+
+def test_patch_proposal_digests_are_stable_for_same_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\n"})
+
+    first = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    second = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+
+    assert first.details["details"]["diff_preview"]["diff_digest"] == second.details["details"]["diff_preview"]["diff_digest"]
+    assert first.details["details"]["diff_preview"]["proposal_digest"] == second.details["details"]["diff_preview"]["proposal_digest"]
+
+
+def test_preview_digest_changes_when_staged_patch_proposal_changes(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("write_file", {"path": "notes.txt", "content": "alpha\n"})
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+
+    before = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    before_preview = before.details["details"]["diff_preview"]
+    payload = store.load(staged.details["token"])
+    payload["details"]["patch_proposal"]["unified_diff"] += "\n+tampered"
+    store.save(staged.details["token"], payload)
+
+    after = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    after_preview = after.details["details"]["diff_preview"]
+
+    assert after_preview["diff_text"].endswith("+tampered")
+    assert after_preview["diff_digest"] != before_preview["diff_digest"]
+    assert after_preview["proposal_digest"] != before_preview["proposal_digest"]
 
 
 def test_approval_grant_is_single_use_by_default(tmp_path: Path) -> None:
