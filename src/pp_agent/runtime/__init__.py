@@ -59,10 +59,31 @@ from pp_agent.runtime.lifecycle import (
 )
 from pp_agent.runtime.profile import RuntimeProfile
 from pp_agent.runtime.registry import RuntimeRegistry
-from pp_agent.runtime.runtime import AgentRuntime, AgentSession
 from pp_agent.runtime.safe_rewind import SafeRewindOrchestrator
-from pp_agent.runtime.session_host import ForkResult, NavigateResult, RewindResult, SessionHost, SessionTreeView, SwitchResult
 from pp_agent.runtime.state import AgentEvent, AgentState, TurnSnapshot
+
+
+def __getattr__(name: str):
+    if name in {"AgentRuntime", "AgentSession"}:
+        from pp_agent.runtime.runtime import AgentRuntime, AgentSession
+
+        values = {"AgentRuntime": AgentRuntime, "AgentSession": AgentSession}
+        globals().update(values)
+        return values[name]
+    if name in {"ForkResult", "NavigateResult", "RewindResult", "SessionHost", "SessionTreeView", "SwitchResult"}:
+        from pp_agent.runtime.session_host import ForkResult, NavigateResult, RewindResult, SessionHost, SessionTreeView, SwitchResult
+
+        values = {
+            "ForkResult": ForkResult,
+            "NavigateResult": NavigateResult,
+            "RewindResult": RewindResult,
+            "SessionHost": SessionHost,
+            "SessionTreeView": SessionTreeView,
+            "SwitchResult": SwitchResult,
+        }
+        globals().update(values)
+        return values[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "AfterToolCallDecision",
