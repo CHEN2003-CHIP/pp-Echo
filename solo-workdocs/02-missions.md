@@ -1,5 +1,42 @@
 # 02 Missions
 
+## Mission 03: Safe Tool Execution Loop
+
+Status: Ready for human review
+
+Details:
+
+- `solo-workdocs/mission-docs/08-mission-03-tool-execution-design.md`
+- `solo-workdocs/mission-docs/09-mission-03-tool-execution-closeout.md`
+
+Goal:
+
+Build the smallest safe command/test execution loop:
+
+`stage -> preview -> approve -> proposal digest check -> execute -> bounded result`
+
+Completed:
+
+- 03A: reference research and current-state design.
+- 03B: `CommandProposal` / `CommandPreview` convergence.
+- 03C: approval-bound command proposal digest verification.
+- 03D: bounded stdout/stderr execution result contract.
+- 03E: `stage_test_command` pytest helper.
+- 03F: registry / capability integration and worktree direct shell result contract check.
+- 03G: e2e demo, release gate, and docs closeout.
+
+Not done:
+
+- No new shell executor.
+- No auto-run tests.
+- No auto retry or auto repair.
+- No CI / GitHub Actions.
+- No package install automation.
+- No remote execution.
+- No multi-command transaction.
+- No background tasks.
+- No Mission 04.
+
 ## Mission 02B：安全文件编辑闭环最小实现
 
 状态：Completed / 待人工最终 review

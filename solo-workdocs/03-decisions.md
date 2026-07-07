@@ -1,5 +1,52 @@
 # 03 Decisions
 
+## ADR-003: Mission 03 Uses Proposal-Bound Shell Execution
+
+Status: Accepted
+
+Date: 2026-07-07
+
+Context:
+
+Mission 03 needs a safe MVP loop for shell/test execution without turning pp-Echo into an arbitrary shell relay. The existing `run_shell` path already stages commands for host approval and uses the sandbox executor; the missing product contract was what the user previews, approves, and receives after execution.
+
+Decision:
+
+- Keep `run_shell` as the single shell execution path.
+- Add lightweight dict `command_proposal` and `command_preview` contracts.
+- Bind approval to `command_proposal.proposal_digest`.
+- Bind the proposal digest to the original command text, not only the normalized command.
+- Use `normalized_command` only for display, comparison, and risk-analysis support.
+- Recompute proposal digest immediately before execution and reject mismatches.
+- Keep legacy shell pending actions without `command_proposal` as migration compatibility only.
+- Return bounded stdout/stderr result previews with metadata.
+- Use 8 KiB per stream as the v0.x default stdout/stderr preview limit.
+- Add `stage_test_command` as a narrow pytest helper that delegates to `run_shell`.
+- Keep pytest helper support limited to workspace-relative path targets; no node ids or extra args in MVP.
+- Use `permissions_required == ["bash"]` as the public capability catalog contract for shell execution risk.
+
+Rationale:
+
+- Reusing `run_shell` avoids a second executor and keeps approval, digest verification, policy, and result normalization centralized.
+- Original command text must be part of the approved proposal because that is what the user is authorizing.
+- Bounded output prevents trace/context growth and reduces leakage from command output.
+- A path-only pytest helper gives agents a safe way to recommend focused tests without accepting arbitrary shell syntax.
+
+Impact:
+
+- New staged `run_shell` actions must include `command_proposal`.
+- Preview derives from proposal metadata.
+- Approval after proposal tampering rejects execution.
+- `stage_test_command` is model-callable but still requires the `run_shell` approval loop.
+- Read-only profiles cannot use the test helper.
+
+Follow-up checks:
+
+- Decide whether package manager, git mutation, and network commands should become hard-deny or remain high-risk ask.
+- Consider configuration for stdout/stderr preview limits.
+- Design a separate allowlisted field before adding pytest node id support.
+- Remove legacy shell pending fallback after a future schema/version migration.
+
 ## ADR-002：Mission 02B 采用单文件安全编辑闭环
 
 状态：Accepted

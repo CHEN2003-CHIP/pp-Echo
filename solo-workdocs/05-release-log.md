@@ -1,5 +1,53 @@
 # 05 Release Log
 
+## v0.3.0-draft
+
+Date: 2026-07-07
+
+Current goal:
+
+Close Mission 03 safe command/test execution loop for human review.
+
+Added:
+
+- `command_proposal` for staged `run_shell` actions.
+- `command_preview` derived from `command_proposal`.
+- Approval-bound command proposal digest verification.
+- Bounded shell execution result contract with `returncode`, `timed_out`, `backend`, `duration_seconds`, `stdout_chars`, `stderr_chars`, and truncation flags.
+- 8 KiB stdout/stderr preview limit for v0.x runtime output.
+- `stage_test_command` pytest helper that stages a pending `run_shell` action.
+- Registry, capability, subagent, runtime schema, and worktree direct shell result contract coverage.
+- Mission 03 e2e demo test for `stage_test_command -> preview -> approve -> bounded result`.
+
+Changed:
+
+- Shell approval execution now rejects tampered command proposals for new staged `run_shell` actions.
+- Worktree direct shell result path reuses the bounded shell result helper.
+- Capability catalog uses `permissions_required == ["bash"]` as the public shell execution-risk contract.
+
+Verification:
+
+- `python -m pytest tests\tools\test_tools.py -q`: 191 passed, 3 skipped, 2 warnings.
+- `python -m pytest tests\tools\test_shell_sandbox_executor.py -q`: 112 passed, 2 warnings.
+- `python -m pytest tests\capabilities\test_catalog.py -q`: 13 passed, 2 warnings.
+- `python -m pytest tests\subagents -q`: 46 passed, 2 warnings.
+- `python -m pytest tests\runtime\test_tool_approval_trace_consistency.py -q`: 7 passed, 2 warnings.
+- `python -m pytest tests\runtime\test_tool_execution_context.py -q`: 19 passed, 2 warnings.
+- `python -m pytest tests -q`: 1389 passed, 4 skipped, 2 warnings.
+- `git diff --check`: passed with Git LF/CRLF warnings only.
+
+Known issues:
+
+- Legacy pending shell actions without `command_proposal` remain as migration compatibility.
+- Pytest helper supports only workspace-relative path targets.
+- Pytest node ids and extra args are not supported in MVP.
+- Shell policy around package manager, network, destructive, and git mutation commands can be strengthened later.
+
+Next step:
+
+- Human review Mission 03 diff and release gate results.
+- Prepare commit split after review; do not start Mission 04 on this branch.
+
 ## v0.2.0-draft
 
 日期：2026-07-05
