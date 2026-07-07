@@ -54,7 +54,11 @@ from pp_agent.tools.policy import ALLOW, ASK, PermissionDomain, ToolPolicyDecisi
 from pp_agent.tools.repo_tools import GitDiffWorktreeTool, GitStatusTool, GrepCodeTool
 from pp_agent.tools.search_tool import SearchTextTool
 from pp_agent.tools.session_tools import ExecuteSafeRewindTool, PreviewSafeRewindTool
-from pp_agent.tools.shell_tool import PowerShellTool
+from pp_agent.tools.shell_tool import (
+    PowerShellTool,
+    StageTestCommandTool,
+    build_pytest_command,
+)
 from pp_agent.tools.shell_tool import default_local_sandbox_executor
 from pp_agent.attachments.tools import (
     InspectAttachmentTool,
@@ -352,6 +356,7 @@ class ToolRegistry:
             "reject_pending_action": True,
             "rollback_file_checkpoint": True,
             "run_shell": self.policy.confirm_run_shell,
+            "stage_test_command": self.policy.confirm_run_shell,
         }
         self._registrations = self._build_builtin_registrations()
         self._builtin_registration_names = set(self._registrations)
@@ -715,10 +720,17 @@ class ToolRegistry:
         tool_family = metadata.tool_family or ("mcp" if metadata.category == "mcp" else "extension" if metadata.category == "extension" else None)
         if permission_domain == PermissionDomain.BASH:
             timeout = int(arguments.get("timeout_seconds", self.policy.shell_timeout_seconds))
+            command = str(arguments.get("command", ""))
+            if name == "stage_test_command":
+                command, _target = build_pytest_command(
+                    workspace=self.workspace,
+                    target=str(arguments.get("target") or ""),
+                    quiet=bool(arguments.get("quiet", True)),
+                )
             shell_effect = build_shell_effect(
                 tool_name=name,
                 permission_domain=permission_domain,
-                command=str(arguments.get("command", "")),
+                command=command,
                 timeout_seconds=timeout,
                 workspace=self.workspace,
             )
@@ -726,7 +738,7 @@ class ToolRegistry:
                 permission_domain=permission_domain,
                 tool_name=name,
                 tool_family=tool_family,
-                command=str(arguments.get("command", "")),
+                command=command,
                 analysis=shell_effect["analysis"],
             )
         if tool_family in {"extension", "mcp"}:
@@ -1177,6 +1189,16 @@ class ToolRegistry:
                 "run_shell",
                 self._spec_run_shell,
                 lambda: PowerShellTool(
+                    self.workspace,
+                    self.policy_evaluator,
+                    default_timeout_seconds=getattr(self.sandbox_config, "timeout_seconds", None) or self.policy.shell_timeout_seconds,
+                    sandbox_executor=self.sandbox_executor,
+                ),
+            ),
+            self._registration(
+                "stage_test_command",
+                self._spec_stage_test_command,
+                lambda: StageTestCommandTool(
                     self.workspace,
                     self.policy_evaluator,
                     default_timeout_seconds=getattr(self.sandbox_config, "timeout_seconds", None) or self.policy.shell_timeout_seconds,
@@ -1684,6 +1706,27 @@ class ToolRegistry:
                     "timeout_seconds": {"type": "integer"},
                 },
                 "required": ["command"],
+            },
+            requires_confirmation=True,
+            permission_domain=PermissionDomain.BASH,
+            sensitive=True,
+        )
+
+    @staticmethod
+    def _spec_stage_test_command() -> ToolSpec:
+        return ToolSpec(
+            name="stage_test_command",
+            description="Stage a focused pytest command for host-side approval. Use this when the user asks to run or verify tests for an explicit workspace target. This delegates to run_shell and never executes tests directly.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "framework": {"type": "string", "enum": ["pytest"]},
+                    "target": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "quiet": {"type": "boolean"},
+                    "timeout_seconds": {"type": "integer"},
+                },
+                "required": ["framework", "target"],
             },
             requires_confirmation=True,
             permission_domain=PermissionDomain.BASH,

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 from importlib import import_module
 
@@ -14,6 +15,7 @@ from pp_agent.tools.effects import build_shell_effect
 from pp_agent.tools.policy import PermissionDomain
 
 SHELL_OUTPUT_PREVIEW_MAX_CHARS = 8 * 1024
+TEST_TARGET_FORBIDDEN_CHARS_RE = re.compile(r"[;&|`$<>:\"'\s]")
 
 
 def default_local_sandbox_executor() -> SandboxExecutor:
@@ -26,6 +28,30 @@ def shell_output(result: SandboxRunResult) -> str:
     """Combine stdout and stderr the same way the legacy PowerShell tool did."""
 
     return (result.stdout or "") + (("\n" + result.stderr) if result.stderr else "")
+
+
+def build_pytest_command(*, workspace: Path, target: str, quiet: bool = True) -> tuple[str, str]:
+    """Return a safe workspace-relative pytest command and normalized target."""
+
+    raw_target = str(target or "").strip()
+    if not raw_target:
+        raise ValueError("pytest target is required.")
+    target_path = Path(raw_target)
+    if target_path.is_absolute() or target_path.drive:
+        raise ValueError("pytest target must be a workspace-relative path.")
+    if TEST_TARGET_FORBIDDEN_CHARS_RE.search(raw_target) or "$(" in raw_target:
+        raise ValueError("pytest target contains shell metacharacters.")
+    if any(part in {"..", ""} for part in target_path.parts):
+        raise ValueError("pytest target must not escape the workspace.")
+    resolved = (workspace / target_path).resolve()
+    workspace_root = workspace.resolve()
+    if resolved != workspace_root and workspace_root not in resolved.parents:
+        raise ValueError("pytest target must stay inside the workspace.")
+    relative = resolved.relative_to(workspace_root).as_posix()
+    command = f"python -m pytest {relative}"
+    if quiet:
+        command += " -q"
+    return command, relative
 
 
 def _truncate_shell_stream(text: str, *, max_chars: int = SHELL_OUTPUT_PREVIEW_MAX_CHARS) -> tuple[str, bool, int]:
@@ -321,6 +347,84 @@ class PowerShellTool(BaseTool):
                 **sandbox_result_details(completed),
             },
         )
+
+
+class StageTestCommandTool(BaseTool):
+    def __init__(
+        self,
+        workspace,
+        policy_evaluator=None,
+        default_timeout_seconds: int = 30,
+        sandbox_executor: SandboxExecutor | None = None,
+    ) -> None:
+        super().__init__(workspace, policy_evaluator=policy_evaluator)
+        self.default_timeout_seconds = default_timeout_seconds
+        self.sandbox_executor = sandbox_executor or default_local_sandbox_executor()
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="stage_test_command",
+            description="Stage a focused pytest command for host-side approval. This only creates a run_shell pending action and never executes tests directly.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "framework": {"type": "string", "enum": ["pytest"]},
+                    "target": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "quiet": {"type": "boolean"},
+                    "timeout_seconds": {"type": "integer"},
+                },
+                "required": ["framework", "target"],
+            },
+            requires_confirmation=True,
+            permission_domain=PermissionDomain.BASH,
+            sensitive=True,
+        )
+
+    def execute(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        framework = str(arguments.get("framework") or "pytest").strip().lower()
+        if framework != "pytest":
+            raise ValueError("stage_test_command currently only supports pytest.")
+        quiet = bool(arguments.get("quiet", True))
+        command, normalized_target = build_pytest_command(
+            workspace=self.workspace,
+            target=str(arguments.get("target") or ""),
+            quiet=quiet,
+        )
+        timeout = int(arguments.get("timeout_seconds", self.default_timeout_seconds))
+        result = PowerShellTool(
+            self.workspace,
+            policy_evaluator=self.policy_evaluator,
+            default_timeout_seconds=self.default_timeout_seconds,
+            sandbox_executor=self.sandbox_executor,
+        ).execute({"command": command, "timeout_seconds": timeout})
+        details = dict(result.details or {})
+        helper_proposal = {
+            "kind": "test_command_recommendation",
+            "version": 1,
+            "intent": "pytest",
+            "target": normalized_target,
+            "reason": str(arguments.get("reason") or ""),
+            "generated_command": command,
+            "delegates_to": "run_shell",
+            "requires_approval": True,
+        }
+        store = PendingActionStore(self.pending_root())
+        payload = store.load(str(details["token"]))
+        payload_details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        payload_details["test_command_proposal"] = helper_proposal
+        payload["details"] = payload_details
+        store.save(str(details["token"]), payload)
+        details["test_command_proposal"] = helper_proposal
+        details["generated_command"] = command
+        details["delegates_to"] = "run_shell"
+        result.details = details
+        result.content = (
+            f"Staged pytest command via run_shell. Approve with token {details['token']}\n"
+            f"Command: {command}"
+        )
+        return result
 
 
 class ApprovePendingShellTool(BaseTool):
