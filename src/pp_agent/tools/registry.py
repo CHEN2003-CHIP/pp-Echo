@@ -23,7 +23,7 @@ from pp_agent.runtime.execution_context import (
     runtime_guardrail_check_to_dict,
 )
 from pp_agent.runtime.tool_context import ToolExecutionContext
-from pp_agent.sandbox.base import SandboxExecutor
+from pp_agent.sandbox.base import SandboxExecutor, SandboxRunResult
 from pp_agent.storage.settings import ToolPolicyConfig
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.file_tools import (
@@ -58,6 +58,9 @@ from pp_agent.tools.shell_tool import (
     PowerShellTool,
     StageTestCommandTool,
     build_pytest_command,
+    sandbox_result_error,
+    shell_execution_result_details,
+    shell_output_from_result_details,
 )
 from pp_agent.tools.shell_tool import default_local_sandbox_executor
 from pp_agent.attachments.tools import (
@@ -81,7 +84,7 @@ if TYPE_CHECKING:
     from pp_agent.subagents.capabilities import SubAgentProfile
 
 
-_WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "execute_safe_rewind"}
+_WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "stage_test_command", "execute_safe_rewind"}
 _APPROVAL_EXECUTE_TOOLS = {"approve_pending_action", "reject_pending_action", "rollback_file_checkpoint"}
 _ATTACHMENT_TOOLS = {
     "list_attachments",
@@ -1085,22 +1088,57 @@ class ToolRegistry:
             workspace=self.workspace,
         )
         self._enforce_worktree_analysis(effect["analysis"])
-        completed = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", command],
-            cwd=str(self.workspace),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        output = (completed.stdout or "") + (("\n" + completed.stderr) if completed.stderr else "")
-        if completed.returncode != 0:
-            raise RuntimeError(f"PowerShell exited with code {completed.returncode}\n{output}".strip())
+        started_at = time.monotonic()
+        try:
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", command],
+                cwd=str(self.workspace),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            duration_seconds = time.monotonic() - started_at
+            sandbox_result = SandboxRunResult(
+                stdout=completed.stdout or "",
+                stderr=completed.stderr or "",
+                returncode=completed.returncode,
+                timed_out=False,
+                backend="worktree-local",
+                sandbox_mode="worktree",
+                network_access=False,
+                writable_roots=[str(self.workspace)],
+            )
+        except subprocess.TimeoutExpired as exc:
+            duration_seconds = time.monotonic() - started_at
+            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else str(exc.stdout or "")
+            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else str(exc.stderr or "")
+            sandbox_result = SandboxRunResult(
+                stdout=stdout,
+                stderr=stderr,
+                returncode=-1,
+                timed_out=True,
+                backend="worktree-local",
+                sandbox_mode="worktree",
+                network_access=False,
+                writable_roots=[str(self.workspace)],
+            )
+        command_result = shell_execution_result_details(sandbox_result, duration_seconds=duration_seconds)
+        if sandbox_result.timed_out or sandbox_result.returncode != 0:
+            raise sandbox_result_error(sandbox_result, duration_seconds=duration_seconds)
+        output = shell_output_from_result_details(command_result)
         return ToolExecutionResult(
             tool_call_id="",
             tool_name="run_shell",
             content=output.strip() or "[no output]",
-            details={"command": command, "timeout_seconds": timeout, "returncode": completed.returncode, "worktree": str(self.workspace), "patch_artifact_pending": True, "effect": effect},
+            details={
+                "command": command,
+                "timeout_seconds": timeout,
+                **command_result,
+                "worktree": str(self.workspace),
+                "patch_artifact_pending": True,
+                "effect": effect,
+            },
         )
 
     def _execute_worktree_dynamic(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
@@ -1798,7 +1836,7 @@ class ToolRegistry:
             "read_attachment_symbol",
         }:
             return "attachments"
-        if name == "run_shell":
+        if name in {"run_shell", "stage_test_command"}:
             return "shell"
         return "approvals"
 
@@ -1806,7 +1844,7 @@ class ToolRegistry:
     def _tool_family_for(name: str, category: str) -> str | None:
         if name in {"read_file", "write_file", "edit_file"}:
             return "file"
-        if name == "run_shell":
+        if name in {"run_shell", "stage_test_command"}:
             return "shell"
         if category == "mcp":
             return "mcp"

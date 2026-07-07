@@ -45,7 +45,7 @@ def build_subagent_tool_registry(
     ]
     if profile is not None:
         if profile.workspace.mode == "read_only":
-            allowed_names = [name for name in allowed_names if name not in {"write_file", "edit_file", "run_shell", "approve_pending_action", "reject_pending_action"}]
+            allowed_names = [name for name in allowed_names if name not in {"write_file", "edit_file", "run_shell", "stage_test_command", "approve_pending_action", "reject_pending_action"}]
         elif profile.workspace.mode == "staged_edits":
             allowed_names = [name for name in allowed_names if name not in {"approve_pending_action", "reject_pending_action"}]
         if not profile.tool.allow_dynamic_tools:
@@ -475,7 +475,7 @@ class SubAgentManager:
                 return f"Subagent '{spec.name}' cannot allow tool 'spawn_subagent'."
             if name not in metadata:
                 return f"Subagent '{spec.name}' references unknown tool '{name}'."
-            if profile.workspace.mode == "read_only" and name in {"write_file", "edit_file", "run_shell"}:
+            if profile.workspace.mode == "read_only" and name in {"write_file", "edit_file", "run_shell", "stage_test_command"}:
                 return f"Subagent '{spec.name}' is read-only but allows write tool '{name}'."
         return None
 

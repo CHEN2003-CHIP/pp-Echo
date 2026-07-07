@@ -105,7 +105,7 @@ class RuntimeCreationOptions(BaseModel):
 
 class CapabilityAdmissionGate:
     """能力准入门槛"""
-    WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "execute_safe_rewind"}
+    WRITE_TOOLS = {"write_file", "edit_file", "run_shell", "stage_test_command", "execute_safe_rewind"}
     APPROVAL_EXECUTE_TOOLS = {"approve_pending_action", "reject_pending_action", "rollback_file_checkpoint"}
 
     @staticmethod
