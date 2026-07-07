@@ -27,7 +27,14 @@ from pp_agent.subagents.worktree import PatchArtifact, WorktreeManager
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.effects import build_file_effect, build_patch_candidate_effect, build_shell_effect, content_digest
 from pp_agent.tools.policy import PermissionDomain
-from pp_agent.tools.shell_tool import default_local_sandbox_executor, sandbox_result_details, sandbox_result_error, shell_output
+from pp_agent.tools.shell_tool import (
+    command_proposal_digest,
+    command_preview_from_command_proposal,
+    default_local_sandbox_executor,
+    sandbox_result_error,
+    shell_execution_result_details,
+    shell_output_from_result_details,
+)
 
 SEARCH_BLOCK_RE = re.compile(
     r"<<<<<<< SEARCH\n(?P<old>.*?)\n=======\n(?P<new>.*?)\n>>>>>>> REPLACE",
@@ -579,8 +586,15 @@ class PreviewPendingActionTool(BaseTool):
         result_payload = dict(payload)
         result_details = dict(payload.get("details") or {})
         diff_preview: dict[str, Any] | None = None
+        command_preview: dict[str, Any] | None = None
         if payload["action_type"] == "run_shell":
-            content = payload.get("command") or ""
+            proposal = result_details.get("command_proposal")
+            if isinstance(proposal, dict):
+                command_preview = command_preview_from_command_proposal(proposal)
+                result_details["command_preview"] = command_preview
+                content = str(command_preview.get("command") or payload.get("command") or "")
+            else:
+                content = payload.get("command") or ""
         elif payload["action_type"] == "apply_patch_artifact":
             artifact_payload = payload.get("details", {}).get("artifact", {})
             changed_paths = payload.get("details", {}).get("changed_paths", [])
@@ -638,11 +652,22 @@ class PreviewPendingActionTool(BaseTool):
             if lifecycle.get("failure_reason_detail"):
                 lines.append(f"Failure detail: {lifecycle.get('failure_reason_detail')}")
             if payload["action_type"] == "run_shell":
-                lines.append(f"Command head: {analysis.get('command_head', 'unknown')}")
-                lines.append(f"Normalized command: {effect['normalized_arguments'].get('normalized_command', payload.get('command', ''))}")
-                if payload.get("command") != effect["normalized_arguments"].get("normalized_command"):
-                    lines.append(f"Original command: {payload.get('command', '')}")
-                flags = analysis.get("flags", [])
+                if command_preview is not None:
+                    lines.append(f"Command: {command_preview.get('command', '')}")
+                    lines.append(f"Normalized command: {command_preview.get('normalized_command', '')}")
+                    lines.append(f"Cwd: {command_preview.get('workspace_relative_cwd') or command_preview.get('cwd', '')}")
+                    lines.append(f"Shell: {command_preview.get('shell', 'unknown')}")
+                    lines.append(f"Timeout seconds: {command_preview.get('timeout_seconds')}")
+                    lines.append(f"Requires approval: {command_preview.get('requires_approval')}")
+                    lines.append(f"Proposal digest: {command_preview.get('proposal_digest')}")
+                    lines.append(f"Effect payload digest: {command_preview.get('effect_payload_digest')}")
+                    flags = command_preview.get("warning_flags", [])
+                else:
+                    lines.append(f"Command head: {analysis.get('command_head', 'unknown')}")
+                    lines.append(f"Normalized command: {effect['normalized_arguments'].get('normalized_command', payload.get('command', ''))}")
+                    if payload.get("command") != effect["normalized_arguments"].get("normalized_command"):
+                        lines.append(f"Original command: {payload.get('command', '')}")
+                    flags = analysis.get("flags", [])
                 if flags:
                     lines.append(f"Flags: {', '.join(flags)}")
                 content = "\n".join(lines).strip()
@@ -891,16 +916,19 @@ class ApprovePendingActionTool(BaseTool):
             try:
                 self.enforce_policy_for_command(PermissionDomain.BASH, payload["command"])
                 self._emit_sandbox_preflight_event(payload, token=arguments["token"])
+                started_at = time.monotonic()
                 completed = self.sandbox_executor.run(
                     SandboxRunRequest(command=payload["command"], cwd=self.workspace, timeout_seconds=timeout)
                 )
-                if completed.returncode != 0:
-                    raise sandbox_result_error(completed)
+                duration_seconds = time.monotonic() - started_at
+                if completed.timed_out or completed.returncode != 0:
+                    raise sandbox_result_error(completed, duration_seconds=duration_seconds)
             except Exception as exc:
                 return self._record_execution_failure(store, arguments["token"], effect, exc)
+            command_result = shell_execution_result_details(completed, duration_seconds=duration_seconds)
             shell_context = self._increment_runtime_counter("shell_command")
             patch_candidate = self._stage_patch_candidate(store, payload, completed)
-            shell_content = shell_output(completed).strip() or "[no output]"
+            shell_content = shell_output_from_result_details(command_result).strip() or "[no output]"
             if patch_candidate.get("staged"):
                 shell_content += (
                     "\n\nSandbox patch candidate staged. "
@@ -917,11 +945,10 @@ class ApprovePendingActionTool(BaseTool):
                     "token": arguments["token"],
                     "command": payload["command"],
                     "timeout_seconds": timeout,
-                    "returncode": completed.returncode,
+                    **command_result,
                     "effect": effect,
                     "patch_candidate": patch_candidate,
                     **self._runtime_result_details(shell_context, guardrail_check=shell_guardrail, action="shell_command"),
-                    **sandbox_result_details(completed),
                 },
             )
         if action_type == "apply_patch_candidate":
@@ -1823,6 +1850,8 @@ class ApprovePendingActionTool(BaseTool):
             raise ValueError("Approval invalidated: payload digest no longer matches the approved effect.")
         if payload.get("action_type") in {"write_file", "edit_file"}:
             self._validate_file_patch_proposal(payload, grant)
+        if payload.get("action_type") == "run_shell":
+            self._validate_command_proposal(payload, grant)
         current_effect = self._current_effect(payload, effect)
         if current_effect["payload_digest"] != effect["payload_digest"]:
             raise ValueError("Approval invalidated: payload digest changed after approval.")
@@ -1833,9 +1862,12 @@ class ApprovePendingActionTool(BaseTool):
     def _current_proposal_digest(payload: dict[str, Any]) -> str | None:
         details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
         proposal = details.get("patch_proposal") if isinstance(details, dict) else None
-        if not isinstance(proposal, dict):
-            return None
-        return patch_proposal_digest(proposal)
+        if isinstance(proposal, dict):
+            return patch_proposal_digest(proposal)
+        proposal = details.get("command_proposal") if isinstance(details, dict) else None
+        if isinstance(proposal, dict):
+            return command_proposal_digest(proposal)
+        return None
 
     def _create_file_edit_checkpoint(self, *, token: str, payload: dict[str, Any], path: Path) -> dict[str, Any]:
         details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
@@ -1895,6 +1927,19 @@ class ApprovePendingActionTool(BaseTool):
             raise ValueError("Approval invalidated: baseline changed for patch proposal (file baseline content changed).")
 
     @staticmethod
+    def _validate_command_proposal(payload: dict[str, Any], grant: dict[str, Any]) -> None:
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        proposal = details.get("command_proposal") if isinstance(details, dict) else None
+        if not isinstance(proposal, dict):
+            return
+        approved_digest = str(grant.get("proposal_digest") or "")
+        if not approved_digest:
+            raise ValueError("Approval invalidated: approved command proposal digest is missing.")
+        current_digest = command_proposal_digest(proposal)
+        if current_digest != approved_digest:
+            raise ValueError("Approval invalidated: command proposal digest mismatch.")
+
+    @staticmethod
     def _lifecycle(state: str, failure_reason_code: str | None = None, failure_reason_detail: str | None = None) -> dict[str, Any]:
         return {
             "state": state,
@@ -1932,7 +1977,8 @@ class ApprovePendingActionTool(BaseTool):
         }
         action_type = str(updated.get("action_type") or "").strip()
         if action_type == "run_shell":
-            shell_failure = self._shell_failure_details(failure_detail)
+            result_details = getattr(error, "result_details", None)
+            shell_failure = self._shell_failure_details(failure_detail, result_details=result_details)
             details.update(shell_failure)
             if isinstance(error, DockerSandboxPreflightError):
                 details.update(error.details)
@@ -2020,7 +2066,15 @@ class ApprovePendingActionTool(BaseTool):
         )
 
     @staticmethod
-    def _shell_failure_details(failure_detail: str) -> dict[str, Any]:
+    def _shell_failure_details(failure_detail: str, *, result_details: dict[str, Any] | None = None) -> dict[str, Any]:
+        if isinstance(result_details, dict):
+            normalized = dict(result_details)
+            normalized["stdout"] = str(normalized.get("stdout") or "").strip()
+            normalized["stderr"] = str(normalized.get("stderr") or "").strip()
+            return {
+                "command_failed": True,
+                **normalized,
+            }
         code_match = re.search(r"PowerShell exited with code (?P<code>-?\d+)", failure_detail)
         if not code_match:
             return {"command_failed": True}

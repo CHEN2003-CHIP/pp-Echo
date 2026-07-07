@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 from importlib import import_module
@@ -10,6 +12,8 @@ from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.base import BaseTool, ToolExecutionResult
 from pp_agent.tools.effects import build_shell_effect
 from pp_agent.tools.policy import PermissionDomain
+
+SHELL_OUTPUT_PREVIEW_MAX_CHARS = 8 * 1024
 
 
 def default_local_sandbox_executor() -> SandboxExecutor:
@@ -24,18 +28,86 @@ def shell_output(result: SandboxRunResult) -> str:
     return (result.stdout or "") + (("\n" + result.stderr) if result.stderr else "")
 
 
-def sandbox_result_error(result: SandboxRunResult, *, stream_labels: bool = True) -> Exception:
+def _truncate_shell_stream(text: str, *, max_chars: int = SHELL_OUTPUT_PREVIEW_MAX_CHARS) -> tuple[str, bool, int]:
+    value = str(text or "")
+    chars = len(value)
+    if chars <= max_chars:
+        return value, False, chars
+    omitted = chars - max_chars
+    return f"{value[:max_chars]}\n[truncated {omitted} chars]", True, chars
+
+
+def shell_execution_result_details(
+    result: SandboxRunResult,
+    *,
+    duration_seconds: float | None = None,
+    max_chars: int = SHELL_OUTPUT_PREVIEW_MAX_CHARS,
+) -> dict[str, Any]:
+    """Return the bounded, trace-safe command result contract for shell execution."""
+
+    stdout, stdout_truncated, stdout_chars = _truncate_shell_stream(result.stdout or "", max_chars=max_chars)
+    stderr, stderr_truncated, stderr_chars = _truncate_shell_stream(result.stderr or "", max_chars=max_chars)
+    details: dict[str, Any] = {
+        "returncode": result.returncode,
+        "exit_code": result.returncode,
+        "timed_out": bool(result.timed_out),
+        "backend": result.backend,
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdout_chars": stdout_chars,
+        "stderr_chars": stderr_chars,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+        "stdout_preview_max_chars": max_chars,
+        "stderr_preview_max_chars": max_chars,
+    }
+    if duration_seconds is not None:
+        details["duration_seconds"] = max(float(duration_seconds), 0.0)
+    details.update(sandbox_result_details(result))
+    return details
+
+
+def shell_output_from_result_details(details: dict[str, Any]) -> str:
+    """Combine bounded stdout/stderr previews from shell result details."""
+
+    stdout = str(details.get("stdout") or "")
+    stderr = str(details.get("stderr") or "")
+    return stdout + (("\n" + stderr) if stderr else "")
+
+
+class ShellExecutionError(RuntimeError):
+    """Process failure carrying bounded shell result details."""
+
+    def __init__(self, message: str, *, result_details: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.result_details = result_details
+
+
+def sandbox_result_error(
+    result: SandboxRunResult,
+    *,
+    stream_labels: bool = True,
+    duration_seconds: float | None = None,
+) -> Exception:
     """Render sandbox process failures in the existing shell failure format."""
 
+    result_details = shell_execution_result_details(result, duration_seconds=duration_seconds)
     if result.timed_out:
-        return TimeoutError(f"PowerShell timed out after sandbox execution with code {result.returncode}")
+        return ShellExecutionError(
+            f"PowerShell timed out after sandbox execution with code {result.returncode}",
+            result_details=result_details,
+        )
     if not stream_labels:
-        return RuntimeError(f"PowerShell exited with code {result.returncode}\n{shell_output(result)}".strip())
-    return RuntimeError(
+        return ShellExecutionError(
+            f"PowerShell exited with code {result.returncode}\n{shell_output_from_result_details(result_details)}".strip(),
+            result_details=result_details,
+        )
+    return ShellExecutionError(
         "PowerShell exited with code "
         f"{result.returncode}\n"
-        f"stdout:\n{result.stdout or ''}\n"
-        f"stderr:\n{result.stderr or ''}".strip()
+        f"stdout:\n{result_details.get('stdout') or ''}\n"
+        f"stderr:\n{result_details.get('stderr') or ''}".strip(),
+        result_details=result_details,
     )
 
 
@@ -68,6 +140,95 @@ def sandbox_result_details(result: SandboxRunResult) -> dict[str, Any]:
     if result.structured_changes is not None or result.structured_changes_digest is not None:
         details["structured_changes_truncated"] = result.structured_changes_truncated
     return details
+
+
+def _stable_json_digest(payload: dict[str, Any]) -> str:
+    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _workspace_relative_cwd(workspace: Path, cwd: Path) -> str:
+    try:
+        relative = cwd.resolve().relative_to(workspace.resolve())
+    except ValueError:
+        return str(cwd.resolve())
+    return "." if str(relative) == "." else relative.as_posix()
+
+
+def command_proposal_digest(proposal: dict[str, Any]) -> str:
+    stable = {key: value for key, value in proposal.items() if key != "proposal_digest"}
+    return _stable_json_digest(stable)
+
+
+def build_command_proposal(
+    *,
+    workspace: Path,
+    command: str,
+    timeout_seconds: int,
+    effect: dict[str, Any],
+    action_type: str = "run_shell",
+    shell: str = "powershell",
+    requires_approval: bool = True,
+) -> dict[str, Any]:
+    analysis = effect.get("analysis") or {}
+    normalized_arguments = effect.get("normalized_arguments") or {}
+    cwd = workspace.resolve()
+    risk_class = str(analysis.get("risk_class") or normalized_arguments.get("risk_class") or "unknown")
+    proposal = {
+        "kind": "command_proposal",
+        "version": 1,
+        "action_type": action_type,
+        "command": str(command),
+        "normalized_command": str(normalized_arguments.get("normalized_command") or command),
+        "command_head": str(normalized_arguments.get("command_head") or analysis.get("command_head") or ""),
+        "cwd": str(cwd),
+        "workspace_relative_cwd": _workspace_relative_cwd(workspace, cwd),
+        "shell": shell,
+        "timeout_seconds": int(timeout_seconds),
+        "risk_class": risk_class,
+        "risk_level": risk_class,
+        "risk_summary": str(analysis.get("summary") or effect.get("summary") or ""),
+        "flags": list(analysis.get("flags") or []),
+        "requests_network": bool(analysis.get("requests_network", False)),
+        "destructive_hint": bool(analysis.get("destructive_hint", False)),
+        "touches_workspace": bool(analysis.get("touches_workspace", False)),
+        "touches_external": bool(analysis.get("touches_external", False)),
+        "requires_approval": bool(requires_approval),
+        "effect_payload_digest": str(effect.get("payload_digest") or ""),
+        "preview": {
+            "warning_flags": list(analysis.get("flags") or []),
+            "policy_notes": [],
+        },
+    }
+    proposal["proposal_digest"] = command_proposal_digest(proposal)
+    return proposal
+
+
+def command_preview_from_command_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(proposal)
+    normalized["proposal_digest"] = command_proposal_digest(normalized)
+    preview = dict(normalized.get("preview") or {})
+    return {
+        "kind": "command_preview",
+        "action_type": normalized.get("action_type"),
+        "command": normalized.get("command"),
+        "normalized_command": normalized.get("normalized_command"),
+        "cwd": normalized.get("cwd"),
+        "workspace_relative_cwd": normalized.get("workspace_relative_cwd"),
+        "shell": normalized.get("shell"),
+        "timeout_seconds": normalized.get("timeout_seconds"),
+        "risk_class": normalized.get("risk_class"),
+        "risk_level": normalized.get("risk_level"),
+        "risk_summary": normalized.get("risk_summary"),
+        "requires_approval": bool(normalized.get("requires_approval", True)),
+        "proposal_digest": normalized["proposal_digest"],
+        "effect_payload_digest": normalized.get("effect_payload_digest"),
+        "warning_flags": list(preview.get("warning_flags") or normalized.get("flags") or []),
+        "policy_notes": list(preview.get("policy_notes") or []),
+        "requests_network": bool(normalized.get("requests_network", False)),
+        "destructive_hint": bool(normalized.get("destructive_hint", False)),
+        "touches_external": bool(normalized.get("touches_external", False)),
+    }
 
 
 class PowerShellTool(BaseTool):
@@ -112,18 +273,34 @@ class PowerShellTool(BaseTool):
             timeout_seconds=timeout,
             workspace=self.workspace,
         )
+        proposal = build_command_proposal(
+            workspace=self.workspace,
+            command=command,
+            timeout_seconds=timeout,
+            effect=effect,
+        )
         payload = store.stage(
             action_type="run_shell",
             command=command,
-            details={"timeout_seconds": timeout},
+            details={"timeout_seconds": timeout, "command_proposal": proposal},
             effect=effect,
             origin={"source": "tool", "tool_name": self.spec.name, "kind": "shell"},
         )
+        payload_details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        stored_proposal = payload_details.get("command_proposal") if isinstance(payload_details, dict) else proposal
         return ToolExecutionResult(
             tool_call_id="",
             tool_name=self.spec.name,
             content=f"Staged shell command. Approve with token {payload['token']}",
-            details={"token": payload["token"], "command": command, "timeout_seconds": timeout, "staged": True, "effect": effect},
+            details={
+                "token": payload["token"],
+                "command": command,
+                "timeout_seconds": timeout,
+                "staged": True,
+                "effect": effect,
+                "command_proposal": stored_proposal,
+                "proposal_digest": stored_proposal.get("proposal_digest") if isinstance(stored_proposal, dict) else None,
+            },
         )
 
     def _run(self, command: str, timeout: int) -> ToolExecutionResult:
