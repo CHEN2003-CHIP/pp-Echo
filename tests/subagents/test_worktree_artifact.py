@@ -12,6 +12,7 @@ from pp_agent.tools.base import ToolExecutionResult
 from pp_agent.tools.file_tools import MAX_EDIT_FILE_BYTES
 from pp_agent.tools.policy import PermissionDomain
 from pp_agent.tools.registry import ToolRegistry
+from pp_agent.tools.shell_tool import SHELL_OUTPUT_PREVIEW_MAX_CHARS
 
 
 def _git(workspace: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -97,6 +98,27 @@ def test_worktree_shell_denies_network_and_allows_workspace_local_patch(tmp_path
     assert artifact is not None
     assert "shell.txt" in artifact.changed_paths
     assert not (tmp_path / "shell.txt").exists()
+
+
+def test_worktree_shell_result_uses_bounded_contract(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = WorktreeManager(tmp_path)
+    handle = manager.create(run_id="run-shell-result", agent="code-worker", node_id="code_patch", attempt=1)
+    registry = ToolRegistry(Path(handle.worktree_path), capability_profile=_worktree_profile())
+    tail = "SECRET_WORKTREE_STDOUT_TAIL_SHOULD_NOT_TRACE"
+    command = f"$x = 'A' * {SHELL_OUTPUT_PREVIEW_MAX_CHARS + 100}; Set-Content -Path shell.txt -Value hello; Write-Output ($x + '{tail}')"
+
+    result = registry.execute("run_shell", {"command": command, "timeout_seconds": 5})
+
+    assert result.details["backend"] == "worktree-local"
+    assert result.details["sandbox_backend"] == "worktree-local"
+    assert result.details["sandbox_mode"] == "worktree"
+    assert result.details["timed_out"] is False
+    assert result.details["returncode"] == 0
+    assert result.details["stdout_truncated"] is True
+    assert result.details["stdout_chars"] > SHELL_OUTPUT_PREVIEW_MAX_CHARS
+    assert tail not in result.details["stdout"]
+    assert tail not in result.content
 
 
 def test_worktree_dynamic_workspace_tool_executes_in_isolation(tmp_path: Path) -> None:

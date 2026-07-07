@@ -9,6 +9,7 @@ import pytest
 from pp_agent.domain import ToolCall
 from pp_agent.extensions.api import ExtensionAPI
 from pp_agent.extensions.descriptor import ExtensionDescriptor
+from pp_agent.sandbox.base import SandboxRunRequest, SandboxRunResult
 from pp_agent.tools.effects import analyze_file_call, analyze_mcp_call, build_shell_effect, content_digest
 from pp_agent.runtime.session_host import SessionHost
 from pp_agent.tools import session_tools
@@ -16,7 +17,19 @@ from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.settings import ToolPolicyConfig
 from pp_agent.subagents.capabilities import CapabilityAdmissionGate, SubAgentProfile, ToolCapabilityPolicy, WorkspacePolicy
 from pp_agent.tools.file_tools import ApprovePendingActionTool, MAX_EDIT_FILE_BYTES, unified_text_diff
+from pp_agent.tools.policy import PermissionDomain
 from pp_agent.tools.registry import ToolRegistry
+from pp_agent.tools.shell_tool import SHELL_OUTPUT_PREVIEW_MAX_CHARS
+
+
+class RecordingSandboxExecutor:
+    def __init__(self, result: SandboxRunResult) -> None:
+        self.result = result
+        self.requests: list[SandboxRunRequest] = []
+
+    def run(self, request: SandboxRunRequest) -> SandboxRunResult:
+        self.requests.append(request)
+        return self.result
 
 
 def test_staged_edit_flow(tmp_path: Path) -> None:
@@ -272,6 +285,638 @@ def test_staged_shell_and_reject_flow(tmp_path: Path) -> None:
     archived = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").load(token)
     assert archived["lifecycle"]["state"] == "rejected"
     assert token not in registry.host_execute("list_pending_actions", {}).content
+
+
+def test_run_shell_staged_action_includes_command_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    staged = registry.execute("run_shell", {"command": "Write-Output hello", "timeout_seconds": 7})
+    proposal = staged.details["command_proposal"]
+    stored = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").load(staged.details["token"])
+
+    assert proposal["kind"] == "command_proposal"
+    assert proposal["action_type"] == "run_shell"
+    assert proposal["command"] == "Write-Output hello"
+    assert proposal["normalized_command"] == "Write-Output hello"
+    assert proposal["cwd"] == str(tmp_path.resolve())
+    assert proposal["workspace_relative_cwd"] == "."
+    assert proposal["shell"] == "powershell"
+    assert proposal["timeout_seconds"] == 7
+    assert proposal["requires_approval"] is True
+    assert proposal["risk_class"]
+    assert proposal["risk_level"] == proposal["risk_class"]
+    assert proposal["effect_payload_digest"] == staged.details["effect"]["payload_digest"]
+    assert proposal["proposal_digest"] == staged.details["proposal_digest"]
+    assert stored["details"]["command_proposal"] == proposal
+
+
+def test_command_proposal_digest_is_stable_for_same_staged_shell(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    first = registry.execute("run_shell", {"command": "pytest -q", "timeout_seconds": 10})
+    second = registry.execute("run_shell", {"command": "pytest -q", "timeout_seconds": 10})
+
+    assert first.details["token"] == second.details["token"]
+    assert first.details["proposal_digest"] == second.details["proposal_digest"]
+
+
+def test_command_proposal_digest_changes_when_timeout_changes(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    first = registry.execute("run_shell", {"command": "pytest -q", "timeout_seconds": 10})
+    second = registry.execute("run_shell", {"command": "pytest -q", "timeout_seconds": 11})
+
+    assert first.details["token"] != second.details["token"]
+    assert first.details["proposal_digest"] != second.details["proposal_digest"]
+
+
+def test_shell_preview_is_derived_from_command_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("run_shell", {"command": "curl https://example.com", "timeout_seconds": 10})
+
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    command_preview = preview.details["details"]["command_preview"]
+
+    assert command_preview["kind"] == "command_preview"
+    assert command_preview["command"] == "curl https://example.com"
+    assert command_preview["proposal_digest"] == staged.details["proposal_digest"]
+    assert command_preview["effect_payload_digest"] == staged.details["effect"]["payload_digest"]
+    assert "Command: curl https://example.com" in preview.content
+    assert "Cwd: ." in preview.content
+    assert "Shell: powershell" in preview.content
+    assert "Timeout seconds: 10" in preview.content
+    assert "Requires approval: True" in preview.content
+    assert f"Proposal digest: {staged.details['proposal_digest']}" in preview.content
+    assert "Risk class: networked" in preview.content
+    assert "Requests network: True" in preview.content
+
+
+def test_shell_preview_digest_changes_when_staged_command_proposal_changes(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("run_shell", {"command": "Write-Output hello", "timeout_seconds": 5})
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+
+    before = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    before_digest = before.details["details"]["command_preview"]["proposal_digest"]
+    payload = store.load(staged.details["token"])
+    payload["details"]["command_proposal"]["command"] = "Write-Output goodbye"
+    store.save(staged.details["token"], payload)
+
+    after = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    after_preview = after.details["details"]["command_preview"]
+
+    assert after_preview["command"] == "Write-Output goodbye"
+    assert after_preview["proposal_digest"] != before_digest
+
+
+def test_shell_preview_does_not_execute_command(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "Write-Output ok", "timeout_seconds": 5})
+
+    registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+
+    assert fake.requests == []
+
+
+def test_approve_pending_action_still_executes_existing_shell_path(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="approved\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "Write-Output approved", "timeout_seconds": 6})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.is_error is False
+    assert "approved" in result.content
+    assert len(fake.requests) == 1
+    assert fake.requests[0].command == "Write-Output approved"
+    assert fake.requests[0].cwd == tmp_path.resolve()
+    assert fake.requests[0].timeout_seconds == 6
+
+
+def test_approval_grant_binds_command_proposal_digest(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+
+    staged = registry.execute("run_shell", {"command": "Write-Output hello", "timeout_seconds": 5})
+    payload = store.attach_approval_grant(staged.details["token"])
+
+    assert payload["approval_grant"]["proposal_digest"] == payload["details"]["command_proposal"]["proposal_digest"]
+
+
+def test_approve_same_run_shell_command_proposal_succeeds(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "Write-Output ok", "timeout_seconds": 5})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.is_error is False
+    assert result.details["approval_grant"]["proposal_digest"] == staged.details["proposal_digest"]
+    assert len(fake.requests) == 1
+
+
+def test_modified_command_proposal_command_is_rejected_after_approval(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="should not run\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("run_shell", {"command": "Write-Output hello", "timeout_seconds": 5})
+    token = staged.details["token"]
+    payload = store.attach_approval_grant(token)
+    payload["details"]["command_proposal"]["command"] = "Write-Output goodbye"
+    store.save(token, payload)
+
+    with pytest.raises(ValueError, match="command proposal digest mismatch"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    updated = store.load(token)
+    assert updated["lifecycle"]["state"] == "grant_invalidated"
+    assert updated["approval_grant"]["status"] == "invalidated"
+    assert fake.requests == []
+
+
+def test_modified_command_proposal_timeout_is_rejected_after_approval(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="should not run\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("run_shell", {"command": "Write-Output hello", "timeout_seconds": 5})
+    token = staged.details["token"]
+    payload = store.attach_approval_grant(token)
+    payload["details"]["command_proposal"]["timeout_seconds"] = 99
+    store.save(token, payload)
+
+    with pytest.raises(ValueError, match="command proposal digest mismatch"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    assert fake.requests == []
+
+
+def test_command_proposal_validation_recomputes_digest_instead_of_trusting_stored_field(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="should not run\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    staged = registry.execute("run_shell", {"command": "Write-Output hello", "timeout_seconds": 5})
+    token = staged.details["token"]
+    payload = store.attach_approval_grant(token)
+    approved_digest = payload["approval_grant"]["proposal_digest"]
+    payload["details"]["command_proposal"]["command"] = "Write-Output goodbye"
+    payload["details"]["command_proposal"]["proposal_digest"] = approved_digest
+    store.save(token, payload)
+
+    with pytest.raises(ValueError, match="command proposal digest mismatch"):
+        registry.host_execute("approve_pending_action", {"token": token})
+
+    assert fake.requests == []
+
+
+def test_legacy_run_shell_without_command_proposal_still_approves(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="legacy\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    store = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+    command = "Write-Output legacy"
+    effect = build_shell_effect(
+        tool_name="run_shell",
+        permission_domain="bash",
+        command=command,
+        timeout_seconds=5,
+        workspace=tmp_path,
+    )
+    payload = store.stage(
+        action_type="run_shell",
+        command=command,
+        details={"timeout_seconds": 5},
+        effect=effect,
+    )
+
+    result = registry.host_execute("approve_pending_action", {"token": payload["token"]})
+
+    assert result.is_error is False
+    assert "legacy" in result.content
+    assert len(fake.requests) == 1
+
+
+def test_shell_result_short_streams_are_not_truncated(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="short stdout\n",
+            stderr="short stderr\n",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "Write-Output short", "timeout_seconds": 5})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.details["stdout"] == "short stdout\n"
+    assert result.details["stderr"] == "short stderr\n"
+    assert result.details["stdout_chars"] == len("short stdout\n")
+    assert result.details["stderr_chars"] == len("short stderr\n")
+    assert result.details["stdout_truncated"] is False
+    assert result.details["stderr_truncated"] is False
+    assert result.details["duration_seconds"] >= 0
+    assert result.details["timed_out"] is False
+    assert result.details["backend"] == "fake"
+
+
+def test_shell_result_long_stdout_is_truncated(tmp_path: Path) -> None:
+    tail = "SECRET_FULL_STDOUT_TAIL_SHOULD_NOT_TRACE"
+    long_stdout = "A" * (SHELL_OUTPUT_PREVIEW_MAX_CHARS + 100) + tail
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout=long_stdout,
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "Write-Output long", "timeout_seconds": 5})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.details["stdout_truncated"] is True
+    assert result.details["stdout_chars"] == len(long_stdout)
+    assert len(result.details["stdout"]) < len(long_stdout)
+    assert "[truncated" in result.details["stdout"]
+    assert tail not in result.details["stdout"]
+    assert tail not in result.content
+
+
+def test_shell_result_long_stderr_is_truncated(tmp_path: Path) -> None:
+    tail = "SECRET_FULL_STDERR_TAIL_SHOULD_NOT_TRACE"
+    long_stderr = "E" * (SHELL_OUTPUT_PREVIEW_MAX_CHARS + 100) + tail
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="",
+            stderr=long_stderr,
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "Write-Error long", "timeout_seconds": 5})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.details["stderr_truncated"] is True
+    assert result.details["stderr_chars"] == len(long_stderr)
+    assert len(result.details["stderr"]) < len(long_stderr)
+    assert "[truncated" in result.details["stderr"]
+    assert tail not in result.details["stderr"]
+    assert tail not in result.content
+
+
+def test_shell_failure_result_retains_returncode_with_bounded_streams(tmp_path: Path) -> None:
+    tail = "SECRET_FAILURE_STDOUT_TAIL_SHOULD_NOT_TRACE"
+    long_stdout = "F" * (SHELL_OUTPUT_PREVIEW_MAX_CHARS + 100) + tail
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout=long_stdout,
+            stderr="failure stderr",
+            returncode=7,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "exit 7", "timeout_seconds": 5})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.is_error is True
+    assert result.details["failure_kind"] == "execution_failed"
+    assert result.details["returncode"] == 7
+    assert result.details["exit_code"] == 7
+    assert result.details["stdout_truncated"] is True
+    assert result.details["stderr_truncated"] is False
+    assert result.details["stdout_chars"] == len(long_stdout)
+    assert tail not in result.details["stdout"]
+    assert tail not in result.content
+
+
+def test_shell_timeout_result_retains_timed_out_metadata(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="partial stdout",
+            stderr="timeout stderr",
+            returncode=-1,
+            timed_out=True,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("run_shell", {"command": "Start-Sleep 99", "timeout_seconds": 5})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.is_error is True
+    assert result.details["timed_out"] is True
+    assert result.details["returncode"] == -1
+    assert result.details["stdout"] == "partial stdout"
+    assert result.details["stderr"] == "timeout stderr"
+    assert result.details["duration_seconds"] >= 0
+    assert "timed out" in result.content
+
+
+def test_stage_test_command_stages_pytest_as_run_shell(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    staged = registry.execute(
+        "stage_test_command",
+        {"framework": "pytest", "target": "tests/tools/test_tools.py", "reason": "verify tool changes"},
+    )
+    payload = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").load(staged.details["token"])
+
+    assert staged.details["generated_command"] == "python -m pytest tests/tools/test_tools.py -q"
+    assert staged.details["delegates_to"] == "run_shell"
+    assert staged.details["test_command_proposal"]["intent"] == "pytest"
+    assert staged.details["test_command_proposal"]["target"] == "tests/tools/test_tools.py"
+    assert payload["action_type"] == "run_shell"
+    assert payload["command"] == "python -m pytest tests/tools/test_tools.py -q"
+    assert payload["details"]["test_command_proposal"]["delegates_to"] == "run_shell"
+    assert payload["details"]["command_proposal"]["command"] == "python -m pytest tests/tools/test_tools.py -q"
+
+
+def test_stage_test_command_preview_uses_command_proposal(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    staged = registry.execute("stage_test_command", {"framework": "pytest", "target": "tests/tools/test_tools.py"})
+
+    preview = registry.host_execute("preview_pending_action", {"token": staged.details["token"]})
+    command_preview = preview.details["details"]["command_preview"]
+
+    assert command_preview["kind"] == "command_preview"
+    assert command_preview["command"] == "python -m pytest tests/tools/test_tools.py -q"
+    assert command_preview["proposal_digest"] == staged.details["proposal_digest"]
+    assert "Command: python -m pytest tests/tools/test_tools.py -q" in preview.content
+
+
+def test_stage_test_command_approval_uses_existing_shell_path_and_bounded_result(tmp_path: Path) -> None:
+    tail = "SECRET_TEST_OUTPUT_TAIL_SHOULD_NOT_TRACE"
+    long_stdout = "T" * (SHELL_OUTPUT_PREVIEW_MAX_CHARS + 100) + tail
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout=long_stdout,
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = registry.execute("stage_test_command", {"framework": "pytest", "target": "tests/tools/test_tools.py"})
+
+    result = registry.host_execute("approve_pending_action", {"token": staged.details["token"]})
+
+    assert result.is_error is False
+    assert len(fake.requests) == 1
+    assert fake.requests[0].command == "python -m pytest tests/tools/test_tools.py -q"
+    assert result.details["stdout_truncated"] is True
+    assert result.details["stdout_chars"] == len(long_stdout)
+    assert tail not in result.details["stdout"]
+    assert tail not in result.content
+
+
+def test_mission_03_stage_test_command_e2e_round_trip_uses_shell_approval_loop(tmp_path: Path) -> None:
+    tail = "SECRET_E2E_STDOUT_TAIL_SHOULD_NOT_TRACE"
+    long_stdout = "E" * (SHELL_OUTPUT_PREVIEW_MAX_CHARS + 25) + tail
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout=long_stdout,
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+
+    staged = registry.execute(
+        "stage_test_command",
+        {"framework": "pytest", "target": "tests/tools/test_tools.py", "reason": "03G e2e demo"},
+    )
+    assert fake.requests == []
+    token = staged.details["token"]
+    stored = PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").load(token)
+    assert stored["action_type"] == "run_shell"
+    assert stored["details"]["test_command_proposal"]["delegates_to"] == "run_shell"
+    assert stored["details"]["command_proposal"]["command"] == "python -m pytest tests/tools/test_tools.py -q"
+
+    preview = registry.host_execute("preview_pending_action", {"token": token})
+    command_preview = preview.details["details"]["command_preview"]
+    assert command_preview["command"] == "python -m pytest tests/tools/test_tools.py -q"
+    assert command_preview["proposal_digest"] == staged.details["proposal_digest"]
+    assert fake.requests == []
+
+    result = registry.host_execute("approve_pending_action", {"token": token})
+
+    assert result.is_error is False
+    assert len(fake.requests) == 1
+    assert fake.requests[0].command == "python -m pytest tests/tools/test_tools.py -q"
+    assert result.details["approval_grant"]["proposal_digest"] == staged.details["proposal_digest"]
+    assert result.details["returncode"] == 0
+    assert result.details["backend"] == "fake"
+    assert result.details["stdout_truncated"] is True
+    assert result.details["stdout_chars"] == len(long_stdout)
+    assert tail not in result.details["stdout"]
+    assert tail not in result.content
+
+
+def test_stage_test_command_does_not_execute_during_staging(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(
+        SandboxRunResult(
+            stdout="should not run\n",
+            stderr="",
+            returncode=0,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(tmp_path)],
+        )
+    )
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+
+    registry.execute("stage_test_command", {"framework": "pytest", "target": "tests/tools/test_tools.py"})
+
+    assert fake.requests == []
+
+
+@pytest.mark.parametrize(
+    "target, message",
+    [
+        ("C:/tmp/test_file.py", "workspace-relative"),
+        ("../tests/test_file.py", "must not escape"),
+        ("tests/tools/test_tools.py; Remove-Item notes.txt", "shell metacharacters"),
+        ("tests/tools/test_tools.py && echo done", "shell metacharacters"),
+        ("tests/tools/test_tools.py | Out-File x", "shell metacharacters"),
+        ("tests/tools/$(echo bad).py", "shell metacharacters"),
+        ("tests/tools/`echo bad`.py", "shell metacharacters"),
+        ("tests/tools/test_tools.py -k injected", "shell metacharacters"),
+        ("tests/tools/test_tools.py::test_name", "shell metacharacters"),
+    ],
+)
+def test_stage_test_command_rejects_unsafe_targets(tmp_path: Path, target: str, message: str) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(ValueError, match=message):
+        registry.execute("stage_test_command", {"framework": "pytest", "target": target})
+
+    assert PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").list() == []
+
+
+def test_stage_test_command_rejects_non_pytest_framework(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+
+    with pytest.raises(ValueError, match="only supports pytest"):
+        registry.execute("stage_test_command", {"framework": "unittest", "target": "tests"})
+
+
+def test_stage_test_command_is_blocked_by_read_only_capability_profile(tmp_path: Path) -> None:
+    profile = SubAgentProfile(
+        name="readonly",
+        workspace=WorkspacePolicy(mode="read_only", allow_write_tools=False),
+    )
+    registry = ToolRegistry(tmp_path, capability_profile=profile)
+
+    assert CapabilityAdmissionGate.allow_tool(profile, "stage_test_command") is False
+    with pytest.raises(PermissionError, match="capability profile"):
+        registry.execute("stage_test_command", {"framework": "pytest", "target": "tests/tools/test_tools.py"})
+
+
+def test_stage_test_command_registry_metadata_and_schema_are_narrow(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path)
+    metadata = registry.metadata()["stage_test_command"]
+    schemas = {item["function"]["name"]: item["function"] for item in registry.openapi_specs()}
+
+    assert metadata.category == "shell"
+    assert metadata.tool_family == "shell"
+    assert metadata.permission_domain == PermissionDomain.BASH
+    assert metadata.model_callable is True
+    assert metadata.sensitive is True
+    assert metadata.requires_confirmation is True
+    assert "stage_test_command" in schemas
+    assert "rollback_file_checkpoint" not in schemas
+    properties = schemas["stage_test_command"]["parameters"]["properties"]
+    assert set(properties) == {"framework", "target", "reason", "quiet", "timeout_seconds"}
+    assert "command" not in properties
+    assert "extra_args" not in properties
+
+
+def test_stage_test_command_is_allowed_for_staged_write_profile(tmp_path: Path) -> None:
+    profile = SubAgentProfile(
+        name="staged",
+        tool=ToolCapabilityPolicy(allowlist=["stage_test_command"]),
+        workspace=WorkspacePolicy(mode="staged_edits", allow_write_tools=True),
+    )
+    registry = ToolRegistry(tmp_path, capability_profile=profile)
+
+    assert CapabilityAdmissionGate.allow_tool(profile, "stage_test_command") is True
+    staged = registry.execute("stage_test_command", {"framework": "pytest", "target": "tests/tools/test_tools.py"})
+
+    assert staged.details["delegates_to"] == "run_shell"
 
 
 def test_preview_pending_planner_approval(tmp_path: Path) -> None:
