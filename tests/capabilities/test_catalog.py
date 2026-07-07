@@ -139,6 +139,12 @@ def test_capability_catalog_list_and_get_are_stable(tmp_path: Path, monkeypatch:
     assert rollback.permissions_required == ["approval"]
     assert rollback.effects == ["workspace_write"]
     assert builtin_names[21:24] == ["preview_safe_rewind", "execute_safe_rewind", "run_shell"]
+    stage_test = catalog.get("builtin_tool", "stage_test_command")
+    assert stage_test.metadata["category"] == "shell"
+    assert stage_test.permissions_required == ["bash"]
+    assert stage_test.metadata["requires_confirmation"] is True
+    assert stage_test.metadata["model_callable"] is True
+    assert stage_test.source == "builtin:stage_test_command"
     assert "memory_search" in builtin_names
     assert "memory_get" in builtin_names
     assert catalog.get("builtin_tool", "run_shell").source == "builtin:run_shell"

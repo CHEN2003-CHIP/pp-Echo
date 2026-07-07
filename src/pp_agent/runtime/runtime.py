@@ -100,7 +100,7 @@ ConfigRefreshCallback = Callable[["AgentRuntime", object], None]
 logger = logging.getLogger(__name__)
 TEXT_TOOL_NAME_RE = re.compile(r"([A-Za-z0-9_.-]+)\s*$")
 TEXT_TOOL_CALL_FALLBACK_ALLOWLIST = {"list_files", "search_text", "grep_code", "git_status"}
-TEXT_TOOL_CALL_FALLBACK_DENYLIST = {"spawn_subagent", "read_file", "write_file", "edit_file", "run_shell"}
+TEXT_TOOL_CALL_FALLBACK_DENYLIST = {"spawn_subagent", "read_file", "write_file", "edit_file", "run_shell", "stage_test_command"}
 WEB_TOOL_NAMES = {"web.search", "web.news", "web.github_trending", "web.fetch"}
 WEB_LOOKUP_ATTEMPT_LIMIT = 2
 
@@ -2910,7 +2910,7 @@ class AgentRuntime:
 
     def _default_tool_error_hook(self, _state: AgentState, _call: ToolCall, _error: Exception) -> ToolErrorDecision:
         """Keep recoverable coding-tool failures in the loop so the model can inspect, fix, and rerun."""
-        if _call.name in {"write_file", "edit_file", "run_shell", "git_diff_worktree"}:
+        if _call.name in {"write_file", "edit_file", "run_shell", "stage_test_command", "git_diff_worktree"}:
             if "host-side approval" in str(_error).lower():
                 return ToolErrorDecision(
                     continue_loop=False,

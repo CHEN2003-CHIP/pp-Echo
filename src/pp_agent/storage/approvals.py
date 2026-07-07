@@ -251,6 +251,8 @@ def _proposal_digest_from_payload(payload: dict[str, Any]) -> str | None:
         return None
     proposal = details.get("patch_proposal")
     if not isinstance(proposal, dict):
+        proposal = details.get("command_proposal")
+    if not isinstance(proposal, dict):
         return None
     digest = proposal.get("proposal_digest")
     return str(digest) if digest else None

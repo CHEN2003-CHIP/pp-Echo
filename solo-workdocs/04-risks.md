@@ -1,5 +1,18 @@
 # 04 Risks
 
+## Mission 03 Follow-up Risks
+
+| Risk | Level | Trigger Signal | Response |
+| --- | --- | --- | --- |
+| Shell command danger remains high | High | Model proposes install, network, delete, credential, or git mutation commands | Keep host approval; strengthen ask/deny policy in a later mission |
+| Prompt injection through command output | High | Test logs, files, or web content instruct the agent to run follow-up commands | Treat observations as untrusted; never let output self-approve commands |
+| 8 KiB preview limit may be too large or too small | Medium | Trace payloads grow or useful test output is cut too aggressively | Keep as v0.x default; consider configurable limits later |
+| PowerShell / Bash / Git Bash differences | Medium | Command parsing or risk classification differs by shell | Keep parser conservative; document PowerShell MVP semantics |
+| Pytest helper is intentionally narrow | Medium | User needs node ids, `-k`, extra args, or paths with spaces | Design separate allowlisted fields instead of accepting shell syntax in `target` |
+| Legacy shell pending fallback remains | Medium | Old pending actions without `command_proposal` execute through compatibility path | Remove fallback after schema/version migration |
+| Worktree direct shell contract can drift | Medium | Worktree path returns unbounded output or different metadata later | Keep focused regression coverage for bounded result helper reuse |
+| Package install and network policy need hardening | High | Helper or model suggests package manager / curl / git publish commands | Decide hard-deny vs high-risk ask in a later mission |
+
 ## Mission 02B 后续风险
 
 | 风险 | 风险等级 | 触发信号 | 应对策略 |
