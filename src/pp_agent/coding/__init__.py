@@ -39,6 +39,11 @@ from pp_agent.coding.repository_summary import (
     repository_relative_posix_path,
     repository_summary_to_dict,
 )
+from pp_agent.coding.repository_summary_collector import (
+    RepositorySummaryCollectionLimits,
+    RepositorySummaryDocument,
+    build_repository_summary,
+)
 from pp_agent.coding.runtime_loop import (
     ControlledLoopOptions,
     ControlledToolLoopResult,
@@ -78,6 +83,8 @@ __all__ = [
     "PlanStep",
     "RepositoryAnalysis",
     "RepositorySummary",
+    "RepositorySummaryCollectionLimits",
+    "RepositorySummaryDocument",
     "RepositorySummarySection",
     "RepositorySummarySource",
     "RepositorySummaryWarning",
@@ -92,6 +99,7 @@ __all__ = [
     "analyze_repository",
     "attach_write_scope_to_patch_candidate_args",
     "build_validation_plan",
+    "build_repository_summary",
     "build_task_plan",
     "build_task_scope",
     "check_path_in_scope",
