@@ -30,6 +30,15 @@ from pp_agent.coding.orchestrator import (
 )
 from pp_agent.coding.planner import PlanStep, TaskPlan, build_task_plan, task_plan_to_context_item, task_plan_to_dict
 from pp_agent.coding.repository import RepositoryAnalysis, analyze_repository, repository_analysis_to_context_item
+from pp_agent.coding.repository_summary import (
+    REPOSITORY_SUMMARY_SCHEMA_VERSION,
+    RepositorySummary,
+    RepositorySummarySection,
+    RepositorySummarySource,
+    RepositorySummaryWarning,
+    repository_relative_posix_path,
+    repository_summary_to_dict,
+)
 from pp_agent.coding.runtime_loop import (
     ControlledLoopOptions,
     ControlledToolLoopResult,
@@ -68,6 +77,11 @@ __all__ = [
     "ExecutionGuardrails",
     "PlanStep",
     "RepositoryAnalysis",
+    "RepositorySummary",
+    "RepositorySummarySection",
+    "RepositorySummarySource",
+    "RepositorySummaryWarning",
+    "REPOSITORY_SUMMARY_SCHEMA_VERSION",
     "ScopeCheckResult",
     "ScopeEnforcementResult",
     "TaskScope",
@@ -102,6 +116,8 @@ __all__ = [
     "execution_session_to_block",
     "prepare_coding_workflow",
     "repository_analysis_to_context_item",
+    "repository_relative_posix_path",
+    "repository_summary_to_dict",
     "run_controlled_coding_loop",
     "scope_enforcement_to_context_item",
     "scope_enforcement_to_details",
