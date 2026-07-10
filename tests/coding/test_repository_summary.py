@@ -173,6 +173,78 @@ def test_repository_summary_does_not_store_raw_document_body_field() -> None:
     assert payload["sections"][0]["source_keys"] == ["agents"]  # type: ignore[index]
 
 
+def test_dangling_section_source_key_is_rejected() -> None:
+    summary = RepositorySummary(
+        workspace_name="demo",
+        sections=[RepositorySummarySection("instructions", "Instructions", "project_instruction", "summary", ["missing"])],
+    )
+
+    with pytest.raises(ValueError, match="unknown source key referenced by section: missing"):
+        summary.to_dict()
+
+
+def test_dangling_warning_source_key_is_rejected() -> None:
+    summary = RepositorySummary(
+        workspace_name="demo",
+        warnings=[RepositorySummaryWarning("optional_source_missing", "No module doc", source_key="missing")],
+    )
+
+    with pytest.raises(ValueError, match="unknown source key referenced by warning: missing"):
+        summary.to_dict()
+
+
+def test_global_warning_without_source_key_remains_valid() -> None:
+    payload = RepositorySummary(
+        workspace_name="demo",
+        warnings=[RepositorySummaryWarning("warning_limit_reached", "Additional warnings were omitted.")],
+    ).to_dict()
+
+    assert payload["warnings"] == [
+        {
+            "code": "warning_limit_reached",
+            "severity": "warning",
+            "message": "Additional warnings were omitted.",
+        }
+    ]
+
+
+def test_valid_section_and_warning_source_references_serialize() -> None:
+    payload = RepositorySummary(
+        workspace_name="demo",
+        sources=[RepositorySummarySource("agents", "project_instruction", path="AGENTS.md")],
+        sections=[RepositorySummarySection("instructions", "Instructions", "project_instruction", "summary", ["agents"])],
+        warnings=[RepositorySummaryWarning("section_truncated", "Instructions truncated.", source_key="agents")],
+    ).to_dict()
+
+    assert payload["sections"][0]["source_keys"] == ["agents"]  # type: ignore[index]
+    assert payload["warnings"][0]["source_key"] == "agents"  # type: ignore[index]
+
+
+def test_deduplicated_source_reference_remains_valid() -> None:
+    source = RepositorySummarySource("agents", "project_instruction", path="AGENTS.md")
+    payload = RepositorySummary(
+        workspace_name="demo",
+        sources=[source, source],
+        sections=[RepositorySummarySection("instructions", "Instructions", "project_instruction", "summary", ["agents", "agents"])],
+    ).to_dict()
+
+    assert payload["sources"] == [source.to_dict()]
+    assert payload["sections"][0]["source_keys"] == ["agents"]  # type: ignore[index]
+
+
+def test_multiple_missing_section_source_keys_are_reported_in_stable_order() -> None:
+    summary = RepositorySummary(
+        workspace_name="demo",
+        sections=[
+            RepositorySummarySection("b", "B", "kind", "summary", ["zeta", "alpha"]),
+            RepositorySummarySection("a", "A", "kind", "summary", ["beta"]),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="unknown source key referenced by section: alpha, beta, zeta"):
+        summary.to_dict()
+
+
 def test_repository_summary_public_models_have_docstrings() -> None:
     assert RepositorySummary.__doc__
     assert RepositorySummarySection.__doc__

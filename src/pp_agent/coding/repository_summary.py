@@ -102,13 +102,19 @@ class RepositorySummary:
     def to_dict(self) -> dict[str, object]:
         """Return a canonical JSON-friendly summary payload."""
 
+        sources = _canonical_sources(self.sources)
+        sections = _canonical_sections(self.sections)
+        warnings = _canonical_warnings(self.warnings)
+        source_keys = {str(source["source_key"]) for source in sources}
+        _validate_section_source_keys(sections, source_keys)
+        _validate_warning_source_keys(warnings, source_keys)
         return {
             "schema_version": _required_text(self.schema_version, "schema_version"),
             "workspace_name": _required_text(self.workspace_name, "workspace_name"),
             "project_type": _required_text(self.project_type, "project_type"),
-            "sections": _canonical_sections(self.sections),
-            "sources": _canonical_sources(self.sources),
-            "warnings": _canonical_warnings(self.warnings),
+            "sections": sections,
+            "sources": sources,
+            "warnings": warnings,
         }
 
 
@@ -166,6 +172,22 @@ def _canonical_warnings(warnings: list[RepositorySummaryWarning]) -> list[dict[s
             str(item.get("message", "")),
         ),
     )
+
+
+def _validate_section_source_keys(sections: list[dict[str, object]], source_keys: set[str]) -> None:
+    missing: set[str] = set()
+    for section in sections:
+        raw_keys = section.get("source_keys", [])
+        if isinstance(raw_keys, list):
+            missing.update(str(key) for key in raw_keys if str(key) not in source_keys)
+    if missing:
+        raise ValueError(f"unknown source key referenced by section: {', '.join(sorted(missing))}")
+
+
+def _validate_warning_source_keys(warnings: list[dict[str, object]], source_keys: set[str]) -> None:
+    missing = {str(warning["source_key"]) for warning in warnings if warning.get("source_key") and str(warning["source_key"]) not in source_keys}
+    if missing:
+        raise ValueError(f"unknown source key referenced by warning: {', '.join(sorted(missing))}")
 
 
 def _json_friendly_content(value: str | list[str] | dict[str, object]) -> object:
