@@ -173,7 +173,11 @@ def _document_candidates(
     extra_documents: Iterable[RepositorySummaryDocument],
 ) -> list[RepositorySummaryDocument]:
     candidates: list[RepositorySummaryDocument] = []
-    for name in sorted({str(name) for name in instruction_filenames}):
+    seen_instructions: set[str] = set()
+    for name in [str(name) for name in instruction_filenames]:
+        if name in seen_instructions:
+            continue
+        seen_instructions.add(name)
         candidates.append(RepositorySummaryDocument(name, "project_instruction"))
     for path in sorted({str(path) for path in project_map_paths}):
         candidates.append(RepositorySummaryDocument(path, "project_map"))
@@ -198,6 +202,11 @@ def _dedupe_candidates(candidates: list[RepositorySummaryDocument]) -> list[Repo
     return [by_key[key] for key in sorted(by_key)]
 
 
+def _is_root_instruction_candidate(candidate: RepositorySummaryDocument) -> bool:
+    raw_path = str(candidate.path).replace("\\", "/")
+    return candidate.source_kind == "project_instruction" and "/" not in raw_path and raw_path in PROJECT_MANIFEST_NAMES
+
+
 def _collect_documents(
     repository_root: Path,
     candidates: list[RepositorySummaryDocument],
@@ -208,7 +217,10 @@ def _collect_documents(
     sources: list[RepositorySummarySource] = []
     total_bytes = 0
     accepted_documents = 0
+    root_instruction_selected = False
     for candidate in candidates:
+        if _is_root_instruction_candidate(candidate) and root_instruction_selected:
+            continue
         source_key = _document_source_key(str(candidate.path))
         resolved = _resolve_document(repository_root, candidate, warnings, source_key)
         if resolved is None:
@@ -227,6 +239,8 @@ def _collect_documents(
         if isinstance(document, RepositorySummarySource):
             sources.append(document)
             continue
+        if _is_root_instruction_candidate(candidate):
+            root_instruction_selected = True
         accepted_documents += 1
         total_bytes += document.bytes_consumed
         loaded.append(document)

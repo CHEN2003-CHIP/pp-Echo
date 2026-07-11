@@ -55,6 +55,12 @@ from pp_agent.coding.runtime_loop import (
     default_controlled_loop_options,
     run_controlled_coding_loop,
 )
+from pp_agent.coding.scoped_instruction import (
+    ScopedInstruction,
+    ScopedInstructionResolution,
+    ScopedInstructionWarning,
+    resolve_scoped_instructions,
+)
 from pp_agent.coding.scope import (
     ScopeCheckResult,
     TaskScope,
@@ -92,6 +98,9 @@ __all__ = [
     "REPOSITORY_SUMMARY_SCHEMA_VERSION",
     "ScopeCheckResult",
     "ScopeEnforcementResult",
+    "ScopedInstruction",
+    "ScopedInstructionResolution",
+    "ScopedInstructionWarning",
     "TaskScope",
     "TaskPlan",
     "ValidationCommand",
@@ -128,6 +137,7 @@ __all__ = [
     "repository_relative_posix_path",
     "repository_summary_to_context_items",
     "repository_summary_to_dict",
+    "resolve_scoped_instructions",
     "run_controlled_coding_loop",
     "scope_enforcement_to_context_item",
     "scope_enforcement_to_details",

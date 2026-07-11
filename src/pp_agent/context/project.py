@@ -8,7 +8,7 @@ from pp_agent.context.item import ContextItem
 from pp_agent.context.source_ref import SourceRef
 
 MAX_MANIFEST_BYTES = 32 * 1024
-PROJECT_MANIFEST_NAMES = ("PP_ECHO.md", "AGENTS.md", "CLAUDE.md")
+PROJECT_MANIFEST_NAMES = ("AGENTS.md", "CLAUDE.md", "PP_ECHO.md")
 
 
 @dataclass
@@ -160,6 +160,7 @@ def _load_manifests(workspace: Path, *, max_manifest_bytes: int, warnings: list[
                 truncated=truncated,
             )
         )
+        break
     return manifests
 
 

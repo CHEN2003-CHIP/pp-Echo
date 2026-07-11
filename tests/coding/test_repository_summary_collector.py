@@ -34,14 +34,10 @@ def test_repository_summary_collector_aggregates_context_analysis_and_documents(
     assert [source["source_key"] for source in payload["sources"]] == [
         "document:.pp-echo:project-map.json",
         "document:AGENTS.md",
-        "document:CLAUDE.md",
-        "document:PP_ECHO.md",
         "document:src:demo:MODULE.md",
         "project-context",
         "repository-analysis",
     ]
-    assert _source(payload, "document:CLAUDE.md")["skip_reason"] == "optional_source_missing"
-    assert _source(payload, "document:PP_ECHO.md")["skip_reason"] == "optional_source_missing"
     section_keys = [section["section_key"] for section in payload["sections"]]
     assert "project_metadata" in section_keys
     assert "repository_structure" in section_keys
@@ -49,6 +45,35 @@ def test_repository_summary_collector_aggregates_context_analysis_and_documents(
     assert "project_map:.pp-echo:project-map.json" in section_keys
     assert "module_doc:src:demo:MODULE.md" in section_keys
     assert json.dumps(payload, sort_keys=True)
+
+
+def test_root_project_instruction_uses_agents_canonical_claude_fallback(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Agent rules", encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("Claude fallback", encoding="utf-8")
+
+    agents_payload = build_repository_summary(
+        project_context=_project_context(repo),
+        repository_analysis=_analysis(repo),
+        repository_root=repo,
+        project_map_paths=(),
+        module_doc_paths=(),
+    ).to_dict()
+
+    assert any(section["section_key"] == "project_instruction:AGENTS.md" for section in agents_payload["sections"])
+    assert not any(section["section_key"] == "project_instruction:CLAUDE.md" for section in agents_payload["sections"])
+
+    (repo / "AGENTS.md").unlink()
+    claude_payload = build_repository_summary(
+        project_context=_project_context(repo),
+        repository_analysis=_analysis(repo),
+        repository_root=repo,
+        project_map_paths=(),
+        module_doc_paths=(),
+    ).to_dict()
+
+    assert any(section["section_key"] == "project_instruction:CLAUDE.md" for section in claude_payload["sections"])
 
 
 def test_repository_summary_collector_uses_stable_synthetic_source_keys(tmp_path: Path) -> None:
