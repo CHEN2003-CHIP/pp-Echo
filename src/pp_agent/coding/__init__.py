@@ -39,6 +39,7 @@ from pp_agent.coding.repository_summary import (
     repository_relative_posix_path,
     repository_summary_to_dict,
 )
+from pp_agent.coding.repository_summary_context import repository_summary_to_context_items
 from pp_agent.coding.repository_summary_collector import (
     RepositorySummaryCollectionLimits,
     RepositorySummaryDocument,
@@ -125,6 +126,7 @@ __all__ = [
     "prepare_coding_workflow",
     "repository_analysis_to_context_item",
     "repository_relative_posix_path",
+    "repository_summary_to_context_items",
     "repository_summary_to_dict",
     "run_controlled_coding_loop",
     "scope_enforcement_to_context_item",

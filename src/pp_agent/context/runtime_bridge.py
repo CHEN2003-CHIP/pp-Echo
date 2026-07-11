@@ -7,12 +7,14 @@ from typing import Any
 from pp_agent.attachments.context import AttachmentContextProvider
 from pp_agent.capabilities.router import CapabilitySelection
 from pp_agent.coding.repository import analyze_repository, repository_analysis_to_context_item
+from pp_agent.coding.repository_summary import RepositorySummary
+from pp_agent.coding.repository_summary_context import repository_summary_to_context_items
 from pp_agent.context.adapters import build_context_pack_from_messages
 from pp_agent.context.budget import ContextItemSummary
 from pp_agent.context.item import ContextItem
 from pp_agent.context.pack import ContextPack
 from pp_agent.context.pipeline import ContextPipeline, ContextPipelineConfig
-from pp_agent.context.project import build_project_context, project_context_to_timeline_step
+from pp_agent.context.project import ProjectContext, build_project_context, project_context_to_timeline_step
 from pp_agent.context.source_ref import SourceRef
 from pp_agent.domain import ChatMessage, TextPart
 
@@ -38,6 +40,7 @@ def build_runtime_context_pack(
     model_profile: Any = None,
     runtime_profile: Any = None,
     capability_selection: CapabilitySelection | None = None,
+    repository_summary: RepositorySummary | None = None,
 ) -> ContextPack:
     """Small Runtime bridge that builds the audited ContextPack for one provider call."""
 
@@ -54,6 +57,7 @@ def build_runtime_context_pack(
     workspace = Path(settings.workspace)
     global_root = Path(settings.global_dir)
     pipeline = ContextPipeline(config)
+    repository_summary_items = list(repository_summary_to_context_items(repository_summary)) if repository_summary is not None else []
     pack = pipeline.build(
         user_message=_latest_user_text(messages),
         memory_providers={
@@ -65,7 +69,7 @@ def build_runtime_context_pack(
         attachment_providers=[*legacy_pack.attachments, *AttachmentContextProvider(workspace, session_id).list_items()],
         capability_selection=[*legacy_pack.capabilities, *legacy_pack.mcp, *legacy_pack.skills, *_capability_items(capability_selection)],
         conversation_items=legacy_pack.conversation,
-        project_context_providers=legacy_pack.project_context,
+        project_context_providers=[*repository_summary_items, *legacy_pack.project_context],
         system_instructions=legacy_pack.system,
         runtime_notes=legacy_pack.runtime_notes,
         workspace=workspace,
@@ -76,7 +80,7 @@ def build_runtime_context_pack(
     )
     project_context = build_project_context(workspace)
     repository_analysis = analyze_repository(workspace, project_context)
-    project_context_item = project_context_to_timeline_step(project_context)
+    project_context_item = _project_context_item_for_repository_summary(project_context, repository_summary_items)
     repository_analysis_item = repository_analysis_to_context_item(repository_analysis)
     pack.project_context = [project_context_item, repository_analysis_item, *pack.project_context]
     pack.source_refs = _unique_source_refs([*legacy_pack.source_refs, *pack.source_refs])
@@ -172,6 +176,48 @@ def _blocked_capability_summaries(selection: CapabilitySelection | None) -> list
             )
         )
     return summaries
+
+
+def _project_context_item_for_repository_summary(project_context: ProjectContext, repository_summary_items: list[ContextItem]) -> ContextItem:
+    item = project_context_to_timeline_step(project_context)
+    if not _has_canonical_repository_instruction(project_context, item, repository_summary_items):
+        return item
+    content = _strip_project_instruction_excerpt(item.content)
+    if content == item.content:
+        return item
+    return ContextItem(
+        id=item.id,
+        type=item.type,
+        title=item.title,
+        content=content,
+        source_ref=item.source_ref,
+        priority=item.priority,
+        estimated_tokens=item.estimated_tokens,
+        estimated_chars=len(content),
+        metadata=item.metadata,
+    )
+
+
+def _has_canonical_repository_instruction(project_context: ProjectContext, project_context_item: ContextItem, repository_summary_items: list[ContextItem]) -> bool:
+    manifest_names = set(project_context.manifest_files)
+    for item in repository_summary_items:
+        if item.metadata.get("repository_summary_section_kind") != "project_instruction":
+            continue
+        source_path = item.source_ref.path
+        if not source_path or Path(source_path).name not in manifest_names:
+            continue
+        if item.content and item.content in project_context_item.content:
+            return True
+    return False
+
+
+def _strip_project_instruction_excerpt(content: str) -> str:
+    lines = content.splitlines()
+    try:
+        header_index = lines.index("Project Instructions:")
+    except ValueError:
+        return content
+    return "\n".join(lines[:header_index]).strip()
 
 
 def _safe_mapping(value: dict[str, Any]) -> dict[str, object]:

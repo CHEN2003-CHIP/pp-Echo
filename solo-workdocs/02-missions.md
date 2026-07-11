@@ -2,11 +2,12 @@
 
 ## Mission 05: Repository Summary Integration with Existing ContextPipeline
 
-Status: Ratified / 05A completed / design ready
+Status: Completed / ready for human merge review
 
 Details:
 
 - `solo-workdocs/mission-docs/12-mission-05-repository-summary-context-pipeline-design.md`
+- `solo-workdocs/mission-docs/13-mission-05-repository-summary-context-pipeline-closeout.md`
 
 Goal:
 
@@ -25,9 +26,6 @@ Official direction:
 Completed:
 
 - 05A: codebase reconnaissance, OpenCode comparison, and scope ratification.
-
-Planned tasks:
-
 - 05B: implement the minimal `RepositorySummary -> ContextItem` adapter for selected instructions/module guidance.
 - 05C: integrate the adapter into the existing context build path and run release-gate verification.
 
@@ -53,7 +51,6 @@ Not done:
 - No recursive scans.
 - No repository file rereads in the adapter.
 - No runtime execution, provider, tool, approval, or policy semantic changes.
-- No Mission 05B implementation in this ratification step.
 - No Mission 06 implementation or research in this ratification step.
 
 Checks:
