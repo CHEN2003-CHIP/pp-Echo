@@ -1,5 +1,69 @@
 # 02 Missions
 
+## Mission 05: Repository Summary Integration with Existing ContextPipeline
+
+Status: Ratified / 05A completed / design ready
+
+Details:
+
+- `solo-workdocs/mission-docs/12-mission-05-repository-summary-context-pipeline-design.md`
+
+Goal:
+
+Integrate selected `RepositorySummary` content into the existing runtime/context path by adapting it into multiple `ContextItem(section="project_context")` entries.
+
+Official direction:
+
+- Mission 05 comes first: repository summary integration into the existing `ContextPipeline`.
+- Mission 06 comes second: scoped repository instructions.
+- Reuse `ContextPipeline`, `ContextPack`, `final_messages`, `context_built`, `ContextBudgeter`, and `SourceRef`.
+- Keep `project_context` as the canonical section.
+- Convert only approved project instructions and relevant module guidance into model-facing context.
+- Keep warnings trace-only by default.
+- Use a minimal `RepositorySummarySource -> SourceRef` adapter.
+
+Completed:
+
+- 05A: codebase reconnaissance, OpenCode comparison, and scope ratification.
+
+Planned tasks:
+
+- 05B: implement the minimal `RepositorySummary -> ContextItem` adapter for selected instructions/module guidance.
+- 05C: integrate the adapter into the existing context build path and run release-gate verification.
+
+Future boundary:
+
+- Mission 06 candidate: scoped repository instructions.
+- Mission 06 should research nearby instruction resolution, ancestor-chain behavior, scoped relevance, lazy activation, duplicate suppression, and OpenCode source-level behavior.
+- Mission 06 must not use generic recursive repository scans as the default approach.
+
+Not done:
+
+- No new `CodingContextBundle`.
+- No new `RepositoryContextBundle`.
+- No new canonical section such as `repository_summary`, `repository_context`, or `coding_context`.
+- No new `ContextPipeline`.
+- No new budget engine.
+- No new renderer.
+- No new trace schema.
+- No new provider message path.
+- No raw `RepositorySummary.to_dict()` JSON injection into prompts.
+- No dynamic nearby `AGENTS.md` / `CLAUDE.md` discovery.
+- No automatic ancestor instruction lookup.
+- No recursive scans.
+- No repository file rereads in the adapter.
+- No runtime execution, provider, tool, approval, or policy semantic changes.
+- No Mission 05B implementation in this ratification step.
+- No Mission 06 implementation or research in this ratification step.
+
+Checks:
+
+- Mission 05 is formally defined.
+- 05A is marked completed.
+- The human decision `A first, B second` is recorded.
+- OpenCode scoped-instruction direction is preserved for future Mission 06.
+- Scope remains docs-only for this ratification step.
+
 ## Mission 03: Safe Tool Execution Loop
 
 Status: Ready for human review
