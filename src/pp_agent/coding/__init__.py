@@ -55,6 +55,11 @@ from pp_agent.coding.runtime_loop import (
     default_controlled_loop_options,
     run_controlled_coding_loop,
 )
+from pp_agent.coding.scoped_activation import (
+    ScopedInstructionActivationRecord,
+    ScopedInstructionActivationState,
+    concrete_task_scope_targets,
+)
 from pp_agent.coding.scoped_instruction import (
     ScopedInstruction,
     ScopedInstructionResolution,
@@ -98,6 +103,8 @@ __all__ = [
     "REPOSITORY_SUMMARY_SCHEMA_VERSION",
     "ScopeCheckResult",
     "ScopeEnforcementResult",
+    "ScopedInstructionActivationRecord",
+    "ScopedInstructionActivationState",
     "ScopedInstruction",
     "ScopedInstructionResolution",
     "ScopedInstructionWarning",
@@ -125,6 +132,7 @@ __all__ = [
     "controlled_loop_result_to_block",
     "controlled_loop_result_to_context_item",
     "controlled_loop_result_to_summary",
+    "concrete_task_scope_targets",
     "default_execution_guardrails",
     "default_controlled_loop_options",
     "enforce_path_scope",

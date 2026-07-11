@@ -15,11 +15,16 @@ from pp_agent.coding import (
     run_controlled_coding_loop,
     start_coding_execution_session,
 )
+from pp_agent.coding.scope import TaskScope
+from pp_agent.coding.orchestrator import CodingWorkflow, prepare_coding_workflow
 from pp_agent.runtime.execution_context import RuntimeExecutionContext
+from pp_agent.runtime.hooks import RuntimeHooks
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.effects import build_shell_effect
 from pp_agent.tools.policy import PermissionDomain
 from pp_agent.tools.registry import ToolRegistry
+from pp_agent.tools.base import ToolExecutionResult
+from pp_agent.domain import ToolCall
 
 
 class FakeRuntime:
@@ -40,6 +45,25 @@ class FakeRuntime:
     def continue_(self):
         self.continues += 1
         return list(self.events)
+
+
+class ReadObservingRuntime(FakeRuntime):
+    def __init__(self, workspace: Path, read_path: Path) -> None:
+        super().__init__(workspace)
+        self.runtime_hooks = RuntimeHooks()
+        self.read_path = read_path
+
+    def prompt(self, text: str):
+        self.prompts.append(text)
+        call = ToolCall(id="call-read", name="read_file", arguments={"path": str(self.read_path)})
+        result = ToolExecutionResult(
+            tool_call_id="call-read",
+            tool_name="read_file",
+            content="ok",
+            details={"path": str(self.read_path)},
+        )
+        self.runtime_hooks.after_tool_call(None, call, result)
+        return []
 
 
 class NoStoreRuntime:
@@ -158,6 +182,35 @@ def test_run_controlled_coding_loop_passes_runtime_execution_context_to_runtime(
 
     assert runtime.runtime_execution_context == result.runtime_execution_context
     assert runtime.tool_registry.runtime_execution_context() == result.runtime_execution_context
+
+
+def test_controlled_loop_seeds_scoped_instructions_from_task_scope(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace / "src" / "pp_agent" / "coding" / "AGENTS.md").write_text("coding scoped rules", encoding="utf-8")
+    workflow = prepare_coding_workflow("seed scoped", workspace=workspace)
+    workflow.task_scope = TaskScope(task="seed scoped", allowed_paths=["src/pp_agent/coding/runtime_loop.py"])
+
+    result = run_controlled_coding_loop("seed scoped", FakeRuntime(workspace), workflow=workflow, options=ControlledLoopOptions(0, True, True, True, True))
+
+    state = result.scoped_instruction_activation_state
+    assert state is not None
+    assert [item.source_path for item in state.active_instructions()] == ["src/pp_agent/coding/AGENTS.md"]
+
+
+def test_controlled_loop_observes_successful_read_file_without_context_injection(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace / "src" / "pp_agent" / "coding" / "AGENTS.md").write_text("lazy scoped rules", encoding="utf-8")
+    target = workspace / "src" / "pp_agent" / "coding" / "runtime_loop.py"
+    target.write_text("code", encoding="utf-8")
+    workflow = prepare_coding_workflow("lazy read", workspace=workspace)
+    workflow.task_scope = TaskScope(task="lazy read", allowed_paths=[])
+
+    result = run_controlled_coding_loop("lazy read", ReadObservingRuntime(workspace, target), workflow=workflow, options=ControlledLoopOptions(1, False, False, False, False))
+
+    state = result.scoped_instruction_activation_state
+    assert state is not None
+    assert [item.source_path for item in state.active_instructions()] == ["src/pp_agent/coding/AGENTS.md"]
+    assert result.timeline_blocks
 
 
 def test_run_controlled_coding_loop_stops_on_approval(tmp_path: Path) -> None:

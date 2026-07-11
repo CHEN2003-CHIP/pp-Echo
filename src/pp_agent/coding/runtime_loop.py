@@ -11,8 +11,10 @@ from pp_agent.coding.execution import (
     start_coding_execution_session,
 )
 from pp_agent.coding.orchestrator import CodingWorkflow, prepare_coding_workflow
+from pp_agent.coding.scoped_activation import ScopedInstructionActivationState
 from pp_agent.coding.testing import ValidationPlan
 from pp_agent.runtime.execution_context import RuntimeExecutionContext, runtime_counters_to_dict, runtime_execution_context_to_dict
+from pp_agent.runtime.hooks import AfterToolCallDecision
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ class ControlledToolLoopResult:
     timeline_blocks: list[Any] = field(default_factory=list)
     pending_approvals: list[dict[str, Any]] = field(default_factory=list)
     validation_plan: ValidationPlan | None = None
+    scoped_instruction_activation_state: ScopedInstructionActivationState | None = None
     summary_text: str = ""
     warnings: list[str] = field(default_factory=list)
 
@@ -89,14 +92,20 @@ def run_controlled_coding_loop(
     resolved_workflow = workflow or prepare_coding_workflow(normalized_task, workspace=resolved_workspace)
     resolved_session = session or start_coding_execution_session(resolved_workflow)
     context = coding_session_to_runtime_execution_context(resolved_session)
+    activation_state = ScopedInstructionActivationState(repository_root=resolved_workspace) if resolved_workspace is not None else None
+    if activation_state is not None:
+        activation_state.seed_task_scope(resolved_workflow.task_scope)
     warnings = list(resolved_workflow.warnings) + list(resolved_session.warnings)
     status = "prepared" if resolved_options.dry_run else "running"
     stop_reason = "completed" if resolved_options.dry_run else "max_turns"
     _attach_runtime_execution_context(runtime, context)
 
     if not resolved_options.dry_run:
+        hooks_snapshot = _install_scoped_instruction_observer(runtime, activation_state)
         try:
             for turn_index in range(max(resolved_options.max_model_turns, 0)):
+                if activation_state is not None:
+                    activation_state.begin_continuation()
                 turn_events = _run_runtime_turn(runtime, normalized_task, first_turn=turn_index == 0)
                 context = _runtime_execution_context_from_runtime(runtime, fallback=context)
                 pending = collect_pending_approvals(runtime)
@@ -112,6 +121,8 @@ def run_controlled_coding_loop(
             stop_reason = "runtime_error"
             warnings.append(f"Runtime error: {exc.__class__.__name__}: {exc}")
             context = _runtime_execution_context_from_runtime(runtime, fallback=context)
+        finally:
+            _restore_runtime_hooks(runtime, hooks_snapshot)
 
     pending_approvals = collect_pending_approvals(runtime)
     if status in {"prepared", "running"}:
@@ -131,6 +142,7 @@ def run_controlled_coding_loop(
         timeline_blocks=[*resolved_session.timeline_blocks],
         pending_approvals=pending_approvals,
         validation_plan=resolved_workflow.validation_plan,
+        scoped_instruction_activation_state=activation_state,
         warnings=_unique(warnings),
     )
     result.summary_text = controlled_loop_result_to_summary(result)
@@ -234,6 +246,32 @@ def _attach_runtime_execution_context(runtime: Any, context: RuntimeExecutionCon
     attach = getattr(runtime, "_attach_runtime_context_to_tool_registry", None)
     if callable(attach):
         attach()
+
+
+def _install_scoped_instruction_observer(runtime: Any, state: ScopedInstructionActivationState | None) -> dict[str, list[Any]] | None:
+    if state is None:
+        return None
+    hooks = getattr(runtime, "runtime_hooks", None)
+    snapshot = getattr(hooks, "snapshot", None)
+    if hooks is None or not callable(snapshot) or not hasattr(hooks, "after_tool_call_hooks"):
+        return None
+    hooks_snapshot = snapshot()
+
+    def observe_read(_agent_state: Any, call: Any, result: Any) -> AfterToolCallDecision:
+        state.observe_read_result(tool_name=str(getattr(call, "name", "")), result=result)
+        return AfterToolCallDecision(continue_loop=True)
+
+    hooks.after_tool_call_hooks.append(observe_read)
+    return hooks_snapshot
+
+
+def _restore_runtime_hooks(runtime: Any, snapshot: dict[str, list[Any]] | None) -> None:
+    if snapshot is None:
+        return
+    hooks = getattr(runtime, "runtime_hooks", None)
+    restore = getattr(hooks, "restore", None)
+    if callable(restore):
+        restore(snapshot)
 
 
 def _runtime_execution_context_from_runtime(runtime: Any, *, fallback: RuntimeExecutionContext) -> RuntimeExecutionContext:
@@ -348,6 +386,7 @@ def _result_details(result: ControlledToolLoopResult) -> dict[str, Any]:
         "pending_approvals_count": len(result.pending_approvals),
         "pending_approvals": list(result.pending_approvals),
         "validation_commands": [command.command for command in result.validation_plan.commands] if result.validation_plan else [],
+        "scoped_instruction_activation": result.scoped_instruction_activation_state.summary() if result.scoped_instruction_activation_state is not None else None,
         "warnings": list(result.warnings),
     }
 
