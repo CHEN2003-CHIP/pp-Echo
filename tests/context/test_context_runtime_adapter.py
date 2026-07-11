@@ -338,6 +338,8 @@ def test_runtime_bridge_repository_summary_final_messages_are_deterministic(tmp_
 def test_runtime_bridge_repository_summary_does_not_duplicate_existing_manifest_excerpt(tmp_path: Path) -> None:
     settings = Settings.load(tmp_path)
     settings.global_dir = tmp_path / ".pp-agent"
+    sentinel = "UNIQUE_PROJECT_INSTRUCTION_SENTINEL"
+    (tmp_path / "AGENTS.md").write_text(sentinel, encoding="utf-8")
     summary = RepositorySummary(
         workspace_name="demo",
         sections=[
@@ -345,7 +347,7 @@ def test_runtime_bridge_repository_summary_does_not_duplicate_existing_manifest_
                 "project_instruction:AGENTS.md",
                 "Project instruction: AGENTS.md",
                 "project_instruction",
-                "Single canonical instruction body.",
+                sentinel,
                 ["agents"],
             )
         ],
@@ -361,4 +363,88 @@ def test_runtime_bridge_repository_summary_does_not_duplicate_existing_manifest_
     )
     rendered_text = "\n".join(part.text for message in pack.final_messages for part in message.content if isinstance(part, TextPart))
 
-    assert rendered_text.count("Single canonical instruction body.") == 1
+    assert rendered_text.count(sentinel) == 1
+
+
+def test_runtime_bridge_without_repository_summary_keeps_manifest_excerpt(tmp_path: Path) -> None:
+    settings = Settings.load(tmp_path)
+    settings.global_dir = tmp_path / ".pp-agent"
+    sentinel = "NO_SUMMARY_PROJECT_INSTRUCTION_SENTINEL"
+    (tmp_path / "AGENTS.md").write_text(sentinel, encoding="utf-8")
+
+    pack = build_runtime_context_pack(
+        state=AgentState(system_prompt="system"),
+        messages=[_message("system", "system"), _message("user", "hello")],
+        settings=settings,
+        session_id="s1",
+        repository_summary=None,
+    )
+    rendered_text = "\n".join(part.text for message in pack.final_messages for part in message.content if isinstance(part, TextPart))
+
+    assert rendered_text.count(sentinel) == 1
+
+
+def test_runtime_bridge_module_only_repository_summary_keeps_manifest_excerpt(tmp_path: Path) -> None:
+    settings = Settings.load(tmp_path)
+    settings.global_dir = tmp_path / ".pp-agent"
+    manifest_sentinel = "MODULE_ONLY_PROJECT_INSTRUCTION_SENTINEL"
+    module_sentinel = "MODULE_ONLY_SUMMARY_SENTINEL"
+    (tmp_path / "AGENTS.md").write_text(manifest_sentinel, encoding="utf-8")
+    summary = RepositorySummary(
+        workspace_name="demo",
+        sections=[
+            RepositorySummarySection(
+                "module_doc:src:MODULE.md",
+                "Module guidance: src/MODULE.md",
+                "module_doc",
+                module_sentinel,
+                ["module"],
+            )
+        ],
+        sources=[RepositorySummarySource("module", "module_doc", path="src/MODULE.md")],
+    )
+
+    pack = build_runtime_context_pack(
+        state=AgentState(system_prompt="system"),
+        messages=[_message("system", "system"), _message("user", "hello")],
+        settings=settings,
+        session_id="s1",
+        repository_summary=summary,
+    )
+    rendered_text = "\n".join(part.text for message in pack.final_messages for part in message.content if isinstance(part, TextPart))
+
+    assert rendered_text.count(manifest_sentinel) == 1
+    assert module_sentinel in rendered_text
+
+
+def test_runtime_bridge_different_repository_instruction_does_not_suppress_manifest_excerpt(tmp_path: Path) -> None:
+    settings = Settings.load(tmp_path)
+    settings.global_dir = tmp_path / ".pp-agent"
+    manifest_sentinel = "DIFFERENT_MANIFEST_PROJECT_INSTRUCTION_SENTINEL"
+    summary_sentinel = "DIFFERENT_SUMMARY_PROJECT_INSTRUCTION_SENTINEL"
+    (tmp_path / "AGENTS.md").write_text(manifest_sentinel, encoding="utf-8")
+    summary = RepositorySummary(
+        workspace_name="demo",
+        sections=[
+            RepositorySummarySection(
+                "project_instruction:AGENTS.md",
+                "Project instruction: AGENTS.md",
+                "project_instruction",
+                summary_sentinel,
+                ["agents"],
+            )
+        ],
+        sources=[RepositorySummarySource("agents", "project_instruction", path="AGENTS.md")],
+    )
+
+    pack = build_runtime_context_pack(
+        state=AgentState(system_prompt="system"),
+        messages=[_message("system", "system"), _message("user", "hello")],
+        settings=settings,
+        session_id="s1",
+        repository_summary=summary,
+    )
+    rendered_text = "\n".join(part.text for message in pack.final_messages for part in message.content if isinstance(part, TextPart))
+
+    assert rendered_text.count(manifest_sentinel) == 1
+    assert rendered_text.count(summary_sentinel) == 1

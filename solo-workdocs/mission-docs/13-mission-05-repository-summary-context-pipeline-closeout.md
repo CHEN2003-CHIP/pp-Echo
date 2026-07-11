@@ -239,4 +239,3 @@ Future Mission 06 should focus on scoped repository instructions:
 - prompt-injection risk framing.
 
 Mission 06 should avoid generic full-repository recursive scans as the default approach.
-
