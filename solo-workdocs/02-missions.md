@@ -1,5 +1,48 @@
 # 02 Missions
 
+## Mission 06: Scoped Repository Instructions
+
+Status: Ratified / 06A completed / ready for 06B planning
+
+Details:
+
+- `solo-workdocs/mission-docs/14-mission-06-scoped-repository-instructions-design.md`
+
+Goal:
+
+Automatically resolve repository-local `AGENTS.md` and `CLAUDE.md` instructions relevant to concrete task/read paths, activate them lazily and safely, and deliver them only through the existing `ContextItem -> ContextPipeline -> ContextPack -> final_messages` path.
+
+Official direction:
+
+- Mission 05 remains the owner of `RepositorySummary` and root project instruction integration.
+- Mission 06 owns scoped repository instruction discovery and activation for concrete nested task/read paths.
+- First version uses Design B: `TaskScope` seed plus runtime `read_file` lazy activation.
+- Same-directory precedence is `AGENTS.md` canonical, then `CLAUDE.md` compatibility fallback.
+- Ancestor lookup is bounded O(directory depth), cumulative, deterministic, and non-recursive.
+- Root project instruction ownership remains in the Mission 05 path; Mission 06 must not create a second root instruction path.
+- Scoped instructions must enter the model only through `ContextItem(section="project_context")` and the existing `ContextPipeline`.
+- No generic recursive scan, no raw prompt injection, no second provider-message path, and no session-global activation.
+
+Completed:
+
+- 06A: OpenCode source-level benchmark and scoped instruction semantics decision.
+
+Planned tasks:
+
+- 06B: `ScopedInstruction` contract and bounded resolver.
+- 06C: scoped activation state and triggers.
+- 06D: ContextPipeline integration, release gate, and closeout.
+
+Not done:
+
+- No Mission 06 production implementation in this ratification step.
+- No resolver implementation.
+- No runtime changes.
+- No file tool changes.
+- No tests changed.
+- No full pytest suite required for this docs-only ratification.
+- No Mission 06B coding started.
+
 ## Mission 05: Repository Summary Integration with Existing ContextPipeline
 
 Status: Completed / ready for human merge review
