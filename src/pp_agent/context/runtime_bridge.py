@@ -7,6 +7,8 @@ from typing import Any
 from pp_agent.attachments.context import AttachmentContextProvider
 from pp_agent.capabilities.router import CapabilitySelection
 from pp_agent.coding.repository import analyze_repository, repository_analysis_to_context_item
+from pp_agent.coding.repository_summary import RepositorySummary
+from pp_agent.coding.repository_summary_context import repository_summary_to_context_items
 from pp_agent.context.adapters import build_context_pack_from_messages
 from pp_agent.context.budget import ContextItemSummary
 from pp_agent.context.item import ContextItem
@@ -38,6 +40,7 @@ def build_runtime_context_pack(
     model_profile: Any = None,
     runtime_profile: Any = None,
     capability_selection: CapabilitySelection | None = None,
+    repository_summary: RepositorySummary | None = None,
 ) -> ContextPack:
     """Small Runtime bridge that builds the audited ContextPack for one provider call."""
 
@@ -54,6 +57,7 @@ def build_runtime_context_pack(
     workspace = Path(settings.workspace)
     global_root = Path(settings.global_dir)
     pipeline = ContextPipeline(config)
+    repository_summary_items = list(repository_summary_to_context_items(repository_summary)) if repository_summary is not None else []
     pack = pipeline.build(
         user_message=_latest_user_text(messages),
         memory_providers={
@@ -65,7 +69,7 @@ def build_runtime_context_pack(
         attachment_providers=[*legacy_pack.attachments, *AttachmentContextProvider(workspace, session_id).list_items()],
         capability_selection=[*legacy_pack.capabilities, *legacy_pack.mcp, *legacy_pack.skills, *_capability_items(capability_selection)],
         conversation_items=legacy_pack.conversation,
-        project_context_providers=legacy_pack.project_context,
+        project_context_providers=[*repository_summary_items, *legacy_pack.project_context],
         system_instructions=legacy_pack.system,
         runtime_notes=legacy_pack.runtime_notes,
         workspace=workspace,
