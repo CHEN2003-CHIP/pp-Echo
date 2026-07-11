@@ -7,6 +7,8 @@ from typing import Any
 from pp_agent.coding.impact import ChangeImpact, analyze_change_impact, change_impact_to_context_item
 from pp_agent.coding.planner import TaskPlan, build_task_plan, task_plan_to_context_item
 from pp_agent.coding.repository import RepositoryAnalysis, analyze_repository, repository_analysis_to_context_item
+from pp_agent.coding.repository_summary import RepositorySummary, repository_summary_to_dict
+from pp_agent.coding.repository_summary_collector import build_repository_summary
 from pp_agent.coding.scope import TaskScope, build_task_scope, task_scope_to_context_item
 from pp_agent.coding.testing import ValidationPlan, build_validation_plan, validation_plan_to_context_item
 from pp_agent.context.project import ProjectContext, build_project_context, project_context_to_timeline_step
@@ -26,6 +28,7 @@ class CodingWorkflow:
     status: str
     project_context_summary: str | None
     repository_analysis: RepositoryAnalysis | None
+    repository_summary: RepositorySummary | None
     task_plan: TaskPlan
     task_scope: TaskScope
     predicted_impact: ChangeImpact
@@ -42,6 +45,7 @@ def prepare_coding_workflow(
     project_context: ProjectContext | None = None,
     repository_analysis: RepositoryAnalysis | None = None,
     manifest_excerpt: str | None = None,
+    include_repository_summary: bool = True,
 ) -> CodingWorkflow:
     """Prepare a coding task workflow without executing shell commands or editing files.
 
@@ -53,6 +57,7 @@ def prepare_coding_workflow(
     warnings: list[str] = []
     context = project_context or _build_project_context(workspace, warnings)
     analysis = repository_analysis or _build_repository_analysis(workspace, context, warnings)
+    summary = _build_repository_summary(workspace, context, analysis, include_repository_summary)
     plan = _build_plan(normalized_task, context, analysis, manifest_excerpt, warnings)
     scope = _build_scope(plan, analysis, context, warnings)
     predicted_impact = analyze_change_impact(
@@ -70,6 +75,7 @@ def prepare_coding_workflow(
         status=_status(context, analysis, warnings),
         project_context_summary=context.summary_text if context is not None else None,
         repository_analysis=analysis,
+        repository_summary=summary,
         task_plan=plan,
         task_scope=scope,
         predicted_impact=predicted_impact,
@@ -145,6 +151,22 @@ def _build_repository_analysis(workspace: Path | None, context: ProjectContext |
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"RepositoryAnalysis build failed: {exc.__class__.__name__}.")
         return None
+
+
+def _build_repository_summary(
+    workspace: Path | None,
+    context: ProjectContext | None,
+    analysis: RepositoryAnalysis | None,
+    include_repository_summary: bool,
+) -> RepositorySummary | None:
+    if not include_repository_summary or context is None or analysis is None:
+        return None
+    repository_root = Path(workspace) if workspace is not None else Path(context.workspace_path)
+    return build_repository_summary(
+        project_context=context,
+        repository_analysis=analysis,
+        repository_root=repository_root,
+    )
 
 
 def _build_plan(
@@ -234,7 +256,7 @@ def _jsonable(value: Any) -> Any:
 
 
 def _workflow_details(workflow: CodingWorkflow) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "task": workflow.task,
         "status": workflow.status,
         "risk_level": workflow.task_plan.risk_level,
@@ -245,6 +267,9 @@ def _workflow_details(workflow: CodingWorkflow) -> dict[str, Any]:
         "warnings": list(workflow.warnings),
         "predicted_impact_not_actual": True,
     }
+    if workflow.repository_summary is not None:
+        payload["repository_summary"] = repository_summary_to_dict(workflow.repository_summary)
+    return payload
 
 
 def _status(context: ProjectContext | None, analysis: RepositoryAnalysis | None, warnings: list[str]) -> str:

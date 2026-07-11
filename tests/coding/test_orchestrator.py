@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from pp_agent.coding import (
     CodingWorkflow,
     RepositoryAnalysis,
+    REPOSITORY_SUMMARY_SCHEMA_VERSION,
     analyze_repository,
     coding_workflow_to_block,
     coding_workflow_to_context_item,
@@ -24,11 +28,19 @@ def _workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _workspace_with_agents(tmp_path: Path) -> Path:
+    workspace = _workspace(tmp_path)
+    (workspace / "AGENTS.md").write_text("Use focused tests.", encoding="utf-8")
+    return workspace
+
+
 def test_prepare_coding_workflow_builds_full_workflow(tmp_path: Path) -> None:
-    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace(tmp_path))
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path))
 
     assert workflow.status == "prepared"
     assert workflow.repository_analysis is not None
+    assert workflow.repository_summary is not None
+    assert workflow.repository_summary.schema_version == REPOSITORY_SUMMARY_SCHEMA_VERSION
     assert workflow.task_plan.task == "extend coding intelligence planner"
     assert workflow.task_scope.task == "extend coding intelligence planner"
     assert workflow.predicted_impact.impacted_modules == ["docs", "coding"]
@@ -59,7 +71,16 @@ def test_prepare_coding_workflow_falls_back_without_workspace() -> None:
 
     assert workflow.status == "partial"
     assert workflow.repository_analysis is None
+    assert workflow.repository_summary is None
     assert any("no workspace" in warning.lower() for warning in workflow.warnings)
+
+
+def test_prepare_coding_workflow_can_disable_repository_summary(tmp_path: Path) -> None:
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path), include_repository_summary=False)
+
+    assert workflow.status == "prepared"
+    assert workflow.repository_analysis is not None
+    assert workflow.repository_summary is None
 
 
 def test_prepare_coding_workflow_includes_task_plan(tmp_path: Path) -> None:
@@ -112,6 +133,17 @@ def test_prepare_coding_workflow_includes_context_items(tmp_path: Path) -> None:
     ]
 
 
+def test_prepare_coding_workflow_includes_repository_summary_from_approved_sources(tmp_path: Path) -> None:
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path))
+
+    assert workflow.repository_summary is not None
+    payload = workflow.repository_summary.to_dict()
+    assert payload["schema_version"] == REPOSITORY_SUMMARY_SCHEMA_VERSION
+    assert any(section["section_key"] == "project_metadata" for section in payload["sections"])
+    assert any(section["section_key"] == "repository_structure" for section in payload["sections"])
+    assert any(source["source_key"] == "document:AGENTS.md" for source in payload["sources"])
+
+
 def test_prepare_coding_workflow_summary_is_stable(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
 
@@ -122,12 +154,13 @@ def test_prepare_coding_workflow_summary_is_stable(tmp_path: Path) -> None:
 
 
 def test_coding_workflow_to_context_item(tmp_path: Path) -> None:
-    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace(tmp_path))
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path))
 
     item = coding_workflow_to_context_item(workflow)
 
     assert item["title"] == "Coding workflow"
     assert item["metadata"]["coding_workflow"]["predicted_impact_not_actual"] is True
+    assert item["metadata"]["coding_workflow"]["repository_summary"]["schema_version"] == REPOSITORY_SUMMARY_SCHEMA_VERSION
 
 
 def test_coding_workflow_to_timeline_blocks(tmp_path: Path) -> None:
@@ -140,12 +173,70 @@ def test_coding_workflow_to_timeline_blocks(tmp_path: Path) -> None:
 
 
 def test_coding_workflow_to_block(tmp_path: Path) -> None:
-    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace(tmp_path))
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path))
 
     payload = timeline_to_jsonable(coding_workflow_to_block(workflow))
 
     assert payload["type"] == "coding_workflow"
     assert payload["details"]["impacted_modules"] == ["docs", "coding"]
+    assert payload["details"]["repository_summary"]["schema_version"] == REPOSITORY_SUMMARY_SCHEMA_VERSION
+
+
+def test_repository_summary_controlled_warnings_do_not_fail_preparation(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace / "AGENTS.md").write_bytes(b"\xff\xfe\xfa")
+
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=workspace)
+
+    assert workflow.status == "prepared"
+    assert workflow.repository_summary is not None
+    assert any(warning.code == "decode_failure" for warning in workflow.repository_summary.warnings)
+    assert workflow.task_plan.task == "extend coding intelligence planner"
+
+
+def test_repository_summary_collector_is_called_once_and_serialization_does_not_recollect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pp_agent.coding import orchestrator
+
+    calls = 0
+    real_builder = orchestrator.build_repository_summary
+
+    def spy_builder(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "build_repository_summary", spy_builder)
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path))
+
+    assert calls == 1
+    assert workflow.repository_summary is not None
+    coding_workflow_to_context_item(workflow)
+    coding_workflow_to_block(workflow)
+    workflow.repository_summary.to_dict()
+    assert calls == 1
+
+
+def test_repository_summary_programmer_errors_are_not_silently_swallowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pp_agent.coding import orchestrator
+
+    def broken_builder(*args: object, **kwargs: object) -> object:
+        raise ValueError("contract invalid")
+
+    monkeypatch.setattr(orchestrator, "build_repository_summary", broken_builder)
+
+    with pytest.raises(ValueError, match="contract invalid"):
+        prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path))
+
+
+def test_coding_workflow_repository_summary_output_is_json_friendly_and_trace_safe(tmp_path: Path) -> None:
+    workflow = prepare_coding_workflow("extend coding intelligence planner", workspace=_workspace_with_agents(tmp_path))
+    payload = timeline_to_jsonable(coding_workflow_to_block(workflow))
+    dumped = json.dumps(payload, sort_keys=True)
+
+    assert dumped
+    assert str(tmp_path) not in dumped
+    assert "Use focused tests." in dumped
+    assert "AGENTS.md" in dumped
 
 
 def test_coding_workflow_public_models_have_docstrings() -> None:

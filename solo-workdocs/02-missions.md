@@ -8,6 +8,7 @@ Details:
 
 - `solo-workdocs/mission-docs/08-mission-03-tool-execution-design.md`
 - `solo-workdocs/mission-docs/09-mission-03-tool-execution-closeout.md`
+- `solo-workdocs/mission-docs/10-mission-04-bounded-repository-summary-design.md`
 
 Goal:
 
@@ -35,7 +36,55 @@ Not done:
 - No remote execution.
 - No multi-command transaction.
 - No background tasks.
-- No Mission 04.
+
+## Mission 04: Bounded Repository Scan and Deterministic Project Summary
+
+Status: Ratified / design ready
+
+Details:
+
+- `solo-workdocs/mission-docs/10-mission-04-bounded-repository-summary-design.md`
+
+Goal:
+
+Build a bounded, deterministic, traceable, JSON-friendly repository summary for the existing coding runtime/context layer.
+
+Approved scope:
+
+- Aggregates existing `ProjectContext` and `RepositoryAnalysis`.
+- Reads only approved project instruction and map documents:
+  - repository-root `AGENTS.md` or equivalent project instruction file;
+  - known project-map document;
+  - relevant `MODULE` documents for the target module.
+- Includes language/framework signals, known entrypoints, test commands, shallow module information, instruction sources, protected areas, key risks, source citations, and explicit skipped/truncated metadata.
+- Serves only runtime/context in the first version.
+- Does not provide standalone CLI/Web display in the first version.
+- Does not perform generic unbounded recursive repository scanning.
+
+Planned tasks:
+
+- 04B: `RepositorySummary` contract.
+- 04C: bounded source collection.
+- 04D: context integration and release gate.
+
+Not done:
+
+- No Mission 04 implementation in this ratification step.
+- No runtime execution loop rewrite.
+- No `AgentRuntime` rewrite.
+- No Mission 03 tool execution semantic changes.
+- No agent mode framework.
+- No permission DSL.
+- No child-session system.
+- No generic code index.
+- No embeddings or vector database.
+- No model-driven repository summary.
+- No background scan.
+- No filesystem watcher.
+- No full CLI/Web repo browser.
+- No MCP/LSP/ACP expansion.
+- No complex config merge system.
+- No automatic repository modification.
 
 ## Mission 02B：安全文件编辑闭环最小实现
 
