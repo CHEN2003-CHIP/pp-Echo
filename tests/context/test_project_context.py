@@ -35,13 +35,15 @@ def test_project_context_detects_docs_and_readme(tmp_path: Path) -> None:
     assert "README.md" in context.important_paths
 
 
-def test_project_context_loads_pp_echo_manifest_first(tmp_path: Path) -> None:
+def test_project_context_prefers_agents_before_legacy_pp_echo(tmp_path: Path) -> None:
     (tmp_path / "PP_ECHO.md").write_text("first\n", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("second\n", encoding="utf-8")
 
     context = build_project_context(tmp_path)
 
-    assert context.manifest_files[0] == "PP_ECHO.md"
+    assert context.manifest_files == ["AGENTS.md"]
+    assert "second" in context.summary_text
+    assert "first" not in context.summary_text
     assert "truncated=false" in context.summary_text
 
 
@@ -51,7 +53,9 @@ def test_project_context_manifest_precedence(tmp_path: Path) -> None:
 
     context = build_project_context(tmp_path)
 
-    assert context.manifest_files == ["AGENTS.md", "CLAUDE.md"]
+    assert context.manifest_files == ["AGENTS.md"]
+    assert "agent rules" in context.summary_text
+    assert "claude rules" not in context.summary_text
 
 
 def test_project_context_truncates_large_manifest(tmp_path: Path) -> None:

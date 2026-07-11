@@ -8,6 +8,7 @@ import pytest
 from pp_agent.coding import RepositorySummary, RepositorySummarySection, RepositorySummarySource
 from pp_agent.capabilities.descriptor import CapabilityDescriptor
 from pp_agent.capabilities.router import BlockedCapability, CapabilitySelection
+from pp_agent.context import build_project_context
 from pp_agent.context.adapters import build_context_pack_from_messages, context_pack_to_trace_details
 from pp_agent.context.runtime_bridge import build_runtime_context_pack
 from pp_agent.coding.repository import repository_analysis_to_context_item
@@ -448,3 +449,20 @@ def test_runtime_bridge_different_repository_instruction_does_not_suppress_manif
 
     assert rendered_text.count(manifest_sentinel) == 1
     assert rendered_text.count(summary_sentinel) == 1
+
+
+def test_project_context_uses_agents_canonical_claude_fallback(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("agents rules", encoding="utf-8")
+    (tmp_path / "CLAUDE.md").write_text("claude rules", encoding="utf-8")
+
+    agents_context = build_project_context(tmp_path)
+
+    assert agents_context.manifest_files == ["AGENTS.md"]
+    assert "agents rules" in agents_context.summary_text
+    assert "claude rules" not in agents_context.summary_text
+
+    (tmp_path / "AGENTS.md").unlink()
+    claude_context = build_project_context(tmp_path)
+
+    assert claude_context.manifest_files == ["CLAUDE.md"]
+    assert "claude rules" in claude_context.summary_text
