@@ -87,6 +87,14 @@ class _ResolvedDocument:
 
 
 @dataclass(frozen=True)
+class _SkippedDocument:
+    relative_path: str
+    source_kind: DocumentKind
+    skip_reason: str
+    bytes_consumed: int = 0
+
+
+@dataclass(frozen=True)
 class _LoadedDocument:
     relative_path: str
     source_key: str
@@ -206,6 +214,10 @@ def _collect_documents(
         if resolved is None:
             sources.append(_skipped_source(source_key, candidate.source_kind, _safe_candidate_path(candidate.path), 0, "outside_root_rejected"))
             continue
+        if isinstance(resolved, _SkippedDocument):
+            source_key = _document_source_key(resolved.relative_path)
+            sources.append(_skipped_source(source_key, resolved.source_kind, resolved.relative_path, resolved.bytes_consumed, resolved.skip_reason))
+            continue
         source_key = _document_source_key(resolved.relative_path)
         if accepted_documents >= limits.max_documents:
             sources.append(_skipped_source(source_key, resolved.source_kind, resolved.relative_path, 0, "document_count_exceeded"))
@@ -235,7 +247,7 @@ def _resolve_document(
     candidate: RepositorySummaryDocument,
     warnings: _WarningCollector,
     source_key: str,
-) -> _ResolvedDocument | None:
+) -> _ResolvedDocument | _SkippedDocument | None:
     raw_path = str(candidate.path)
     if _is_forbidden_path_syntax(raw_path):
         warnings.add("outside_root_rejected", "Repository summary source path was outside the repository root.", source_key=source_key, severity="skipped")
@@ -256,10 +268,10 @@ def _resolve_document(
         resolved = path.resolve(strict=True)
     except OSError:
         warnings.add("outside_root_rejected", "Repository summary source path could not be resolved safely.", source_key=_document_source_key(relative_path), severity="skipped")
-        return _ResolvedDocument(relative_path, path, candidate.source_kind, candidate.required)
+        return _SkippedDocument(relative_path, candidate.source_kind, "outside_root_rejected")
     if not _is_relative_to(resolved, repository_root):
         warnings.add("symlink_escape_rejected", "Repository summary source symlink escaped the repository root.", source_key=_document_source_key(relative_path), severity="skipped")
-        return _ResolvedDocument(relative_path, path, candidate.source_kind, candidate.required)
+        return _SkippedDocument(relative_path, candidate.source_kind, "symlink_escape_rejected")
     return _ResolvedDocument(relative_path, resolved, candidate.source_kind, candidate.required)
 
 

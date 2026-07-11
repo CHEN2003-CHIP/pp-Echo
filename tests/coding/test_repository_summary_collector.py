@@ -118,11 +118,13 @@ def test_outside_or_ambiguous_paths_are_rejected(tmp_path: Path, bad_path: str) 
     assert any(source["skipped"] is True for source in payload["sources"])
 
 
-def test_symlink_escape_is_rejected_but_internal_symlink_is_allowed(tmp_path: Path) -> None:
+def test_symlink_escape_is_rejected_before_opening_but_internal_symlink_is_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    outside = tmp_path / "outside.md"
-    outside.write_text("outside", encoding="utf-8")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside = outside_dir / "secret.md"
+    outside.write_text("outside-secret", encoding="utf-8")
     target = repo / "docs" / "inside.md"
     target.parent.mkdir()
     target.write_text("inside", encoding="utf-8")
@@ -134,6 +136,16 @@ def test_symlink_escape_is_rejected_but_internal_symlink_is_allowed(tmp_path: Pa
     except OSError:
         pytest.skip("symlink creation is not available")
 
+    opened_paths: list[Path] = []
+    original_open = Path.open
+
+    def spy_open(self: Path, *args: object, **kwargs: object) -> object:
+        opened_paths.append(self)
+        if self == outside or self == external_link:
+            raise AssertionError("escaping symlink target was opened")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy_open)
     payload = build_repository_summary(
         project_context=_project_context(repo),
         repository_analysis=_analysis(repo),
@@ -149,6 +161,10 @@ def test_symlink_escape_is_rejected_but_internal_symlink_is_allowed(tmp_path: Pa
     assert _source(payload, "document:external.md")["skip_reason"] == "symlink_escape_rejected"
     assert _source(payload, "document:internal.md")["skipped"] is False
     assert "symlink_escape_rejected" in _warning_codes(payload)
+    assert external_link not in opened_paths
+    assert outside not in opened_paths
+    assert "outside-secret" not in json.dumps(payload)
+    assert str(outside) not in json.dumps(payload)
 
 
 def test_sensitive_sources_are_rejected_before_opening(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
