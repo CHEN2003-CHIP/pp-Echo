@@ -4,6 +4,11 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pp_agent.coding.testing import ValidationPlan
+from pp_agent.coding.pytest_provenance import (
+    build_instrumented_validation_command,
+    provenance_request_from_pending_details,
+    verify_pytest_provenance_attestation,
+)
 from pp_agent.coding.validation_outcome import (
     SelectedValidationCommand,
     ValidationObservation,
@@ -46,13 +51,19 @@ def stage_validation_cycle(validation_plan: ValidationPlan | None, registry: Any
         observation = validation_observation_from_result_details(selection, None)
         return _cycle_result("not_run", selection, observation, details={"reason": selection.reason})
     try:
+        instrumented = build_instrumented_validation_command(selection, workspace=registry.workspace)
+    except Exception as exc:  # noqa: BLE001
+        observation = _blocked_exception_observation(selection, exc)
+        return _cycle_result("blocked", selection, observation, details={"failure_kind": "instrumentation_failed"})
+    try:
         staged = registry.execute(
             "stage_test_command",
             {
                 "framework": "pytest",
-                "target": selection.target,
+                "target": instrumented.target,
                 "reason": reason,
-                "quiet": _selection_uses_quiet(selection),
+                "quiet": instrumented.quiet,
+                "_internal": instrumented.to_stage_test_internal_args(),
             },
         )
     except Exception as exc:  # noqa: BLE001
@@ -77,6 +88,9 @@ def stage_validation_cycle(validation_plan: ValidationPlan | None, registry: Any
             "staged_tool": "stage_test_command",
             "delegates_to": _string_or_none(details.get("delegates_to")) or "run_shell",
             "generated_command": _string_or_none(details.get("generated_command")),
+            "logical_command": selection.normalized_command,
+            "logical_command_digest": instrumented.logical_command_digest,
+            "adapter_mode": "trusted_pytest_provenance",
             "proposal_digest": _proposal_digest(details),
         },
     )
@@ -111,7 +125,16 @@ def approve_staged_validation_cycle(selection: SelectedValidationCommand, regist
             failure_kind=str(details.get("failure_kind") or "execution_failed"),
         )
     else:
-        observation = validation_observation_from_result_details(selection, details)
+        request = provenance_request_from_pending_details(details, workspace=registry.workspace)
+        provenance = None
+        if request is not None:
+            provenance = verify_pytest_provenance_attestation(
+                request,
+                exit_code=_optional_int(details.get("exit_code", details.get("returncode"))),
+                timed_out=bool(details.get("timed_out", False)),
+                tool_failed=bool(getattr(approved, "is_error", False)),
+            )
+        observation = validation_observation_from_result_details(selection, details, pytest_provenance=provenance)
     status: ValidationCycleStatus = "executed" if observation.execution_status == "executed" else "blocked"
     return _cycle_result(
         status,
@@ -207,3 +230,12 @@ def _string_or_none(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

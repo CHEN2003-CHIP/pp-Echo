@@ -45,6 +45,15 @@ from pp_agent.coding.repository_summary_collector import (
     RepositorySummaryDocument,
     build_repository_summary,
 )
+from pp_agent.coding.pytest_provenance import (
+    InstrumentedValidationCommand,
+    PytestProvenanceRequest,
+    PytestProvenanceVerification,
+    build_instrumented_validation_command,
+    logical_command_digest,
+    verify_pytest_provenance_attestation,
+    write_pytest_provenance_attestation,
+)
 from pp_agent.coding.runtime_loop import (
     ControlledLoopOptions,
     ControlledToolLoopResult,
@@ -110,7 +119,10 @@ __all__ = [
     "ControlledLoopOptions",
     "ControlledToolLoopResult",
     "ExecutionGuardrails",
+    "InstrumentedValidationCommand",
     "PlanStep",
+    "PytestProvenanceRequest",
+    "PytestProvenanceVerification",
     "RepositoryAnalysis",
     "RepositorySummary",
     "RepositorySummaryCollectionLimits",
@@ -140,6 +152,7 @@ __all__ = [
     "approve_staged_validation_cycle",
     "build_validation_plan",
     "build_repository_summary",
+    "build_instrumented_validation_command",
     "build_task_plan",
     "build_task_scope",
     "check_path_in_scope",
@@ -182,9 +195,12 @@ __all__ = [
     "task_scope_to_context_item",
     "task_scope_to_dict",
     "task_scope_to_write_scope",
+    "logical_command_digest",
     "select_primary_pytest_validation_command",
     "validation_observation_from_result_details",
     "validation_outcome_from_observation",
     "validation_plan_to_context_item",
     "validation_plan_to_dict",
+    "verify_pytest_provenance_attestation",
+    "write_pytest_provenance_attestation",
 ]

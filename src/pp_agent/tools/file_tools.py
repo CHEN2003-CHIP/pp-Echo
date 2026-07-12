@@ -913,6 +913,7 @@ class ApprovePendingActionTool(BaseTool):
             )
         if action_type == "run_shell":
             timeout = int(payload.get("details", {}).get("timeout_seconds", 30))
+            payload_details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
             try:
                 self.enforce_policy_for_command(PermissionDomain.BASH, payload["command"])
                 self._emit_sandbox_preflight_event(payload, token=arguments["token"])
@@ -946,6 +947,11 @@ class ApprovePendingActionTool(BaseTool):
                     "command": payload["command"],
                     "timeout_seconds": timeout,
                     **command_result,
+                    **(
+                        {"pytest_provenance_request": payload_details["pytest_provenance_request"]}
+                        if isinstance(payload_details.get("pytest_provenance_request"), dict)
+                        else {}
+                    ),
                     "effect": effect,
                     "patch_candidate": patch_candidate,
                     **self._runtime_result_details(shell_context, guardrail_check=shell_guardrail, action="shell_command"),
@@ -1980,6 +1986,9 @@ class ApprovePendingActionTool(BaseTool):
             result_details = getattr(error, "result_details", None)
             shell_failure = self._shell_failure_details(failure_detail, result_details=result_details)
             details.update(shell_failure)
+            payload_details = updated.get("details") if isinstance(updated.get("details"), dict) else {}
+            if isinstance(payload_details.get("pytest_provenance_request"), dict):
+                details["pytest_provenance_request"] = payload_details["pytest_provenance_request"]
             if isinstance(error, DockerSandboxPreflightError):
                 details.update(error.details)
         if action_type in {"edit_file", "apply_patch_artifact"}:
