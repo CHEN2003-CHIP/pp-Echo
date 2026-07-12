@@ -13,6 +13,7 @@ from pp_agent.coding import (
     reject_staged_validation_cycle,
     stage_validation_cycle,
 )
+from pp_agent.coding.pytest_provenance import write_pytest_provenance_attestation
 from pp_agent.sandbox.base import SandboxRunRequest, SandboxRunResult
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.registry import ToolRegistry
@@ -20,9 +21,10 @@ from pp_agent.tools.shell_tool import SHELL_OUTPUT_PREVIEW_MAX_CHARS
 
 
 class RecordingSandboxExecutor:
-    def __init__(self, result: SandboxRunResult | None = None, *, exc: Exception | None = None) -> None:
+    def __init__(self, result: SandboxRunResult | None = None, *, exc: Exception | None = None, write_provenance: bool = True) -> None:
         self.result = result
         self.exc = exc
+        self.write_provenance = write_provenance
         self.requests: list[SandboxRunRequest] = []
 
     def run(self, request: SandboxRunRequest) -> SandboxRunResult:
@@ -30,6 +32,8 @@ class RecordingSandboxExecutor:
         if self.exc is not None:
             raise self.exc
         assert self.result is not None
+        if self.write_provenance:
+            _write_provenance_from_request(request, self.result.returncode)
         return self.result
 
 
@@ -52,6 +56,21 @@ def _result(*, returncode: int = 0, stdout: str = "ok\n", stderr: str = "", time
 
 def _store(tmp_path: Path) -> PendingActionStore:
     return PendingActionStore(tmp_path / ".pp-agent" / "pending-edits")
+
+
+def _write_provenance_from_request(request: SandboxRunRequest, exit_status: int) -> None:
+    parts = request.command.split()
+    if "--pp-echo-pytest-provenance-file" not in parts:
+        return
+    artifact = parts[parts.index("--pp-echo-pytest-provenance-file") + 1]
+    nonce = parts[parts.index("--pp-echo-pytest-provenance-nonce") + 1]
+    digest = parts[parts.index("--pp-echo-pytest-logical-command-digest") + 1]
+    write_pytest_provenance_attestation(
+        artifact_path=request.cwd / artifact,
+        nonce=nonce,
+        logical_command_digest=digest,
+        pytest_exit_status=exit_status,
+    )
 
 
 def test_stage_validation_cycle_stages_existing_stage_test_command_without_execution(tmp_path: Path) -> None:
@@ -79,7 +98,8 @@ def test_stage_validation_cycle_uses_first_eligible_command_only(tmp_path: Path)
 
     assert result.selection.command == "python -m pytest tests/runtime -q"
     assert result.selection.command_index == 1
-    assert _store(tmp_path).load(result.approval_token)["command"] == "python -m pytest tests/runtime -q"  # type: ignore[arg-type]
+    assert _store(tmp_path).load(result.approval_token)["command"].startswith("python -m pytest tests/runtime -q")  # type: ignore[union-attr]
+    assert result.selection.normalized_command == "python -m pytest tests/runtime -q"
 
 
 def test_stage_validation_cycle_no_eligible_command_does_not_stage_or_execute(tmp_path: Path) -> None:
@@ -136,6 +156,7 @@ def test_approve_staged_validation_cycle_executes_exact_staged_action_once(tmp_p
     assert result.observation.stdout == "passed\n"
     assert len(fake.requests) == 1
     assert fake.requests[0].command == pending_before["command"]
+    assert "--pp-echo-pytest-provenance-file" in fake.requests[0].command
     assert fake.requests[0].timeout_seconds == pending_before["details"]["timeout_seconds"]
 
 
@@ -162,10 +183,11 @@ def test_nonzero_exit_remains_conservative_without_repair_eligibility(tmp_path: 
     result = approve_staged_validation_cycle(staged.selection, registry, staged.approval_token or "")
 
     assert result.status == "executed"
-    assert result.outcome.final_status == "validation_nonzero"
+    expected = "failed" if returncode == 1 else "validation_nonzero"
+    assert result.outcome.final_status == expected
     assert result.observation is not None
-    assert result.observation.validation_status == "validation_nonzero"
-    assert result.observation.repair_eligible is False
+    assert result.observation.validation_status == expected
+    assert result.observation.repair_eligible is (returncode == 1)
     assert result.outcome.repair_attempted is False
     assert result.outcome.revalidation_attempted is False
 
@@ -182,6 +204,19 @@ def test_timeout_is_blocked_not_test_failure(tmp_path: Path) -> None:
     assert result.observation is not None
     assert result.observation.failure_kind == "timeout"
     assert result.observation.repair_eligible is False
+
+
+def test_missing_provenance_keeps_nonzero_conservative(tmp_path: Path) -> None:
+    fake = RecordingSandboxExecutor(_result(returncode=1, stdout="FAILED but no artifact\n", tmp_path=tmp_path), write_provenance=False)
+    registry = ToolRegistry(tmp_path, sandbox_executor=fake)
+    staged = stage_validation_cycle(_plan("python -m pytest tests/coding -q"), registry)
+
+    result = approve_staged_validation_cycle(staged.selection, registry, staged.approval_token or "")
+
+    assert result.outcome.final_status == "validation_nonzero"
+    assert result.observation is not None
+    assert result.observation.repair_eligible is False
+    assert result.observation.pytest_provenance_status == "missing"
 
 
 def test_tool_exception_is_blocked_not_test_failure(tmp_path: Path) -> None:

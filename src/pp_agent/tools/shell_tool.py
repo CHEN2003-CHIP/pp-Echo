@@ -30,7 +30,14 @@ def shell_output(result: SandboxRunResult) -> str:
     return (result.stdout or "") + (("\n" + result.stderr) if result.stderr else "")
 
 
-def build_pytest_command(*, workspace: Path, target: str, quiet: bool = True) -> tuple[str, str]:
+def build_pytest_command(
+    *,
+    workspace: Path,
+    target: str,
+    quiet: bool = True,
+    runner: str = "python",
+    extra_args: list[str] | None = None,
+) -> tuple[str, str]:
     """Return a safe workspace-relative pytest command and normalized target."""
 
     raw_target = str(target or "").strip()
@@ -48,9 +55,17 @@ def build_pytest_command(*, workspace: Path, target: str, quiet: bool = True) ->
     if resolved != workspace_root and workspace_root not in resolved.parents:
         raise ValueError("pytest target must stay inside the workspace.")
     relative = resolved.relative_to(workspace_root).as_posix()
-    command = f"python -m pytest {relative}"
+    normalized_runner = str(runner or "python").strip()
+    if normalized_runner in {"python", "python3", "py"}:
+        command = f"{normalized_runner} -m pytest {relative}"
+    elif normalized_runner == "pytest":
+        command = f"pytest {relative}"
+    else:
+        raise ValueError("Unsupported pytest runner.")
     if quiet:
         command += " -q"
+    if extra_args:
+        command += " " + " ".join(str(arg) for arg in extra_args)
     return command, relative
 
 
@@ -387,10 +402,43 @@ class StageTestCommandTool(BaseTool):
         if framework != "pytest":
             raise ValueError("stage_test_command currently only supports pytest.")
         quiet = bool(arguments.get("quiet", True))
+        internal = arguments.get("_internal")
+        runner = "python"
+        extra_args: list[str] = []
+        provenance_details: dict[str, Any] | None = None
+        if isinstance(internal, dict):
+            runner = str(internal.get("runner") or "python").strip()
+            provenance = internal.get("provenance")
+            if isinstance(provenance, dict):
+                artifact = str(provenance.get("artifact_relative_path") or "")
+                nonce = str(provenance.get("nonce") or "")
+                logical_digest = str(provenance.get("logical_command_digest") or "")
+                if not artifact or not nonce or not logical_digest:
+                    raise ValueError("pytest provenance arguments are incomplete.")
+                extra_args = [
+                    "-p",
+                    "pp_agent.coding.pytest_provenance_plugin",
+                    "--pp-echo-pytest-provenance-file",
+                    artifact,
+                    "--pp-echo-pytest-provenance-nonce",
+                    nonce,
+                    "--pp-echo-pytest-logical-command-digest",
+                    logical_digest,
+                ]
+                provenance_details = {
+                    "schema_version": provenance.get("schema_version"),
+                    "plugin_id": provenance.get("plugin_id"),
+                    "plugin_version": provenance.get("plugin_version"),
+                    "nonce": nonce,
+                    "logical_command_digest": logical_digest,
+                    "artifact_relative_path": artifact,
+                }
         command, normalized_target = build_pytest_command(
             workspace=self.workspace,
             target=str(arguments.get("target") or ""),
             quiet=quiet,
+            runner=runner,
+            extra_args=extra_args,
         )
         timeout = int(arguments.get("timeout_seconds", self.default_timeout_seconds))
         result = PowerShellTool(
@@ -414,9 +462,13 @@ class StageTestCommandTool(BaseTool):
         payload = store.load(str(details["token"]))
         payload_details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
         payload_details["test_command_proposal"] = helper_proposal
+        if provenance_details is not None:
+            payload_details["pytest_provenance_request"] = provenance_details
         payload["details"] = payload_details
         store.save(str(details["token"]), payload)
         details["test_command_proposal"] = helper_proposal
+        if provenance_details is not None:
+            details["pytest_provenance_request"] = provenance_details
         details["generated_command"] = command
         details["delegates_to"] = "run_shell"
         result.details = details

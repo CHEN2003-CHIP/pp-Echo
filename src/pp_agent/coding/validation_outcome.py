@@ -5,6 +5,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from pp_agent.coding.testing import ValidationCommand, ValidationPlan
+from pp_agent.coding.pytest_provenance import PytestProvenanceVerification
 
 ValidationSelectionStatus = Literal["selected", "no_eligible_validation"]
 ValidationExecutionStatus = Literal["not_executed", "executed", "blocked"]
@@ -69,6 +70,9 @@ class ValidationObservation:
     failure_kind: str | None = None
     failure_summary: str = ""
     repair_eligible: bool = False
+    pytest_provenance_status: str | None = None
+    pytest_completion_category: str | None = None
+    pytest_exit_status: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -90,6 +94,9 @@ class ValidationObservation:
             "failure_kind": self.failure_kind,
             "failure_summary": self.failure_summary,
             "repair_eligible": self.repair_eligible,
+            "pytest_provenance_status": self.pytest_provenance_status,
+            "pytest_completion_category": self.pytest_completion_category,
+            "pytest_exit_status": self.pytest_exit_status,
         }
 
 
@@ -138,6 +145,7 @@ def validation_observation_from_result_details(
     execution_status: ValidationExecutionStatus = "executed",
     validation_status: ValidationStatus | None = None,
     failure_kind: str | None = None,
+    pytest_provenance: PytestProvenanceVerification | None = None,
 ) -> ValidationObservation:
     """Normalize an already-existing bounded shell result into validation evidence without executing anything."""
 
@@ -155,6 +163,14 @@ def validation_observation_from_result_details(
     if timed_out:
         status: ValidationStatus = "blocked"
         resolved_failure = failure_kind or "timeout"
+    elif pytest_provenance is not None and pytest_provenance.valid:
+        status = _status_from_pytest_category(pytest_provenance.category)
+        resolved_failure = failure_kind or (
+            None if status == "passed" else f"pytest_{pytest_provenance.category}"
+        )
+    elif pytest_provenance is not None and pytest_provenance.status != "skipped":
+        status = "validation_nonzero" if exit_code is not None else "blocked"
+        resolved_failure = failure_kind or pytest_provenance.failure_kind or "pytest_provenance_invalid"
     elif validation_status is not None:
         status = validation_status
         resolved_failure = failure_kind
@@ -186,7 +202,10 @@ def validation_observation_from_result_details(
         backend=_optional_str(details.get("backend") or details.get("sandbox_backend")),
         failure_kind=resolved_failure,
         failure_summary=_failure_summary(status, exit_code=exit_code, failure_kind=resolved_failure, timed_out=timed_out),
-        repair_eligible=status == "failed",
+        repair_eligible=bool(pytest_provenance.repair_eligible) if pytest_provenance is not None else status == "failed",
+        pytest_provenance_status=pytest_provenance.status if pytest_provenance is not None else None,
+        pytest_completion_category=pytest_provenance.category if pytest_provenance is not None else None,
+        pytest_exit_status=pytest_provenance.pytest_exit_status if pytest_provenance is not None else None,
     )
 
 
@@ -356,3 +375,11 @@ def _optional_int(value: Any) -> int | None:
 def _int_or_len(value: Any, text: str) -> int:
     parsed = _optional_int(value)
     return parsed if parsed is not None else len(text)
+
+
+def _status_from_pytest_category(category: str | None) -> ValidationStatus:
+    if category == "passed":
+        return "passed"
+    if category == "tests_failed":
+        return "failed"
+    return "validation_nonzero"
