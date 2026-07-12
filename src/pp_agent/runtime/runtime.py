@@ -265,6 +265,7 @@ class AgentRuntime:
         self._capability_catalog_fingerprint: tuple[str, ...] = ()
         self._current_capability_selection = None
         self._last_context_selection_details: dict[str, object] = {}
+        self.scoped_instruction_context_provider = None
         self.context_pipeline_config = _context_runtime_bridge().context_pipeline_config_from_settings(config_snapshot.settings)
         self.use_context_pipeline_messages = self.context_pipeline_config.use_context_pipeline_messages
         self.context_pipeline_mode = _context_pipeline_mode(config_snapshot.settings)
@@ -1663,7 +1664,21 @@ class AgentRuntime:
             model_profile=self.model_profile,
             runtime_profile=self.runtime_profile,
             capability_selection=self._current_capability_selection,
+            scoped_instruction_items=self._scoped_instruction_context_items(),
         )
+
+    def _scoped_instruction_context_items(self) -> list[object]:
+        """Return optional run-scoped project context items installed by coding flows."""
+
+        provider = getattr(self, "scoped_instruction_context_provider", None)
+        if not callable(provider):
+            return []
+        try:
+            items = provider()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scoped instruction context provider failed: %s", exc)
+            return []
+        return list(items or [])
 
     def _model_trace_id(self) -> str:
         """Return a stable model id for context trace metadata."""
