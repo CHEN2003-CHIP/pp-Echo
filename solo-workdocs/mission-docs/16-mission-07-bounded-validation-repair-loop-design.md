@@ -1,10 +1,10 @@
 # Mission 07: Bounded Validation and Repair Loop Design
 
-Status: Ratified / design ready
+Status: Implemented / closeout ready
 
-Scope type: DOCS-ONLY SCOPE RATIFICATION
+Scope type: DESIGN RECORD AND IMPLEMENTATION BOUNDARY
 
-This document formally defines Mission 07. It records the completed 07A discovery result, the human-approved validation and repair semantics, and the 07B/07C/07D/07E boundaries. It does not implement production code.
+This document formally defines Mission 07. It records the completed 07A discovery result, the human-approved validation and repair semantics, the 07B/07C/07D/07E boundaries, and the final implementation constraints. The closeout evidence lives in `solo-workdocs/mission-docs/17-mission-07-bounded-validation-repair-loop-closeout.md`.
 
 ## 07A Discovery Record
 
@@ -423,6 +423,14 @@ Includes:
 
 Recommended implementation/docs commits as appropriate.
 
+Implementation result:
+
+- Existing `pp-echo code` CLI ownership is reused.
+- CLI JSON and human-readable output expose typed `ValidationOutcome` and `ValidationRepairCycleState` summaries.
+- CLI output is presentation-only and does not trigger validation, approval, repair, or re-validation.
+- No new trace schema was added; Mission 07 remains auditable through existing runtime/tool/approval traces plus typed validation result contracts.
+- Doctor remains non-executing and was not extended to run validation or repair.
+
 ## Explicit First-version Scope
 
 Mission 07 includes:
@@ -442,6 +450,22 @@ Mission 07 includes:
 - minimal CLI outcome display
 - trace auditability through existing mechanisms
 - release gate
+
+## Final Implementation Invariants
+
+Mission 07 runtime semantics are fixed at:
+
+- `REPAIR TRIGGER: VALIDATED TRUSTED TESTS_FAILED ATTESTATION ONLY`
+- `REPAIR ATTEMPTS: MAXIMUM ONE`
+- `RE-VALIDATION ATTEMPTS: MAXIMUM ONE`
+- `VALIDATION EXECUTIONS: MAXIMUM TWO`
+- `COMMAND SELECTION: EXACTLY ONCE`
+- `SAME LOGICAL COMMAND: REQUIRED`
+- `CLI OUTPUT SOURCE: TYPED VALIDATION OUTCOME`
+- `NO STDOUT/STDERR SEMANTIC PARSING`
+- `NO SENSITIVE PROVENANCE DATA EXPOSED`
+
+The pytest provenance plugin and verifier are coding-owned. Generic shell tools and approval storage do not classify pytest completion category or own repair policy.
 
 ## Explicit Deferred Scope
 

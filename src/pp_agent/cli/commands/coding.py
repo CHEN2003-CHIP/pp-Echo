@@ -9,6 +9,8 @@ from pp_agent.coding import (
     CodingExecutionSession,
     CodingWorkflow,
     ControlledToolLoopResult,
+    ValidationOutcome,
+    ValidationRepairCycleState,
     prepare_coding_workflow,
     run_controlled_coding_loop,
     start_coding_execution_session,
@@ -126,6 +128,8 @@ def controlled_loop_result_to_cli_dict(
         "pending_approvals_count": len(result.pending_approvals),
         "pending_approvals": [_pending_approval_summary(item) for item in result.pending_approvals],
         "validation_commands": _validation_commands(result),
+        "validation_outcome": validation_outcome_to_cli_dict(getattr(result, "validation_outcome", None)),
+        "validation_repair": validation_repair_state_to_cli_dict(getattr(result, "validation_repair_state", None)),
         "warnings": list(result.warnings),
         "summary_text": result.summary_text,
     }
@@ -228,6 +232,12 @@ def format_controlled_loop_result(result: ControlledToolLoopResult, *, show_time
     lines.append("")
     lines.append("Validation:")
     lines.extend(f"- {command}" for command in payload["validation_commands"]) if payload["validation_commands"] else lines.append("- None")
+    outcome_text = format_validation_outcome(getattr(result, "validation_outcome", None))
+    if outcome_text:
+        lines.extend(["", outcome_text])
+    repair_text = format_validation_repair_state(getattr(result, "validation_repair_state", None))
+    if repair_text:
+        lines.extend(["", repair_text])
     _append_warnings(lines, payload["warnings"])
     if payload.get("summary_text"):
         lines.extend(["", "Summary:", payload["summary_text"]])
@@ -306,6 +316,173 @@ def _validation_commands(result: ControlledToolLoopResult) -> list[str]:
     if result.validation_plan is None:
         return []
     return [command.command for command in result.validation_plan.commands]
+
+
+def validation_outcome_to_cli_dict(outcome: ValidationOutcome | None) -> dict[str, Any]:
+    """Return a redacted, stable CLI summary for one typed ValidationOutcome."""
+
+    if outcome is None:
+        return {
+            "present": False,
+            "final_status": "not_run",
+            "repair_attempted": False,
+            "revalidation_attempted": False,
+            "explanation": "Validation outcome is not available.",
+        }
+    observation = outcome.observation
+    command: dict[str, Any] | None = None
+    diagnostics: dict[str, Any] | None = None
+    if observation is not None:
+        command = {
+            "command_id": observation.command_id,
+            "normalized_command": observation.normalized_command,
+            "target": observation.target,
+        }
+        diagnostics = {
+            "execution_status": observation.execution_status,
+            "validation_status": observation.validation_status,
+            "exit_code": observation.exit_code,
+            "failure_kind": observation.failure_kind,
+            "failure_summary": observation.failure_summary,
+            "timed_out": observation.timed_out,
+            "stdout_truncated": observation.stdout_truncated,
+            "stderr_truncated": observation.stderr_truncated,
+            "stdout_chars": observation.stdout_chars,
+            "stderr_chars": observation.stderr_chars,
+            "pytest_provenance_status": observation.pytest_provenance_status,
+            "pytest_completion_category": observation.pytest_completion_category,
+            "pytest_exit_status": observation.pytest_exit_status,
+            "repair_eligible": observation.repair_eligible,
+        }
+    return _json_safe(
+        {
+            "present": True,
+            "final_status": outcome.final_status,
+            "repair_attempted": outcome.repair_attempted,
+            "revalidation_attempted": outcome.revalidation_attempted,
+            "command": command,
+            "diagnostics": diagnostics,
+            "explanation": explain_validation_outcome(outcome),
+        }
+    )
+
+
+def validation_repair_state_to_cli_dict(state: ValidationRepairCycleState | None) -> dict[str, Any]:
+    """Return a redacted, stable CLI summary for one bounded repair cycle state."""
+
+    if state is None:
+        return {"present": False}
+    return _json_safe(
+        {
+            "present": True,
+            "status": state.status,
+            "repair_attempted": state.repair_attempted,
+            "revalidation_attempted": state.revalidation_attempted,
+            "validation_executions": state.validation_executions,
+            "initial_validation": validation_outcome_to_cli_dict(state.initial_result.outcome),
+            "revalidation": validation_outcome_to_cli_dict(state.revalidation_result.outcome)
+            if state.revalidation_result is not None
+            else None,
+            "final_outcome": validation_outcome_to_cli_dict(state.final_outcome),
+            "explanation": _repair_state_explanation(state),
+        }
+    )
+
+
+def format_validation_outcome(outcome: ValidationOutcome | None) -> str:
+    """Format a typed validation outcome for human-readable CLI output."""
+
+    payload = validation_outcome_to_cli_dict(outcome)
+    if not payload.get("present"):
+        return ""
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    command = payload.get("command") if isinstance(payload.get("command"), dict) else {}
+    lines = [
+        "Validation Outcome:",
+        f"- Final status: {payload['final_status']}",
+        f"- Repair attempted: {str(payload['repair_attempted']).lower()}",
+        f"- Re-validation attempted: {str(payload['revalidation_attempted']).lower()}",
+        f"- Explanation: {payload['explanation']}",
+    ]
+    normalized_command = command.get("normalized_command")
+    if normalized_command:
+        lines.append(f"- Command: {normalized_command}")
+    if diagnostics:
+        lines.extend(
+            [
+                f"- Execution: {diagnostics.get('execution_status')}",
+                f"- Validation: {diagnostics.get('validation_status')}",
+                f"- Pytest category: {diagnostics.get('pytest_completion_category') or 'none'}",
+                f"- Failure kind: {diagnostics.get('failure_kind') or 'none'}",
+                f"- Truncated output: stdout={str(diagnostics.get('stdout_truncated')).lower()} stderr={str(diagnostics.get('stderr_truncated')).lower()}",
+            ]
+        )
+    return "\n".join(lines).strip()
+
+
+def format_validation_repair_state(state: ValidationRepairCycleState | None) -> str:
+    """Format one bounded repair state without exposing internal provenance details."""
+
+    payload = validation_repair_state_to_cli_dict(state)
+    if not payload.get("present"):
+        return ""
+    lines = [
+        "Validation Repair:",
+        f"- Status: {payload['status']}",
+        f"- Repair attempted: {str(payload['repair_attempted']).lower()}",
+        f"- Re-validation attempted: {str(payload['revalidation_attempted']).lower()}",
+        f"- Validation executions: {payload['validation_executions']}",
+        f"- Explanation: {payload['explanation']}",
+    ]
+    return "\n".join(lines).strip()
+
+
+def explain_validation_outcome(outcome: ValidationOutcome | None) -> str:
+    """Explain a ValidationOutcome using typed fields only."""
+
+    if outcome is None or outcome.observation is None:
+        return "Validation has not run."
+    observation = outcome.observation
+    if observation.execution_status == "not_executed":
+        if outcome.final_status == "approval_pending":
+            return "Validation is awaiting approval and has not executed."
+        return "Validation did not execute."
+    if outcome.final_status == "approval_pending":
+        return "Validation or re-validation is awaiting approval."
+    if observation.execution_status == "blocked" or outcome.final_status == "blocked":
+        if observation.pytest_provenance_status in {"invalid", "missing"}:
+            return "Validation is blocked because pytest provenance was not trusted."
+        if observation.timed_out:
+            return "Validation is blocked because execution timed out."
+        return "Validation is blocked by execution or infrastructure failure."
+    if outcome.final_status == "passed":
+        return "Validation passed." if not outcome.repair_attempted else "Repair was attempted and re-validation passed."
+    if outcome.final_status == "failed":
+        if observation.pytest_completion_category == "tests_failed" and observation.pytest_provenance_status == "valid":
+            if outcome.repair_attempted:
+                return "Repair was attempted, but trusted re-validation still reported tests_failed."
+            return "Trusted pytest provenance reported tests_failed; repair is eligible."
+        return "Validation failed by typed status, but repair is not eligible without trusted tests_failed provenance."
+    if outcome.final_status == "validation_nonzero":
+        category = observation.pytest_completion_category
+        if category in {"internal_error", "usage_error", "no_tests_collected", "interrupted", "unknown"}:
+            return f"Pytest completed with {category}; this is not a genuine tests_failed repair trigger."
+        return "Validation returned nonzero without trusted tests_failed provenance."
+    return f"Validation final status is {outcome.final_status}."
+
+
+def _repair_state_explanation(state: ValidationRepairCycleState) -> str:
+    if state.status == "not_repairable":
+        return "Repair did not start because the initial validation outcome was not trusted tests_failed."
+    if state.status == "repair_pending":
+        return "Repair started and is awaiting existing tool approval."
+    if state.status == "repair_blocked":
+        return "Repair started but was blocked before re-validation."
+    if state.status == "revalidation_pending":
+        return "Repair completed and same-command re-validation is awaiting approval."
+    if state.status == "completed":
+        return "The bounded repair cycle completed."
+    return f"Repair cycle status is {state.status}."
 
 
 def _pending_approval_summary(item: dict[str, Any]) -> dict[str, Any]:
@@ -412,8 +589,13 @@ def _unique(values: list[str]) -> list[str]:
 
 __all__ = [
     "controlled_loop_result_to_cli_dict",
+    "explain_validation_outcome",
     "format_controlled_loop_result",
     "format_prepare_only_result",
+    "format_validation_outcome",
+    "format_validation_repair_state",
     "prepare_result_to_cli_dict",
     "run_code_command",
+    "validation_outcome_to_cli_dict",
+    "validation_repair_state_to_cli_dict",
 ]
