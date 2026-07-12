@@ -47,6 +47,17 @@ def stage_validation_cycle(validation_plan: ValidationPlan | None, registry: Any
     """Stage one selected pytest validation command through the existing stage_test_command path."""
 
     selection = select_primary_pytest_validation_command(validation_plan)
+    return stage_selected_validation_cycle(selection, registry, reason=reason)
+
+
+def stage_selected_validation_cycle(
+    selection: SelectedValidationCommand,
+    registry: Any,
+    *,
+    reason: str = "Run validation",
+) -> ValidationCycleResult:
+    """Stage an already-selected immutable validation command without re-running command selection."""
+
     if not selection.selected:
         observation = validation_observation_from_result_details(selection, None)
         return _cycle_result("not_run", selection, observation, details={"reason": selection.reason})
