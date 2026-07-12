@@ -2,11 +2,12 @@
 
 ## Mission 06: Scoped Repository Instructions
 
-Status: Ratified / 06A completed / ready for 06B planning
+Status: Completed / ready for human merge review
 
 Details:
 
 - `solo-workdocs/mission-docs/14-mission-06-scoped-repository-instructions-design.md`
+- `solo-workdocs/mission-docs/15-mission-06-scoped-repository-instructions-closeout.md`
 
 Goal:
 
@@ -26,22 +27,27 @@ Official direction:
 Completed:
 
 - 06A: OpenCode source-level benchmark and scoped instruction semantics decision.
-
-Planned tasks:
-
 - 06B: `ScopedInstruction` contract and bounded resolver.
 - 06C: scoped activation state and triggers.
 - 06D: ContextPipeline integration, release gate, and closeout.
 
 Not done:
 
-- No Mission 06 production implementation in this ratification step.
-- No resolver implementation.
-- No runtime changes.
-- No file tool changes.
-- No tests changed.
-- No full pytest suite required for this docs-only ratification.
-- No Mission 06B coding started.
+- No edit trigger.
+- No global, custom, or remote rules.
+- No generic recursive scan.
+- No session-global activation.
+- No new context section.
+- No second prompt/provider path.
+- No new trace schema.
+- No new ContextPipeline or budget engine.
+- No dependency additions.
+
+Carried forward:
+
+- Resolver still reuses repository-summary collector private helpers; acceptable for Mission 06 MVP, but can be cleaned up later if collector ownership changes.
+- Scoped instruction digest means bounded decoded canonical content digest, not full raw-file digest.
+- Future support for edit-triggered activation, custom filenames, remote rules, or global policy should be scoped as a later Mission.
 
 ## Mission 05: Repository Summary Integration with Existing ContextPipeline
 
