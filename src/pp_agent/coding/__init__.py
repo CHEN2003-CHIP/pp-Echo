@@ -87,6 +87,14 @@ from pp_agent.coding.testing import (
     validation_plan_to_context_item,
     validation_plan_to_dict,
 )
+from pp_agent.coding.validation_outcome import (
+    SelectedValidationCommand,
+    ValidationObservation,
+    ValidationOutcome,
+    select_primary_pytest_validation_command,
+    validation_observation_from_result_details,
+    validation_outcome_from_observation,
+)
 
 __all__ = [
     "ChangeImpact",
@@ -115,6 +123,9 @@ __all__ = [
     "TaskScope",
     "TaskPlan",
     "ValidationCommand",
+    "SelectedValidationCommand",
+    "ValidationObservation",
+    "ValidationOutcome",
     "ValidationPlan",
     "analyze_change_impact",
     "analyze_repository",
@@ -161,6 +172,9 @@ __all__ = [
     "task_scope_to_context_item",
     "task_scope_to_dict",
     "task_scope_to_write_scope",
+    "select_primary_pytest_validation_command",
+    "validation_observation_from_result_details",
+    "validation_outcome_from_observation",
     "validation_plan_to_context_item",
     "validation_plan_to_dict",
 ]
