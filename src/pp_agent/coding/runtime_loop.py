@@ -12,9 +12,14 @@ from pp_agent.coding.execution import (
 )
 from pp_agent.coding.orchestrator import CodingWorkflow, prepare_coding_workflow
 from pp_agent.coding.scoped_activation import ScopedInstructionActivationState
+from pp_agent.coding.scoped_instruction_context import scoped_instruction_records_to_context_items
 from pp_agent.coding.testing import ValidationPlan
 from pp_agent.runtime.execution_context import RuntimeExecutionContext, runtime_counters_to_dict, runtime_execution_context_to_dict
 from pp_agent.runtime.hooks import AfterToolCallDecision
+
+
+_MISSING_SCOPED_CONTEXT_PROVIDER = object()
+_SCOPED_CONTEXT_PROVIDER_NOT_INSTALLED = object()
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,7 @@ def run_controlled_coding_loop(
 
     if not resolved_options.dry_run:
         hooks_snapshot = _install_scoped_instruction_observer(runtime, activation_state)
+        context_provider_snapshot = _install_scoped_instruction_context_provider(runtime, activation_state)
         try:
             for turn_index in range(max(resolved_options.max_model_turns, 0)):
                 if activation_state is not None:
@@ -123,6 +129,7 @@ def run_controlled_coding_loop(
             context = _runtime_execution_context_from_runtime(runtime, fallback=context)
         finally:
             _restore_runtime_hooks(runtime, hooks_snapshot)
+            _restore_scoped_instruction_context_provider(runtime, context_provider_snapshot)
 
     pending_approvals = collect_pending_approvals(runtime)
     if status in {"prepared", "running"}:
@@ -272,6 +279,33 @@ def _restore_runtime_hooks(runtime: Any, snapshot: dict[str, list[Any]] | None) 
     restore = getattr(hooks, "restore", None)
     if callable(restore):
         restore(snapshot)
+
+
+def _install_scoped_instruction_context_provider(runtime: Any, state: ScopedInstructionActivationState | None) -> Any:
+    if state is None:
+        return _SCOPED_CONTEXT_PROVIDER_NOT_INSTALLED
+    previous = getattr(runtime, "scoped_instruction_context_provider", _MISSING_SCOPED_CONTEXT_PROVIDER)
+
+    def provider() -> tuple[Any, ...]:
+        current = scoped_instruction_records_to_context_items(state.active_records())
+        if callable(previous):
+            return (*tuple(previous() or ()), *current)
+        return current
+
+    setattr(runtime, "scoped_instruction_context_provider", provider)
+    return previous
+
+
+def _restore_scoped_instruction_context_provider(runtime: Any, previous: Any) -> None:
+    if previous is _SCOPED_CONTEXT_PROVIDER_NOT_INSTALLED:
+        return
+    if previous is _MISSING_SCOPED_CONTEXT_PROVIDER:
+        try:
+            delattr(runtime, "scoped_instruction_context_provider")
+        except AttributeError:
+            pass
+        return
+    setattr(runtime, "scoped_instruction_context_provider", previous)
 
 
 def _runtime_execution_context_from_runtime(runtime: Any, *, fallback: RuntimeExecutionContext) -> RuntimeExecutionContext:

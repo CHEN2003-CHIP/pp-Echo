@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from pp_agent.capabilities.router import CapabilitySelection
 from pp_agent.coding.repository import analyze_repository, repository_analysis_to_context_item
 from pp_agent.coding.repository_summary import RepositorySummary
 from pp_agent.coding.repository_summary_context import repository_summary_to_context_items
+from pp_agent.coding.scoped_instruction_context import scoped_instruction_context_render_key
 from pp_agent.context.adapters import build_context_pack_from_messages
 from pp_agent.context.budget import ContextItemSummary
 from pp_agent.context.item import ContextItem
@@ -41,6 +43,7 @@ def build_runtime_context_pack(
     runtime_profile: Any = None,
     capability_selection: CapabilitySelection | None = None,
     repository_summary: RepositorySummary | None = None,
+    scoped_instruction_items: Iterable[ContextItem] | None = None,
 ) -> ContextPack:
     """Small Runtime bridge that builds the audited ContextPack for one provider call."""
 
@@ -58,6 +61,7 @@ def build_runtime_context_pack(
     global_root = Path(settings.global_dir)
     pipeline = ContextPipeline(config)
     repository_summary_items = list(repository_summary_to_context_items(repository_summary)) if repository_summary is not None else []
+    active_scoped_instruction_items = list(scoped_instruction_items or [])
     pack = pipeline.build(
         user_message=_latest_user_text(messages),
         memory_providers={
@@ -69,7 +73,7 @@ def build_runtime_context_pack(
         attachment_providers=[*legacy_pack.attachments, *AttachmentContextProvider(workspace, session_id).list_items()],
         capability_selection=[*legacy_pack.capabilities, *legacy_pack.mcp, *legacy_pack.skills, *_capability_items(capability_selection)],
         conversation_items=legacy_pack.conversation,
-        project_context_providers=[*repository_summary_items, *legacy_pack.project_context],
+        project_context_providers=[*repository_summary_items, *active_scoped_instruction_items, *legacy_pack.project_context],
         system_instructions=legacy_pack.system,
         runtime_notes=legacy_pack.runtime_notes,
         workspace=workspace,
@@ -82,7 +86,11 @@ def build_runtime_context_pack(
     repository_analysis = analyze_repository(workspace, project_context)
     project_context_item = _project_context_item_for_repository_summary(project_context, repository_summary_items)
     repository_analysis_item = repository_analysis_to_context_item(repository_analysis)
-    pack.project_context = [project_context_item, repository_analysis_item, *pack.project_context]
+    pack.project_context = [
+        project_context_item,
+        repository_analysis_item,
+        *_semantic_project_context_order(pack.project_context),
+    ]
     pack.source_refs = _unique_source_refs([*legacy_pack.source_refs, *pack.source_refs])
     pack.final_messages = pipeline.render_messages(pack)
     return pack
@@ -218,6 +226,33 @@ def _strip_project_instruction_excerpt(content: str) -> str:
     except ValueError:
         return content
     return "\n".join(lines[:header_index]).strip()
+
+
+def _semantic_project_context_order(items: list[ContextItem]) -> list[ContextItem]:
+    """Render project context with root guidance before scoped descendants."""
+
+    indexed = list(enumerate(items))
+    return [
+        item
+        for _, item in sorted(
+            indexed,
+            key=lambda pair: (
+                _semantic_project_context_rank(pair[1]),
+                scoped_instruction_context_render_key(pair[1]) if pair[1].metadata.get("scoped_instruction") else (0, pair[1].id),
+                pair[0],
+            ),
+        )
+    ]
+
+
+def _semantic_project_context_rank(item: ContextItem) -> int:
+    if item.metadata.get("repository_summary_section_kind") == "project_instruction":
+        return 0
+    if item.metadata.get("scoped_instruction"):
+        return 1
+    if item.metadata.get("repository_summary_section_kind") == "module_doc":
+        return 2
+    return 3
 
 
 def _safe_mapping(value: dict[str, Any]) -> dict[str, object]:

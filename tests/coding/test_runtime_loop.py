@@ -17,14 +17,17 @@ from pp_agent.coding import (
 )
 from pp_agent.coding.scope import TaskScope
 from pp_agent.coding.orchestrator import CodingWorkflow, prepare_coding_workflow
+from pp_agent.domain import ChatMessage, TextPart, ToolCall
+from pp_agent.llm import ModelConfig
+from pp_agent.runtime.runtime import AgentRuntime
 from pp_agent.runtime.execution_context import RuntimeExecutionContext
 from pp_agent.runtime.hooks import RuntimeHooks
+from pp_agent.storage.sessions import SessionStore
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.effects import build_shell_effect
 from pp_agent.tools.policy import PermissionDomain
 from pp_agent.tools.registry import ToolRegistry
 from pp_agent.tools.base import ToolExecutionResult
-from pp_agent.domain import ToolCall
 
 
 class FakeRuntime:
@@ -70,12 +73,54 @@ class NoStoreRuntime:
     pass
 
 
+class ScopedContextRecordingLLMClient:
+    def __init__(self, *, read_path: str | None = None) -> None:
+        self.model = ModelConfig()
+        self.read_path = read_path
+        self.calls = 0
+        self.seen_messages: list[list[ChatMessage]] = []
+
+    def stream_chat(self, messages, tools=None):
+        self.calls += 1
+        self.seen_messages.append(list(messages))
+        if self.read_path is not None and self.calls == 1:
+            yield {
+                "text": "",
+                "tool_calls": [{"id": "call-read", "name": "read_file", "arguments_chunk": f'{{"path":"{self.read_path}"}}'}],
+                "finish_reason": "tool_calls",
+                "raw": {},
+            }
+            return
+        yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
+
+
 def _workspace(tmp_path: Path) -> Path:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
     (tmp_path / "src" / "pp_agent" / "coding").mkdir(parents=True)
     (tmp_path / "tests" / "coding").mkdir(parents=True)
     (tmp_path / "README.md").write_text("demo", encoding="utf-8")
     return tmp_path
+
+
+def _real_runtime(workspace: Path, llm_client: ScopedContextRecordingLLMClient) -> AgentRuntime:
+    store = SessionStore(workspace / "sessions")
+    record = store.create("system", ModelConfig())
+    runtime = AgentRuntime(
+        llm_client=llm_client,
+        tool_registry=ToolRegistry(workspace),
+        session_store=store,
+        session_id=record.id,
+        system_prompt=record.system_prompt,
+        require_plan_approval=False,
+    )
+    runtime.restore_session_record(record)
+    runtime.config_snapshot.settings.context_pipeline.context_pipeline_mode = "on"
+    runtime.context_pipeline_mode = "on"
+    return runtime
+
+
+def _provider_text(messages: list[ChatMessage]) -> str:
+    return "\n".join(part.text for message in messages for part in message.content if isinstance(part, TextPart))
 
 
 def _event(**details):
@@ -211,6 +256,61 @@ def test_controlled_loop_observes_successful_read_file_without_context_injection
     assert state is not None
     assert [item.source_path for item in state.active_instructions()] == ["src/pp_agent/coding/AGENTS.md"]
     assert result.timeline_blocks
+
+
+def test_controlled_loop_task_scope_seed_reaches_first_provider_context(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sentinel = "TASK_SCOPE_SEEDED_SCOPED_RULE"
+    (workspace / "src" / "pp_agent" / "coding" / "AGENTS.md").write_text(sentinel, encoding="utf-8")
+    workflow = prepare_coding_workflow("seed scoped", workspace=workspace)
+    workflow.task_scope = TaskScope(task="seed scoped", allowed_paths=["src/pp_agent/coding/runtime_loop.py"])
+    llm = ScopedContextRecordingLLMClient()
+    runtime = _real_runtime(workspace, llm)
+
+    result = run_controlled_coding_loop("seed scoped", runtime, workflow=workflow, options=ControlledLoopOptions(1, False, False, False, False))
+
+    assert result.scoped_instruction_activation_state is not None
+    assert sentinel in _provider_text(llm.seen_messages[0])
+    assert "scoped-instruction:src/pp_agent/coding/AGENTS.md" in [
+        str(message.metadata.get("context_item_id")) for message in llm.seen_messages[0]
+    ]
+    assert runtime.scoped_instruction_context_provider is None
+
+
+def test_controlled_loop_read_trigger_reaches_next_provider_context(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sentinel = "READ_TRIGGERED_SCOPED_RULE"
+    (workspace / "src" / "pp_agent" / "coding" / "AGENTS.md").write_text(sentinel, encoding="utf-8")
+    target = workspace / "src" / "pp_agent" / "coding" / "runtime_loop.py"
+    target.write_text("code", encoding="utf-8")
+    workflow = prepare_coding_workflow("lazy read", workspace=workspace)
+    workflow.task_scope = TaskScope(task="lazy read", allowed_paths=[])
+    llm = ScopedContextRecordingLLMClient(read_path="src/pp_agent/coding/runtime_loop.py")
+    runtime = _real_runtime(workspace, llm)
+
+    result = run_controlled_coding_loop("lazy read", runtime, workflow=workflow, options=ControlledLoopOptions(1, False, False, False, False))
+
+    assert result.scoped_instruction_activation_state is not None
+    assert len(llm.seen_messages) >= 2
+    assert sentinel not in _provider_text(llm.seen_messages[0])
+    assert sentinel in _provider_text(llm.seen_messages[1])
+    assert _provider_text(llm.seen_messages[1]).count(sentinel) == 1
+
+
+def test_controlled_loop_failed_read_does_not_activate_scoped_context(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sentinel = "FAILED_READ_SCOPED_RULE"
+    (workspace / "src" / "pp_agent" / "coding" / "AGENTS.md").write_text(sentinel, encoding="utf-8")
+    workflow = prepare_coding_workflow("failed read", workspace=workspace)
+    workflow.task_scope = TaskScope(task="failed read", allowed_paths=[])
+    llm = ScopedContextRecordingLLMClient(read_path="src/pp_agent/coding/missing.py")
+    runtime = _real_runtime(workspace, llm)
+
+    result = run_controlled_coding_loop("failed read", runtime, workflow=workflow, options=ControlledLoopOptions(1, False, False, False, False))
+
+    assert result.scoped_instruction_activation_state is not None
+    assert not result.scoped_instruction_activation_state.active_instructions()
+    assert all(sentinel not in _provider_text(messages) for messages in llm.seen_messages)
 
 
 def test_run_controlled_coding_loop_stops_on_approval(tmp_path: Path) -> None:

@@ -66,6 +66,10 @@ from pp_agent.coding.scoped_instruction import (
     ScopedInstructionWarning,
     resolve_scoped_instructions,
 )
+from pp_agent.coding.scoped_instruction_context import (
+    scoped_instruction_context_render_key,
+    scoped_instruction_records_to_context_items,
+)
 from pp_agent.coding.scope import (
     ScopeCheckResult,
     TaskScope,
@@ -149,6 +153,8 @@ __all__ = [
     "run_controlled_coding_loop",
     "scope_enforcement_to_context_item",
     "scope_enforcement_to_details",
+    "scoped_instruction_context_render_key",
+    "scoped_instruction_records_to_context_items",
     "start_coding_execution_session",
     "task_plan_to_context_item",
     "task_plan_to_dict",
