@@ -1,5 +1,48 @@
 # 02 Missions
 
+## Mission 07: Bounded Validation and Repair Loop
+
+Status: Ratified / design ready
+
+Details:
+
+- `solo-workdocs/mission-docs/16-mission-07-bounded-validation-repair-loop-design.md`
+
+Goal:
+
+Turn the existing non-executing `ValidationPlan` into a bounded, approval-gated validation feedback loop that can observe one pytest validation result, allow at most one repair continuation after a real test failure, re-run the same validation once, and finish with an explicit validated, failed, blocked, or approval-pending outcome.
+
+Official direction:
+
+- Mission 07 is a `NEXT PRODUCT CAPABILITY`, not a generic self-healing agent, generic planner, or autonomous infinite repair loop.
+- 07A architecture discovery is completed. Its conclusion is that the largest current product gap is the missing bounded loop between `ValidationPlan`, approval-gated validation execution, bounded validation observation, one repair-or-stop decision, bounded re-validation, and explicit completion outcome.
+- `NO PRE-MISSION HARDENING REQUIRED`: known technical debt and hardening items do not block Mission 07.
+- First version supports pytest validation only, through the existing `ValidationPlan -> stage_test_command -> approval -> run_shell -> bounded shell result` path.
+- Validation execution remains approval-gated. `approval_pending` is not validation failure and must not trigger repair.
+- Execution or infrastructure failure is not test failure and must produce a blocked or equivalent non-repair outcome.
+- First version allows `MAX_REPAIR_CONTINUATIONS = 1`, then one same-command re-validation attempt. No recursive repair and no configurable unbounded retries.
+- Re-validation uses the same normalized validation command as the initial validation cycle.
+- Validation and repair lifecycle belongs to the controlled coding workflow / controlled coding loop, not `ContextPipeline`, `ToolRegistry`, shell tools, provider layer, or Web UI.
+- Mission 07 must reuse existing mechanisms and must not create a second shell executor, second approval system, second coding runtime, generic planner framework, or generic workflow engine.
+
+Planned tasks:
+
+- 07A: architecture inventory and scope decision. Status: completed.
+- 07B: validation observation and outcome contracts.
+- 07C: approval-gated validation execution integration.
+- 07D: one repair and same-command re-validation policy.
+- 07E: CLI / trace / closeout / release gate.
+
+Not done:
+
+- No npm, pnpm, yarn, cargo, go test, CI, GitHub Actions, remote runners, or arbitrary shell validation in the first version.
+- No model-invented validation commands outside `ValidationPlan`.
+- No approval bypass, auto-approval, direct subprocess execution, or hidden validation commands.
+- No full pytest parser, JUnit XML framework, custom pytest plugin, or plugin dependency.
+- No automatic rollback by default.
+- No persistence / resume, background worker, scheduled validation, or cross-process validation lifecycle.
+- No generic planner, task DAG, multi-agent delegation, generic step scheduler, or Web redesign.
+
 ## Mission 06: Scoped Repository Instructions
 
 Status: Completed / ready for human merge review
