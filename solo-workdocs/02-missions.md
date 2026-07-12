@@ -2,11 +2,12 @@
 
 ## Mission 07: Bounded Validation and Repair Loop
 
-Status: Ratified / design ready
+Status: Completed / ready for final human review
 
 Details:
 
 - `solo-workdocs/mission-docs/16-mission-07-bounded-validation-repair-loop-design.md`
+- `solo-workdocs/mission-docs/17-mission-07-bounded-validation-repair-loop-closeout.md`
 
 Goal:
 
@@ -25,13 +26,14 @@ Official direction:
 - Validation and repair lifecycle belongs to the controlled coding workflow / controlled coding loop, not `ContextPipeline`, `ToolRegistry`, shell tools, provider layer, or Web UI.
 - Mission 07 must reuse existing mechanisms and must not create a second shell executor, second approval system, second coding runtime, generic planner framework, or generic workflow engine.
 
-Planned tasks:
+Completed tasks:
 
 - 07A: architecture inventory and scope decision. Status: completed.
-- 07B: validation observation and outcome contracts.
-- 07C: approval-gated validation execution integration.
-- 07D: one repair and same-command re-validation policy.
-- 07E: CLI / trace / closeout / release gate.
+- 07B: validation observation and outcome contracts. Status: completed.
+- 07C: approval-gated validation execution integration. Status: completed.
+- 07D-P: structured pytest provenance foundation. Status: completed.
+- 07D-R: one bounded repair continuation and same-command re-validation. Status: completed.
+- 07E: CLI exposure, explainability, release gate, and closeout. Status: completed.
 
 Not done:
 
@@ -42,6 +44,8 @@ Not done:
 - No automatic rollback by default.
 - No persistence / resume, background worker, scheduled validation, or cross-process validation lifecycle.
 - No generic planner, task DAG, multi-agent delegation, generic step scheduler, or Web redesign.
+- No second model loop, second shell executor, second approval system, ContextPipeline rewrite, Web integration, or non-pytest validation surface.
+- No stdout/stderr semantic parsing, exit-code-only repair trigger, auto approval, approval bypass, recursive repair, or third validation execution.
 
 ## Mission 06: Scoped Repository Instructions
 
