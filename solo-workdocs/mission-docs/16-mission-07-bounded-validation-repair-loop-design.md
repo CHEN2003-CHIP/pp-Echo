@@ -180,6 +180,13 @@ Persistence and rollback:
 - Mission 07 first version does not automatically rollback after failed validation.
 - Rollback-on-final-validation-failure is a future extension requiring separate human decision.
 
+Mission 08 bridge:
+
+- Mission 08 owns future durable recovery for the Mission 07 lifecycle.
+- Mission 08 may persist `repair_attempted`, `revalidation_attempted`, validation execution count, selected logical validation command identity, and terminal validation outcome in a coding-owned workflow checkpoint.
+- This bridge does not change Mission 07 runtime semantics, approval behavior, pytest provenance rules, or repair limits.
+- `SessionStore`, `PendingActionStore`, and `TraceStore` remain separate authoritative owners for their existing domains.
+
 ## ValidationPlan Pre-implementation Audit Requirement
 
 Before 07B implementation, perform a required pre-implementation audit of the real contracts:
