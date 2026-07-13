@@ -1,10 +1,10 @@
 # Mission 08: Durable Workflow Recovery and Idempotent Resume Design
 
-Status: Planning / authoritative design accepted; 08B implemented and ready for human review
+Status: Planning / authoritative design accepted; 08B and 08C implemented and ready for human review
 
 Scope type: AUTHORITATIVE DESIGN RECORD WITH 08B IMPLEMENTATION RECORD
 
-Mission 08 defines durable recovery for the existing controlled coding workflow. Mission 08B now implements only the checkpoint data contract described below. Persistence, reconciliation, resume commands, runtime integration, and later Mission 08 behavior remain unimplemented.
+Mission 08 defines durable recovery for the existing controlled coding workflow. Mission 08B implements the checkpoint data contract described below. Mission 08C implements atomic coding-owned checkpoint persistence, revision/CAS, and read-only reconciliation foundation. Resume commands, runtime integration, approval/tool-boundary resume, Mission 07 recovery execution, CLI, and doctor integration remain unimplemented.
 
 ## Mission
 
@@ -175,6 +175,52 @@ OPENCODE REFERENCE LEVEL FOR 08B: NONE
 
 OPENCODE ADOPTION DECISION FOR 08B: NO NEW OPENCODE REFERENCE; USE 08A-D PINNED DESIGN ONLY
 
+## Mission 08C Implementation Record
+
+Mission 08C implements `src/pp_agent/coding/workflow_checkpoint_store.py` as the coding-owned checkpoint store and read-only reconciliation foundation.
+
+Implemented:
+
+- store owner is `pp_agent.coding`, via `CodingWorkflowCheckpointStore`;
+- namespace is `.pp-agent/workflow-checkpoints/coding/`;
+- checkpoint filenames are `sha256(workflow_id).json`, while the true `workflow_id` remains inside the checkpoint payload;
+- create requires a valid 08B checkpoint at revision `0` and refuses duplicate create;
+- persisted checkpoints include the 08B SHA-256 `integrity_digest`;
+- write path uses same-directory owned temp files, flush, file fsync, `os.replace`, and best-effort directory fsync where supported;
+- reads are bounded before decode and accept only UTF-8 single JSON objects;
+- load verifies schema, invariants, integrity digest, and requested workflow identity;
+- create and replace use the existing `WorkspaceApplyLock` as a conservative workspace single-writer lock;
+- replace requires `expected_revision`, verifies current revision, requires exactly the next revision, and rejects workflow/session identity changes;
+- completed checkpoints are terminal and immutable;
+- failures return typed storage errors such as not found, already exists, stale revision, terminal, lock unavailable, oversized, corrupt, unsupported schema, integrity failure, identity mismatch, invariant violation, and I/O failure;
+- temporary files are never recovery authority; only the canonical `.json` checkpoint file is loaded;
+- `CodingRecoveryEvidence`, `PendingActionEvidence`, `CheckpointReconciliationResult`, and `ReconciliationDecision` provide read-only reconciliation over safe evidence summaries.
+
+Read-only reconciliation decisions implemented:
+
+- `completed`;
+- `inspect_only`;
+- `awaiting_authoritative_action`;
+- `blocked_corrupt_state`;
+- `blocked_inconsistent_state`;
+- `stale_revision`;
+- `not_resumable`;
+- `needs_boundary_reconciliation`.
+
+Not implemented in 08C:
+
+- no model continuation, tool execution, action staging, approval mutation, validation, repair, or re-validation;
+- no `SessionStore` schema change and no `PendingActionStore` schema change;
+- no direct store adapters that read full session transcript, raw approval token, raw pending payload, raw tool result, raw trace, stdout, stderr, or file contents;
+- no cross-store transaction claim between checkpoint, session, pending action, approval, model call, or tool side effect;
+- no CLI inspect/resume/cancel;
+- no doctor integration;
+- no generic workflow engine, database, storage migration, new dependency, or OpenCode framework port.
+
+OPENCODE REFERENCE LEVEL FOR 08C: NONE
+
+OPENCODE ADOPTION DECISION FOR 08C: NO NEW OPENCODE REFERENCE; USE 08A-D PINNED DESIGN ONLY
+
 ## Storage Design
 
 Storage owner: coding recovery module under `src/pp_agent/coding`.
@@ -186,6 +232,7 @@ Recommended namespace:
 File naming:
 
 - one JSON checkpoint per `workflow_id`;
+- implementation uses `sha256(workflow_id).json` as the file name;
 - include `session_id` inside the file, not only in the filename;
 - avoid raw user task text in filenames.
 
@@ -196,7 +243,7 @@ Rules:
 - canonical JSON for integrity digest;
 - atomic temp-file write followed by replace;
 - no database required;
-- unknown fields may be preserved only if schema version is known and parser can ignore them safely;
+- unknown fields fail closed for schema version 1;
 - unknown or future schema version fails closed;
 - malformed JSON, oversized file, bad digest, or workspace containment failure blocks resume;
 - stale revision fails closed;
@@ -431,21 +478,23 @@ Rules:
 | `docs/adr/0004-coding-workflow-recovery-authority.md` | yes | records long-term owner boundary | authoritative architecture decision |
 | `docs/architecture/README.md` | yes | indexes storage/recovery and ADR route | supporting navigation |
 | Mission 07 design/closeout | yes | clarifies Mission 08 persistence bridge without changing Mission 07 semantics | supporting bridge |
-| source and tests | yes | 08B adds the pure versioned checkpoint contract and focused tests | no persistence or recovery integration |
+| source and tests | yes | 08B adds the pure versioned checkpoint contract; 08C adds atomic checkpoint storage, CAS, and read-only reconciliation tests | no resume or runtime execution integration |
 
-DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B IMPLEMENTATION RECORD ADDED
+DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B AND 08C IMPLEMENTATION RECORDS ADDED
 
 ## Final Design Decision
 
-Mission 08B is implemented and ready for human review. Mission 08C may add atomic persistence, revision enforcement, and reconciliation only after this contract is accepted.
+Mission 08C is implemented and ready for human review. Mission 08D may add approval/tool-boundary resume only after this storage and reconciliation foundation is accepted.
 
-PRODUCTION CODE CHANGED: YES, CONTRACT ONLY
+PRODUCTION CODE CHANGED: YES, CONTRACT AND CHECKPOINT STORE ONLY
 
-TEST CODE CHANGED: YES, FOCUSED CONTRACT TESTS
+TEST CODE CHANGED: YES, FOCUSED CONTRACT, STORAGE, CAS, ATOMICITY, AND RECONCILIATION TESTS
 
-PERSISTENCE IMPLEMENTED: NO
+PERSISTENCE IMPLEMENTED: YES, CHECKPOINT-ONLY ATOMIC PERSISTENCE
 
-RECONCILIATION IMPLEMENTED: NO
+REVISION/CAS IMPLEMENTED: YES, CHECKPOINT-ONLY
+
+RECONCILIATION IMPLEMENTED: YES, READ-ONLY ONLY
 
 RESUME IMPLEMENTED: NO
 
