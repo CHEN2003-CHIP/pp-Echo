@@ -30,7 +30,7 @@ Planned tasks:
 - 08A: architecture audit. Status: completed / ready for human review.
 - 08A-D: targeted OpenCode comparison and authoritative durable recovery design. Status: design ready for human review.
 - 08B: versioned coding workflow checkpoint contract. Status: implemented / ready for human review.
-- 08C: atomic storage, revision, and reconciliation.
+- 08C: atomic storage, revision/CAS, and read-only reconciliation. Status: implemented / ready for human review.
 - 08D: approval/tool-boundary resume.
 - 08E: Mission 07 validation/repair recovery integration.
 - 08F: CLI inspect/resume/cancel.
