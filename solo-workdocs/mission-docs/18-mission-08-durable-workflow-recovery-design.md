@@ -1,10 +1,10 @@
 # Mission 08: Durable Workflow Recovery and Idempotent Resume Design
 
-Status: Planning / authoritative design ready for human review
+Status: Planning / authoritative design accepted; 08B implemented and ready for human review
 
-Scope type: AUTHORITATIVE DESIGN RECORD, NOT IMPLEMENTATION
+Scope type: AUTHORITATIVE DESIGN RECORD WITH 08B IMPLEMENTATION RECORD
 
-Mission 08 defines durable recovery for the existing controlled coding workflow. It does not implement production checkpoint code, resume commands, persistence changes, or Mission 08B behavior in this document.
+Mission 08 defines durable recovery for the existing controlled coding workflow. Mission 08B now implements only the checkpoint data contract described below. Persistence, reconciliation, resume commands, runtime integration, and later Mission 08 behavior remain unimplemented.
 
 ## Mission
 
@@ -140,9 +140,40 @@ Conceptual name: `CodingWorkflowCheckpoint`.
 | `completion_marker` | required for completed | checkpoint | terminal transition | final completed write | no | summary yes | yes before completed | completed without marker fails closed |
 | `created_at` | yes | checkpoint | clock | create | no | no | no | malformed fails closed |
 | `updated_at` | yes | checkpoint | clock | every transition | no | no | no | malformed fails closed |
-| `integrity_digest` | yes | checkpoint | canonical JSON digest excluding digest field | every write | digest only | no | no | bad digest fails closed |
+| `integrity_digest` | required when persisted in 08C | checkpoint | canonical JSON digest excluding digest field | every future write | digest only | no | yes in the 08B in-memory contract | present-but-bad digest fails closed |
 
 The checkpoint must not store complete runtime objects, complete transcript, raw approval token, raw provenance nonce, raw attestation, full stdout/stderr, full patch, environment variables, secrets, or pickle data.
+
+## Mission 08B Implementation Record
+
+Mission 08B implements `src/pp_agent/coding/workflow_checkpoint.py` as a pure coding-owned data contract.
+
+Implemented:
+
+- `CodingWorkflowCheckpoint` and its nested safe-reference, final-outcome-summary, and completion-marker contracts are immutable frozen dataclasses.
+- Schema version is `1`; workflow kind is `controlled_coding`; initial revision is `0`.
+- `CodingWorkflowPhase` implements the coding-specific phase set defined by this design, including explicit completed and blocked phases.
+- Timestamps are timezone-aware UTC values serialized with the ISO-8601 `Z` suffix.
+- Serialization is JSON-safe and deterministic; canonical JSON uses sorted keys and compact separators.
+- Checkpoint canonical JSON is bounded to 16 KiB.
+- Integrity identity uses SHA-256 over canonical JSON excluding `integrity_digest`.
+- Unknown fields, unknown enum values, malformed nested data, unsupported/future schema versions, oversized canonical output, and digest mismatches fail closed.
+- Pending actions are represented only by `PendingActionReference`; approval lifecycle, token, payload, and result remain owned by `PendingActionStore`.
+- Selected validation command identity is digest-only and stores no command text.
+- Mission 07 `validation_execution_count`, `repair_attempted`, `revalidation_attempted`, final outcome summary, and terminal completion requirements are validated without changing runtime semantics.
+- Completed state requires `phase=completed`, a bounded `final_outcome_summary`, and an explicit `completion_marker`.
+
+Not implemented in 08B:
+
+- no checkpoint file storage, directory creation, atomic temp-and-replace write, locking, or retention;
+- no compare-and-set update or stale revision reconciliation;
+- no `SessionStore`, `PendingActionStore`, or `TraceStore` inspection;
+- no inspect, reconcile, resume, cancel, CLI, doctor, runtime-loop, approval, tool, or Mission 07 execution integration;
+- no session format rewrite, storage migration, dependency addition, generic workflow engine, or OpenCode framework port.
+
+OPENCODE REFERENCE LEVEL FOR 08B: NONE
+
+OPENCODE ADOPTION DECISION FOR 08B: NO NEW OPENCODE REFERENCE; USE 08A-D PINNED DESIGN ONLY
 
 ## Storage Design
 
@@ -400,16 +431,22 @@ Rules:
 | `docs/adr/0004-coding-workflow-recovery-authority.md` | yes | records long-term owner boundary | authoritative architecture decision |
 | `docs/architecture/README.md` | yes | indexes storage/recovery and ADR route | supporting navigation |
 | Mission 07 design/closeout | yes | clarifies Mission 08 persistence bridge without changing Mission 07 semantics | supporting bridge |
-| source and tests | no | implementation not started | unchanged |
+| source and tests | yes | 08B adds the pure versioned checkpoint contract and focused tests | no persistence or recovery integration |
 
-DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN CREATED
+DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B IMPLEMENTATION RECORD ADDED
 
 ## Final Design Decision
 
-Mission 08 proceeds from design to human review. Mission 08B may start only after review accepts this document and ADR 0004.
+Mission 08B is implemented and ready for human review. Mission 08C may add atomic persistence, revision enforcement, and reconciliation only after this contract is accepted.
 
-PRODUCTION CODE CHANGED: NO
+PRODUCTION CODE CHANGED: YES, CONTRACT ONLY
 
-TEST CODE CHANGED: NO
+TEST CODE CHANGED: YES, FOCUSED CONTRACT TESTS
 
-IMPLEMENTATION STARTED: NO
+PERSISTENCE IMPLEMENTED: NO
+
+RECONCILIATION IMPLEMENTED: NO
+
+RESUME IMPLEMENTED: NO
+
+MISSION 07 RUNTIME SEMANTICS: UNCHANGED
