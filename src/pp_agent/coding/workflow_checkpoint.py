@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 
 CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION = 1
+CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2 = 2
 CODING_WORKFLOW_CHECKPOINT_DIGEST_ALGORITHM = "sha256"
 CODING_WORKFLOW_CHECKPOINT_KIND = "controlled_coding"
 CODING_WORKFLOW_CHECKPOINT_INITIAL_REVISION = 0
@@ -68,6 +69,12 @@ class PendingActionRole(str, Enum):
     VALIDATION = "validation"
     REPAIR_TOOL = "repair_tool"
     REVALIDATION = "revalidation"
+
+
+class ModelContinuationState(str, Enum):
+    INTENT_COMMITTED = "intent_committed"
+    SESSION_COMMITTED = "session_committed"
+    BLOCKED_UNCERTAIN = "blocked_uncertain"
 
 
 class ValidationFinalStatus(str, Enum):
@@ -200,6 +207,154 @@ class CodingWorkflowCompletion:
 
 
 @dataclass(frozen=True)
+class SessionCompletionEvidenceReference:
+    """Bounded future SessionStore completion evidence reference for a continuation."""
+
+    session_id: str
+    continuation_id: str
+    source_action_id: str
+    source_result_digest: str
+    committed_turn_id: str
+    completion_marker: str = "session_committed"
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.session_id, "session_completion_evidence_ref.session_id")
+        _validate_continuation_id(self.continuation_id, "session_completion_evidence_ref.continuation_id")
+        _validate_identifier(self.source_action_id, "session_completion_evidence_ref.source_action_id")
+        _validate_digest(self.source_result_digest, "session_completion_evidence_ref.source_result_digest")
+        _validate_identifier(self.committed_turn_id, "session_completion_evidence_ref.committed_turn_id")
+        if self.completion_marker != "session_committed":
+            raise CheckpointValidationError("session_completion_evidence_ref.completion_marker must be 'session_committed'")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "session_id": self.session_id,
+            "continuation_id": self.continuation_id,
+            "source_action_id": self.source_action_id,
+            "source_result_digest": self.source_result_digest,
+            "committed_turn_id": self.committed_turn_id,
+            "completion_marker": self.completion_marker,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "SessionCompletionEvidenceReference":
+        _reject_forbidden_payload_keys(data, "session_completion_evidence_ref")
+        _reject_unknown_fields(
+            data,
+            {
+                "session_id",
+                "continuation_id",
+                "source_action_id",
+                "source_result_digest",
+                "committed_turn_id",
+                "completion_marker",
+            },
+            "session_completion_evidence_ref",
+        )
+        return cls(
+            session_id=_required_str(data, "session_id"),
+            continuation_id=_required_str(data, "continuation_id"),
+            source_action_id=_required_str(data, "source_action_id"),
+            source_result_digest=_required_str(data, "source_result_digest"),
+            committed_turn_id=_required_str(data, "committed_turn_id"),
+            completion_marker=_optional_str(data.get("completion_marker"), "session_completion_evidence_ref.completion_marker")
+            or "session_committed",
+        )
+
+
+@dataclass(frozen=True)
+class ModelContinuationIntent:
+    """Durable at-most-one model continuation intent without storing prompts or responses."""
+
+    continuation_id: str
+    source_action_ref: PendingActionReference
+    source_result_digest: str
+    pre_call_session_id: str
+    state: ModelContinuationState
+    created_at: datetime
+    pre_call_turn_id: str | None = None
+    completed_session_evidence_ref: SessionCompletionEvidenceReference | None = None
+    blocked_reason_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_continuation_id(self.continuation_id, "model_continuation_intent.continuation_id")
+        if not isinstance(self.source_action_ref, PendingActionReference):
+            raise CheckpointValidationError("model_continuation_intent.source_action_ref must be PendingActionReference")
+        _validate_digest(self.source_result_digest, "model_continuation_intent.source_result_digest")
+        _validate_identifier(self.pre_call_session_id, "model_continuation_intent.pre_call_session_id")
+        if self.pre_call_turn_id is not None:
+            _validate_identifier(self.pre_call_turn_id, "model_continuation_intent.pre_call_turn_id")
+        if not isinstance(self.state, ModelContinuationState):
+            raise CheckpointValidationError("model_continuation_intent.state must be ModelContinuationState")
+        _validate_utc_datetime(self.created_at, "model_continuation_intent.created_at")
+        if self.completed_session_evidence_ref is not None:
+            if not isinstance(self.completed_session_evidence_ref, SessionCompletionEvidenceReference):
+                raise CheckpointValidationError(
+                    "model_continuation_intent.completed_session_evidence_ref must be SessionCompletionEvidenceReference"
+                )
+        if self.blocked_reason_code is not None:
+            _validate_bounded_text(self.blocked_reason_code, "model_continuation_intent.blocked_reason_code", MAX_FAILURE_CODE_LENGTH)
+        if self.state == ModelContinuationState.SESSION_COMMITTED:
+            if self.completed_session_evidence_ref is None:
+                raise CheckpointValidationError("session_committed continuation requires completion evidence")
+            if self.blocked_reason_code is not None:
+                raise CheckpointValidationError("session_committed continuation must not have blocked_reason_code")
+        elif self.completed_session_evidence_ref is not None:
+            raise CheckpointValidationError("completion evidence is only allowed for session_committed continuation")
+        if self.state == ModelContinuationState.BLOCKED_UNCERTAIN and self.blocked_reason_code is None:
+            raise CheckpointValidationError("blocked_uncertain continuation requires blocked_reason_code")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "continuation_id": self.continuation_id,
+            "source_action_ref": self.source_action_ref.to_dict(),
+            "source_result_digest": self.source_result_digest,
+            "pre_call_session_id": self.pre_call_session_id,
+            "pre_call_turn_id": self.pre_call_turn_id,
+            "state": self.state.value,
+            "created_at": _format_utc(self.created_at),
+            "completed_session_evidence_ref": (
+                self.completed_session_evidence_ref.to_dict() if self.completed_session_evidence_ref is not None else None
+            ),
+            "blocked_reason_code": self.blocked_reason_code,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ModelContinuationIntent":
+        _reject_forbidden_payload_keys(data, "model_continuation_intent")
+        _reject_unknown_fields(
+            data,
+            {
+                "continuation_id",
+                "source_action_ref",
+                "source_result_digest",
+                "pre_call_session_id",
+                "pre_call_turn_id",
+                "state",
+                "created_at",
+                "completed_session_evidence_ref",
+                "blocked_reason_code",
+            },
+            "model_continuation_intent",
+        )
+        return cls(
+            continuation_id=_required_str(data, "continuation_id"),
+            source_action_ref=_optional_nested(PendingActionReference, data.get("source_action_ref"), "model_continuation_intent.source_action_ref"),
+            source_result_digest=_required_str(data, "source_result_digest"),
+            pre_call_session_id=_required_str(data, "pre_call_session_id"),
+            pre_call_turn_id=_optional_str(data.get("pre_call_turn_id"), "model_continuation_intent.pre_call_turn_id"),
+            state=_enum_value(ModelContinuationState, data.get("state"), "model_continuation_intent.state"),
+            created_at=_parse_utc_datetime(data.get("created_at"), "model_continuation_intent.created_at"),
+            completed_session_evidence_ref=_optional_nested(
+                SessionCompletionEvidenceReference,
+                data.get("completed_session_evidence_ref"),
+                "model_continuation_intent.completed_session_evidence_ref",
+            ),
+            blocked_reason_code=_optional_str(data.get("blocked_reason_code"), "model_continuation_intent.blocked_reason_code"),
+        )
+
+
+@dataclass(frozen=True)
 class CodingWorkflowCheckpoint:
     """Versioned, immutable, JSON-safe checkpoint contract for coding workflow recovery."""
 
@@ -220,6 +375,7 @@ class CodingWorkflowCheckpoint:
     last_completed_action_ref: PendingActionReference | None = None
     final_outcome_summary: ValidationOutcomeSummary | None = None
     completion_marker: CodingWorkflowCompletion | None = None
+    model_continuation_intent: ModelContinuationIntent | None = None
     integrity_digest: str | None = None
 
     def __post_init__(self) -> None:
@@ -247,14 +403,18 @@ class CodingWorkflowCheckpoint:
         }
         if include_integrity:
             payload["integrity_digest"] = self.integrity_digest
+        if self.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2:
+            payload["model_continuation_intent"] = (
+                self.model_continuation_intent.to_dict() if self.model_continuation_intent is not None else None
+            )
         return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "CodingWorkflowCheckpoint":
         _reject_forbidden_payload_keys(data, "checkpoint")
-        _reject_unknown_fields(
-            data,
-            {
+        schema_version = _required_int(data, "schema_version")
+        if schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION:
+            allowed = {
                 "schema_version",
                 "workflow_id",
                 "session_id",
@@ -273,11 +433,38 @@ class CodingWorkflowCheckpoint:
                 "created_at",
                 "updated_at",
                 "integrity_digest",
-            },
+            }
+        elif schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2:
+            allowed = {
+                "schema_version",
+                "workflow_id",
+                "session_id",
+                "workflow_kind",
+                "revision",
+                "phase",
+                "selected_validation_command_digest",
+                "selected_validation_command_digest_algorithm",
+                "validation_execution_count",
+                "repair_attempted",
+                "revalidation_attempted",
+                "pending_action_ref",
+                "last_completed_action_ref",
+                "final_outcome_summary",
+                "completion_marker",
+                "model_continuation_intent",
+                "created_at",
+                "updated_at",
+                "integrity_digest",
+            }
+        else:
+            raise CheckpointValidationError("unsupported checkpoint schema_version")
+        _reject_unknown_fields(
+            data,
+            allowed,
             "checkpoint",
         )
         return cls(
-            schema_version=_required_int(data, "schema_version"),
+            schema_version=schema_version,
             workflow_id=_required_str(data, "workflow_id"),
             session_id=_required_str(data, "session_id"),
             workflow_kind=_enum_value(CodingWorkflowKind, data.get("workflow_kind"), "workflow_kind"),
@@ -295,6 +482,7 @@ class CodingWorkflowCheckpoint:
             last_completed_action_ref=_optional_nested(PendingActionReference, data.get("last_completed_action_ref"), "last_completed_action_ref"),
             final_outcome_summary=_optional_nested(ValidationOutcomeSummary, data.get("final_outcome_summary"), "final_outcome_summary"),
             completion_marker=_optional_nested(CodingWorkflowCompletion, data.get("completion_marker"), "completion_marker"),
+            model_continuation_intent=_optional_nested(ModelContinuationIntent, data.get("model_continuation_intent"), "model_continuation_intent"),
             created_at=_parse_utc_datetime(data.get("created_at"), "created_at"),
             updated_at=_parse_utc_datetime(data.get("updated_at"), "updated_at"),
             integrity_digest=_optional_str(data.get("integrity_digest"), "integrity_digest"),
@@ -304,7 +492,7 @@ class CodingWorkflowCheckpoint:
 def validate_checkpoint(checkpoint: CodingWorkflowCheckpoint) -> CodingWorkflowCheckpoint:
     """Validate contract-local checkpoint facts without I/O or external stores."""
 
-    if checkpoint.schema_version != CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION:
+    if checkpoint.schema_version not in {CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION, CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2}:
         raise CheckpointValidationError("unsupported checkpoint schema_version")
     _validate_identifier(checkpoint.workflow_id, "workflow_id")
     _validate_identifier(checkpoint.session_id, "session_id")
@@ -324,6 +512,7 @@ def validate_checkpoint(checkpoint: CodingWorkflowCheckpoint) -> CodingWorkflowC
     _validate_phase_action_ref(checkpoint)
     _validate_mission_07_invariants(checkpoint)
     _validate_completion_contract(checkpoint)
+    _validate_continuation_contract(checkpoint)
     _validate_integrity_digest(checkpoint)
     return checkpoint
 
@@ -422,6 +611,38 @@ def _validate_completion_contract(checkpoint: CodingWorkflowCheckpoint) -> None:
         raise CheckpointValidationError("final_outcome_summary is only allowed for finalized or completed phase")
 
 
+def _validate_continuation_contract(checkpoint: CodingWorkflowCheckpoint) -> None:
+    intent = checkpoint.model_continuation_intent
+    if checkpoint.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION:
+        if intent is not None:
+            raise CheckpointValidationError("schema v1 checkpoint must not include model_continuation_intent")
+        return
+    if intent is None:
+        return
+    if checkpoint.phase == CodingWorkflowPhase.COMPLETED:
+        raise CheckpointValidationError("completed checkpoint must not have active continuation intent")
+    if checkpoint.pending_action_ref is not None:
+        raise CheckpointValidationError("continuation intent cannot coexist with active pending action reference")
+    if checkpoint.last_completed_action_ref is None:
+        raise CheckpointValidationError("continuation intent requires last_completed_action_ref")
+    if not _action_reference_matches(intent.source_action_ref, checkpoint.last_completed_action_ref):
+        raise CheckpointValidationError("continuation source action must match last_completed_action_ref")
+    if intent.pre_call_session_id != checkpoint.session_id:
+        raise CheckpointValidationError("continuation pre_call_session_id must match checkpoint session_id")
+    if intent.state == ModelContinuationState.SESSION_COMMITTED:
+        evidence = intent.completed_session_evidence_ref
+        if evidence is None:
+            raise CheckpointValidationError("session_committed continuation requires completion evidence")
+        if evidence.session_id != checkpoint.session_id:
+            raise CheckpointValidationError("session completion evidence session_id must match checkpoint")
+        if evidence.continuation_id != intent.continuation_id:
+            raise CheckpointValidationError("session completion evidence continuation_id must match intent")
+        if evidence.source_action_id != intent.source_action_ref.action_id:
+            raise CheckpointValidationError("session completion evidence source action must match intent")
+        if evidence.source_result_digest != intent.source_result_digest:
+            raise CheckpointValidationError("session completion evidence source result must match intent")
+
+
 def _validate_integrity_digest(checkpoint: CodingWorkflowCheckpoint) -> None:
     if checkpoint.integrity_digest is None:
         return
@@ -443,6 +664,7 @@ def _validate_integrity_digest(checkpoint: CodingWorkflowCheckpoint) -> None:
             last_completed_action_ref=checkpoint.last_completed_action_ref,
             final_outcome_summary=checkpoint.final_outcome_summary,
             completion_marker=checkpoint.completion_marker,
+            model_continuation_intent=checkpoint.model_continuation_intent,
             created_at=checkpoint.created_at,
             updated_at=checkpoint.updated_at,
             integrity_digest=None,
@@ -513,6 +735,13 @@ def _validate_identifier(value: str, field: str) -> None:
         raise CheckpointValidationError(f"{field} is required")
     if len(value) > MAX_IDENTIFIER_LENGTH or not _IDENTIFIER_RE.match(value):
         raise CheckpointValidationError(f"{field} has invalid format")
+
+
+def _validate_continuation_id(value: str, field: str) -> None:
+    _validate_identifier(value, field)
+    forbidden_prefixes = ("workflow-", "token-", "nonce-")
+    if value.startswith(forbidden_prefixes):
+        raise CheckpointValidationError(f"{field} must be opaque and not reuse workflow, token, or nonce identity")
 
 
 def _validate_bounded_text(value: str, field: str, limit: int) -> None:
@@ -591,6 +820,16 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _action_reference_matches(left: PendingActionReference, right: PendingActionReference) -> bool:
+    if left.action_id != right.action_id or left.role != right.role:
+        return False
+    if left.action_digest is not None and right.action_digest is not None and left.action_digest != right.action_digest:
+        return False
+    if left.action_type is not None and right.action_type is not None and left.action_type != right.action_type:
+        return False
+    return True
+
+
 _PHASE_PENDING_ROLES = {
     CodingWorkflowPhase.AWAITING_TOOL_APPROVAL: PendingActionRole.TOOL,
     CodingWorkflowPhase.AWAITING_VALIDATION_APPROVAL: PendingActionRole.VALIDATION,
@@ -636,13 +875,17 @@ __all__ = [
     "CODING_WORKFLOW_CHECKPOINT_INITIAL_REVISION",
     "CODING_WORKFLOW_CHECKPOINT_KIND",
     "CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION",
+    "CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2",
     "CheckpointValidationError",
     "CodingWorkflowCheckpoint",
     "CodingWorkflowCompletion",
     "CodingWorkflowKind",
     "CodingWorkflowPhase",
+    "ModelContinuationIntent",
+    "ModelContinuationState",
     "PendingActionReference",
     "PendingActionRole",
+    "SessionCompletionEvidenceReference",
     "ValidationFinalStatus",
     "ValidationOutcomeSummary",
     "checkpoint_from_dict",

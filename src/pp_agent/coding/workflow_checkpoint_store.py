@@ -222,6 +222,8 @@ class CodingWorkflowCheckpointStore:
                 raise CheckpointStaleRevision("replacement checkpoint must use the next revision")
             if checkpoint.workflow_id != current.workflow_id or checkpoint.session_id != current.session_id:
                 raise CheckpointIdentityMismatch("checkpoint identity cannot change")
+            if checkpoint.schema_version != current.schema_version:
+                raise CheckpointInvariantViolation("checkpoint schema version cannot change during replace")
             persisted = self._with_integrity(checkpoint)
             self._atomic_write(target, checkpoint_to_canonical_json(persisted).encode("utf-8"))
         return persisted
@@ -348,6 +350,7 @@ class CodingWorkflowCheckpointStore:
             last_completed_action_ref=checkpoint.last_completed_action_ref,
             final_outcome_summary=checkpoint.final_outcome_summary,
             completion_marker=checkpoint.completion_marker,
+            model_continuation_intent=checkpoint.model_continuation_intent,
             created_at=checkpoint.created_at,
             updated_at=checkpoint.updated_at,
             integrity_digest=digest,

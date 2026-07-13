@@ -14,6 +14,7 @@ from pp_agent.coding import (
     CODING_WORKFLOW_CHECKPOINT_DIGEST_ALGORITHM,
     CODING_WORKFLOW_CHECKPOINT_INITIAL_REVISION,
     CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION,
+    CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2,
     CheckpointAlreadyExists,
     CheckpointCorrupt,
     CheckpointIdentityMismatch,
@@ -31,6 +32,8 @@ from pp_agent.coding import (
     CodingWorkflowCompletion,
     CodingWorkflowKind,
     CodingWorkflowPhase,
+    ModelContinuationIntent,
+    ModelContinuationState,
     PendingActionEvidence,
     PendingActionReference,
     PendingActionRole,
@@ -85,6 +88,27 @@ def _completed(**overrides: object) -> CodingWorkflowCheckpoint:
     return _checkpoint(**values)
 
 
+def _action_ref() -> PendingActionReference:
+    return PendingActionReference(
+        action_id="effect-1",
+        action_digest=DIGEST,
+        role=PendingActionRole.TOOL,
+        action_type="run_shell",
+    )
+
+
+def _intent() -> ModelContinuationIntent:
+    return ModelContinuationIntent(
+        continuation_id="cont-1",
+        source_action_ref=_action_ref(),
+        source_result_digest="b" * 64,
+        pre_call_session_id="session-1",
+        pre_call_turn_id="turn-1",
+        state=ModelContinuationState.INTENT_COMMITTED,
+        created_at=_now(),
+    )
+
+
 def _next(checkpoint: CodingWorkflowCheckpoint, **overrides: object) -> CodingWorkflowCheckpoint:
     values = {
         **checkpoint.to_dict(include_integrity=False),
@@ -94,6 +118,7 @@ def _next(checkpoint: CodingWorkflowCheckpoint, **overrides: object) -> CodingWo
         "last_completed_action_ref": checkpoint.last_completed_action_ref,
         "final_outcome_summary": checkpoint.final_outcome_summary,
         "completion_marker": checkpoint.completion_marker,
+        "model_continuation_intent": checkpoint.model_continuation_intent,
         "created_at": checkpoint.created_at,
         "updated_at": checkpoint.updated_at,
         "revision": checkpoint.revision + 1,
@@ -243,6 +268,31 @@ def test_replace_validates_cas_revision_identity_and_terminality(tmp_path: Path)
     terminal = terminal_store.create_checkpoint(_completed())
     with pytest.raises(CheckpointTerminal):
         terminal_store.replace_checkpoint(_next(terminal), expected_revision=0)
+
+
+def test_store_loads_v2_checkpoint_and_rejects_silent_schema_upgrade(tmp_path: Path) -> None:
+    store = CodingWorkflowCheckpointStore(tmp_path)
+    current = store.create_checkpoint(
+        _checkpoint(
+            schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2,
+            phase=CodingWorkflowPhase.TOOL_COMPLETED,
+            last_completed_action_ref=_action_ref(),
+            model_continuation_intent=_intent(),
+        )
+    )
+
+    loaded = store.load_checkpoint("workflow-1")
+
+    assert loaded.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2
+    assert loaded.model_continuation_intent == current.model_continuation_intent
+
+    v1_store = CodingWorkflowCheckpointStore(tmp_path / "v1")
+    v1_current = v1_store.create_checkpoint(_checkpoint())
+    with pytest.raises(CheckpointCorrupt):
+        v1_store.replace_checkpoint(
+            _next(v1_current, schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2),
+            expected_revision=0,
+        )
 
 
 class _FailingTempStore(CodingWorkflowCheckpointStore):
