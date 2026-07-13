@@ -47,6 +47,7 @@ pp-Echo 的定位是教学向本地 Agent Runtime：它关注“一个 Claude Co
 3. `08-observability-traceinspect.md`：给新模块补 Trace。
 4. `09-eval-onboarding-doctor.md`：给新能力补 Eval 和 Doctor 检查。
 5. `10-storage-and-artifacts.md`：确认新增状态如何落盘和回放。
+6. `docs/adr/0004-coding-workflow-recovery-authority.md`：理解 controlled coding workflow recovery 的 owner 边界和为什么 checkpoint 不复制 session、approval、tool 或 trace 状态。
 
 ## 文档索引
 
@@ -65,6 +66,15 @@ pp-Echo 的定位是教学向本地 Agent Runtime：它关注“一个 Claude Co
 | `10-storage-and-artifacts.md` | TraceStore / ApprovalRecords / Artifacts | 关注持久化的人 | JSONL、Git、文件系统 |
 | `11-typical-workflow.md` | 端到端任务流程 | 所有人 | 读完 overview 更好 |
 | `12-attachments-and-large-files.md` | Session attachments / Large files / Import / Memory ingest | 想扩展文件分析的人 | ToolRegistry、Approval、Memory、TraceInspect |
+
+## 架构决策索引
+
+| ADR | 主题 | 适合读者 |
+|---|---|---|
+| `docs/adr/0001-model-runtime-split.md` | Model / Runtime 边界 | 接模型或改 runtime 的人 |
+| `docs/adr/0002-memory-governance.md` | Memory governance | 扩展 memory 的人 |
+| `docs/adr/0003-capability-governance.md` | Capability governance | 扩展 tools / MCP / skills / bots 的人 |
+| `docs/adr/0004-coding-workflow-recovery-authority.md` | Coding workflow recovery authority | 设计 Mission 08 checkpoint / resume 的人 |
 
 ## 和项目其他文档的关系
 

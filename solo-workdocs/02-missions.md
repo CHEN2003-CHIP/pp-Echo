@@ -1,5 +1,60 @@
 # 02 Missions
 
+## Mission 08: Durable Workflow Recovery and Idempotent Resume
+
+Status: Planning / authoritative design ready for human review
+
+Details:
+
+- `solo-workdocs/mission-docs/18-mission-08-durable-workflow-recovery-design.md`
+- `docs/adr/0004-coding-workflow-recovery-authority.md`
+
+Goal:
+
+Make the existing single-task controlled coding workflow recoverable across process exit, restart, pending approvals, pending tool actions, validation pending, repair pending, re-validation pending, repeated resume, repeated approval, and partially stale or inconsistent state.
+
+Official direction:
+
+- Workflow recovery checkpoint is owned by `src/pp_agent/coding`.
+- `SessionStore` remains responsible for transcript and runtime/session snapshots only.
+- `PendingActionStore` remains the only owner of staged action and approval lifecycle.
+- Checkpoint stores safe pending action references only; it never copies approval state.
+- `TraceStore` is diagnostic and is not a recovery fact source.
+- Mission 07 `repair_attempted`, `revalidation_attempted`, validation execution count, and terminal outcome must become durable.
+- Checkpoint must be versioned, atomic, bounded, and fail-closed.
+- Recovery must inspect and reconcile first, then execute only by explicit request.
+- No generic workflow engine, no full session format rewrite, and no OpenCode session, permission, or agent-loop framework port.
+
+Planned tasks:
+
+- 08A: architecture audit. Status: completed / ready for human review.
+- 08A-D: targeted OpenCode comparison and authoritative durable recovery design. Status: design ready for human review.
+- 08B: versioned coding workflow checkpoint contract.
+- 08C: atomic storage, revision, and reconciliation.
+- 08D: approval/tool-boundary resume.
+- 08E: Mission 07 validation/repair recovery integration.
+- 08F: CLI inspect/resume/cancel.
+- 08G: doctor, release gate, documentation, and closeout.
+
+Non-goals:
+
+- No production code in 08A-D.
+- No test code in 08A-D.
+- No checkpoint implementation in 08A-D.
+- No session migration.
+- No resume implementation in 08A-D.
+- No CLI implementation in 08A-D.
+- No database or new dependency.
+- No generic workflow engine.
+- No second approval store, second tool state, or second runtime loop.
+- No OpenCode framework port.
+- No Mission 07 semantic change.
+- No Mission 09.
+
+Hard stops:
+
+- Stop for human review if Mission 08 requires a second approval store, second tool execution state, second runtime/model loop, generic workflow engine, database migration, full session format rewrite, approval token semantic change, Mission 07 runtime semantic change, new dependency, pickle, trace as sole authority, or unresolved checkpoint/session double authority.
+
 ## Mission 07: Bounded Validation and Repair Loop
 
 Status: Completed / ready for final human review

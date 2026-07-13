@@ -169,6 +169,12 @@ Mission 07 does not implement:
 - Non-pytest validation support requires a separate mission and separate trusted provenance design.
 - Rollback-on-final-validation-failure remains a future decision.
 
+Mission 08 follow-up:
+
+- Mission 08 is the authoritative follow-up for durable workflow recovery and idempotent resume.
+- Mission 08 may persist Mission 07 `repair_attempted`, `revalidation_attempted`, validation execution count, selected logical validation command identity, and terminal outcome in a coding-owned checkpoint.
+- Mission 08 must not change Mission 07 runtime semantics, add more repair attempts, add more validation attempts, bypass approval, or treat stdout/stderr as semantic proof.
+
 ## Future Work
 
 - Mission 07 final human merge review.
