@@ -2,7 +2,16 @@
 
 from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.llm import ModelConfig
-from pp_agent.storage.sessions import SessionStore
+from pp_agent.storage.sessions import (
+    SESSION_CORRELATION_KEY,
+    SESSION_MESSAGE_ID_KEY,
+    SessionEvidenceLookupStatus,
+    SessionStore,
+    build_external_tool_result_correlation,
+    build_model_continuation_completion_correlation,
+    build_session_result_digest,
+    ensure_session_message_id,
+)
 
 
 def test_session_store_save_and_load_uses_per_session_jsonl_file(tmp_path: Path) -> None:
@@ -19,6 +28,108 @@ def test_session_store_save_and_load_uses_per_session_jsonl_file(tmp_path: Path)
     assert loaded.system_prompt == "hello"
     assert loaded.model.model == record.model.model
     assert loaded.compaction.summary == "old messages"
+
+
+def test_external_tool_result_evidence_lookup_survives_reload(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    digest = build_session_result_digest({"result": "ok", "success": True, "token": "secret-token"})
+    message = ChatMessage(
+        role="tool",
+        tool_call_id="call-1",
+        tool_name="approve_pending_action",
+        content=[TextPart(text="ok")],
+        timestamp=2.0,
+    )
+    ensure_session_message_id(message)
+    message.metadata[SESSION_CORRELATION_KEY] = build_external_tool_result_correlation(
+        action_id="action-1",
+        result_digest=digest,
+        tool_name="approve_pending_action",
+        completed_at=2.0,
+        turn_id="turn-1",
+    )
+    record.messages = [ChatMessage(role="user", content=[TextPart(text="u")], timestamp=1.0), message]
+    store.save(record)
+
+    loaded = store.load(record.id)
+    result = store.lookup_external_tool_result_evidence(record.id, action_id="action-1", result_digest=digest)
+
+    assert loaded.messages[1].metadata[SESSION_MESSAGE_ID_KEY] == message.metadata[SESSION_MESSAGE_ID_KEY]
+    assert "secret-token" not in digest
+    assert result.status == SessionEvidenceLookupStatus.FOUND
+    assert result.evidence is not None
+    assert result.evidence.action_id == "action-1"
+    assert result.evidence.result_digest == digest
+
+
+def test_external_tool_result_lookup_fails_closed_for_mismatch_and_duplicates(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    digest = build_session_result_digest({"result": "ok"})
+    other_digest = build_session_result_digest({"result": "different"})
+
+    def correlated_message(message_id: str) -> ChatMessage:
+        message = ChatMessage(
+            role="tool",
+            tool_call_id=message_id,
+            tool_name="approve_pending_action",
+            content=[TextPart(text="ok")],
+            metadata={SESSION_MESSAGE_ID_KEY: message_id},
+            timestamp=2.0,
+        )
+        message.metadata[SESSION_CORRELATION_KEY] = build_external_tool_result_correlation(
+            action_id="action-1",
+            result_digest=digest,
+            tool_name="approve_pending_action",
+            completed_at=2.0,
+        )
+        return message
+
+    record.messages = [correlated_message("msg-one"), correlated_message("msg-two")]
+    store.save(record)
+
+    duplicate = store.lookup_external_tool_result_evidence(record.id, action_id="action-1", result_digest=digest)
+    mismatch = store.lookup_external_tool_result_evidence(record.id, action_id="action-1", result_digest=other_digest)
+
+    assert duplicate.status == SessionEvidenceLookupStatus.AMBIGUOUS
+    assert mismatch.status == SessionEvidenceLookupStatus.IDENTITY_MISMATCH
+
+
+def test_legacy_tool_message_is_insufficient_recovery_evidence(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    record.messages = [
+        ChatMessage(role="tool", tool_call_id="call-1", tool_name="approve_pending_action", content=[TextPart(text="ok")], timestamp=1.0)
+    ]
+    store.save(record)
+
+    result = store.lookup_external_tool_result_evidence(record.id, action_id="action-1")
+
+    assert result.status == SessionEvidenceLookupStatus.LEGACY_INSUFFICIENT
+
+
+def test_model_continuation_completion_lookup_requires_matching_metadata(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    record = store.create("hello", ModelConfig())
+    legacy = ChatMessage(role="assistant", content=[TextPart(text="done")], timestamp=1.0)
+    correlated = ChatMessage(role="assistant", content=[TextPart(text="done")], timestamp=2.0)
+    ensure_session_message_id(correlated)
+    correlated.metadata[SESSION_CORRELATION_KEY] = build_model_continuation_completion_correlation(
+        continuation_id="cont-1",
+        completed_at=2.0,
+        turn_id="turn-2",
+    )
+    record.messages = [legacy, correlated]
+    store.save(record)
+
+    found = store.lookup_model_continuation_completion_evidence(record.id, continuation_id="cont-1")
+    missing = store.lookup_model_continuation_completion_evidence(record.id, continuation_id="cont-missing")
+
+    assert found.status == SessionEvidenceLookupStatus.FOUND
+    assert found.evidence is not None
+    assert found.evidence.correlation_id == "cont-1"
+    assert missing.status == SessionEvidenceLookupStatus.NOT_FOUND
 
 
 def test_session_store_save_is_append_only_for_existing_session(tmp_path: Path) -> None:

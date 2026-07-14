@@ -9,7 +9,13 @@ from pp_agent.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision
 from pp_agent.runtime.runtime import AgentSession
 from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.approvals import PendingActionStore
-from pp_agent.storage.sessions import SessionStore
+from pp_agent.storage.sessions import (
+    SESSION_CORRELATION_KEY,
+    SESSION_MESSAGE_ID_KEY,
+    SessionEvidenceLookupStatus,
+    SessionStore,
+    build_session_result_digest,
+)
 from pp_agent.storage.timeline import TimelineStore
 from pp_agent.tools.registry import ToolRegistry
 from pp_agent.runtime.runtime import AgentRuntime
@@ -387,6 +393,81 @@ def test_ordinary_write_file_approval_round_trip_persists_result_and_resumes(tmp
     )
     assert agent._latest_pending_action_note(agent.state) == ""
     assert any(message.role == "assistant" and message.content for message in agent.state.messages)
+
+
+def test_external_approval_result_records_durable_session_evidence(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    message = agent.record_external_approval_result(
+        {
+            "session_id": agent.session_id,
+            "token": "action-1",
+            "action_type": "approve_pending_action",
+            "source_tool_name": "approve_pending_action",
+            "tool_call_id": "call-1",
+            "success": True,
+            "approval_action": "approve",
+            "approved": True,
+            "result": "ok",
+            "details": {"safe": True, "token": "must-not-drive-digest"},
+            "timestamp": 10.0,
+        }
+    )
+    digest = build_session_result_digest(
+        {
+            "result": "ok",
+            "details": {"safe": True, "token": "must-not-drive-digest"},
+            "success": True,
+            "approval_action": "approve",
+            "action_type": "approve_pending_action",
+            "source_tool_name": "approve_pending_action",
+        }
+    )
+
+    result = agent.session_store.lookup_external_tool_result_evidence(agent.session_id, action_id="action-1", result_digest=digest)
+
+    assert message.metadata[SESSION_MESSAGE_ID_KEY]
+    assert message.metadata[SESSION_CORRELATION_KEY]["result_digest"] == digest
+    assert "must-not-drive-digest" not in digest
+    assert result.status == SessionEvidenceLookupStatus.FOUND
+    assert result.evidence is not None
+    assert result.evidence.message_id == message.metadata[SESSION_MESSAGE_ID_KEY]
+
+
+def test_continue_with_continuation_id_records_completion_after_persist(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+
+    events = agent.continue_(continuation_id="cont-1")
+    result = agent.session_store.lookup_model_continuation_completion_evidence(agent.session_id, continuation_id="cont-1")
+    loaded = agent.session_store.load(agent.session_id)
+    assistant = next(message for message in loaded.messages if message.role == "assistant")
+
+    assert any(event.type == "provider_response" for event in events)
+    assert result.status == SessionEvidenceLookupStatus.FOUND
+    assert result.evidence is not None
+    assert result.evidence.message_id == assistant.metadata[SESSION_MESSAGE_ID_KEY]
+    assert assistant.metadata[SESSION_CORRELATION_KEY]["continuation_id"] == "cont-1"
+
+
+def test_continue_without_correlation_keeps_legacy_behavior(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+
+    agent.continue_()
+    result = agent.session_store.lookup_model_continuation_completion_evidence(agent.session_id, continuation_id="cont-1")
+
+    assert result.status == SessionEvidenceLookupStatus.NOT_FOUND
+
+
+def test_invalid_continuation_id_fails_before_provider_call(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+
+    try:
+        agent.continue_(continuation_id="")
+    except ValueError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("invalid continuation id should fail closed")
+
+    assert not agent.state.messages
 
 
 def test_context_built_event_includes_budget_report(tmp_path: Path) -> None:
