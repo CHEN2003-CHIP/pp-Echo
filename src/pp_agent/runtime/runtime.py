@@ -152,6 +152,7 @@ class _TurnPersistContext:
     turn_id: str
     turn_started_at: float
     continuation_id: str | None = None
+    stop_after_model_boundary: bool = False
 
 
 class AgentRuntime:
@@ -409,7 +410,7 @@ class AgentRuntime:
             )
         )
 
-    def continue_(self, continuation_id: str | None = None) -> list[AgentEvent]:
+    def continue_(self, continuation_id: str | None = None, *, stop_after_model_boundary: bool = False) -> list[AgentEvent]:
         """如果当前没有挂起的 tool calls,并且没有挂起的 planner approval token,那才允许从 queued_messages 里取下一条消息出来；"""
         self._cancellation_token.clear()
         if continuation_id is not None:
@@ -430,6 +431,7 @@ class AgentRuntime:
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
             turn_started_at=time.time(),
             continuation_id=continuation_id,
+            stop_after_model_boundary=stop_after_model_boundary,
         )
         self.observability.start_run(
             run_id=run_id,
@@ -717,13 +719,58 @@ class AgentRuntime:
                 assistant_parts.extend(ToolCallPart(id=call.id, name=call.name, arguments=call.arguments) for call in tool_calls)
                 assistant_message = ChatMessage(role="assistant", content=assistant_parts, timestamp=time.time())
                 ensure_session_message_id(assistant_message)
-                if turn_persist_context.continuation_id is not None and not tool_calls:
+                if turn_persist_context.continuation_id is not None:
                     assistant_message.metadata[SESSION_CORRELATION_KEY] = build_model_continuation_completion_correlation(
                         continuation_id=turn_persist_context.continuation_id,
                         completed_at=assistant_message.timestamp,
                         turn_id=turn_persist_context.turn_id,
                     )
                 self.state.messages.append(assistant_message)
+                if tool_calls and turn_persist_context.stop_after_model_boundary:
+                    plan_steps = self._build_plan_steps(tool_calls)
+                    payload = self._stage_plan_approval(tool_calls, plan_steps)
+                    self.state.pending_tool_calls = [call.model_copy(deep=True) for call in tool_calls]
+                    self.state.pending_plan_token = payload["token"]
+                    pause_decision = self.turn_controller.before_plan_approval()
+                    yield from self._set_turn_phase(pause_decision.phase, pause_decision.reason)
+                    planner_preview = self._planner_preview_details(tool_calls, plan_steps, token=payload["token"])
+                    yield from self._emit(
+                        self._event(
+                            PLANNER_START,
+                            details={**planner_preview, "requires_approval": True, "turn_id": self.state.turn.turn_id},
+                        )
+                    )
+                    for step in plan_steps:
+                        step.status = "awaiting_approval"
+                        yield from self._emit(
+                            self._event(
+                                PLANNER_STEP,
+                                plan_step=step.model_copy(deep=True),
+                                details={"status": step.status, "token": payload["token"]},
+                            )
+                        )
+                    yield from self._emit(self._event(PLANNER_GATE_PENDING, message=f"Planner paused for approval token {payload['token']}", details={**planner_preview, "turn_id": self.state.turn.turn_id, "requires_approval": True}))
+                    yield from self._emit(
+                        self._event(
+                            PLANNER_END,
+                            message=f"Planner paused for approval token {payload['token']}",
+                            details={**planner_preview, "requires_approval": True},
+                        )
+                    )
+                    end_decision = self.turn_controller.on_turn_end()
+                    yield from self._emit(self._event(TURN_END, details={"turn_id": self.state.turn.turn_id}))
+                    yield from self._set_turn_phase(end_decision.phase, end_decision.reason)
+                    persist_end_index = len(self.state.messages)
+                    keep_running = False
+                    break
+                if turn_persist_context.stop_after_model_boundary:
+                    yield from self._emit_compaction_if_needed()
+                    yield from self._emit(self._event(TURN_END, details={"turn_id": self.state.turn.turn_id}))
+                    end_decision = self.turn_controller.after_assistant_turn(None)
+                    yield from self._set_turn_phase(end_decision.phase, end_decision.reason)
+                    persist_end_index = len(self.state.messages)
+                    keep_running = False
+                    break
                 #如果模型给了工具，而且这些工具需要审批，就先暂停
                 if tool_calls and self._should_pause_for_plan(tool_calls):
                     #把工具调用转成“计划步骤”

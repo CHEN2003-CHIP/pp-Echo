@@ -2,7 +2,7 @@
 
 ## Mission 08: Durable Workflow Recovery and Idempotent Resume
 
-Status: Planning / authoritative design ready for human review; 08B/08C/08D-P/08D-S implemented
+Status: Planning / authoritative design ready for human review; 08B/08C/08D-P/08D-S/08D-R implemented
 
 Details:
 
@@ -34,7 +34,7 @@ Planned tasks:
 - 08D preflight: approval/tool-boundary resume audit. Status: stopped for human review because model continuation lacked a durable intent/correlation boundary.
 - 08D-P: durable model continuation intent contract and checkpoint schema v2. Status: implemented / ready for human review.
 - 08D-S: SessionStore/tool-result correlation evidence integration. Status: implemented / ready for human review.
-- 08D-R: future explicit approval/tool-boundary resume execution.
+- 08D-R: explicit approval/tool-boundary resume execution. Status: implemented / ready for human review.
 - 08E: Mission 07 validation/repair recovery integration.
 - 08F: CLI inspect/resume/cancel.
 - 08G: doctor, release gate, documentation, and closeout.
@@ -57,6 +57,18 @@ Non-goals:
 Hard stops:
 
 - Stop for human review if Mission 08 requires a second approval store, second tool execution state, second runtime/model loop, generic workflow engine, database migration, full session format rewrite, approval token semantic change, Mission 07 runtime semantic change, new dependency, pickle, trace as sole authority, or unresolved checkpoint/session double authority.
+
+08D-R implementation note:
+
+- `src/pp_agent/coding.workflow_recovery` owns read-only inspection and explicit resume orchestration.
+- Resume requires an expected checkpoint revision and uses checkpoint CAS before any model continuation attempt.
+- One resume call may dispatch at most one existing runtime model continuation, with `stop_after_model_boundary=True`.
+- Recovery never approves, rejects, or executes tools. New tool calls are staged by the existing runtime planner approval owner and then the resume call stops.
+- If a continuation intent exists without SessionStore completion evidence, repeated resume fails closed and does not retry the model.
+- SessionStore remains the only authority for durable external tool-result and model-continuation completion evidence.
+- PendingActionStore remains the only authority for staged action and approval lifecycle.
+- Mission 07 validation, repair, and re-validation recovery remain deferred to 08E.
+- CLI and doctor integration remain deferred to 08F/08G.
 
 ## Mission 07: Bounded Validation and Repair Loop
 

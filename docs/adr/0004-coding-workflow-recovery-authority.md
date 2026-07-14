@@ -52,6 +52,9 @@ Recovery must load and validate checkpoint state, inspect authoritative session 
 - Ambiguous side-effect windows fail closed instead of guessing.
 - Doctor can add read-only consistency checks later, but doctor must not resume, approve, run tools, run tests, or repair state.
 - CLI inspect/resume/cancel remains presentation and orchestration over authoritative owners; it does not become a state owner.
+- Mission 08D-R implements explicit one-boundary resume in `src/pp_agent/coding`: inspection is read-only, resume requires caller-provided expected checkpoint revision, and one resume call may dispatch at most one existing runtime model continuation after pre-call checkpoint CAS.
+- Recovery does not approve, reject, or execute tools. If a resumed model response produces tool calls, existing runtime planner approval staging remains the owner and recovery stops at that boundary.
+- SessionStore remains the evidence authority for external tool-result and model-continuation completion correlation; PendingActionStore remains the lifecycle authority for staged actions.
 
 ## Non-goals
 
