@@ -2,7 +2,7 @@
 
 ## Mission 08: Durable Workflow Recovery and Idempotent Resume
 
-Status: Planning / authoritative design ready for human review; 08B/08C/08D-P/08D-S/08D-R implemented
+Status: Planning / authoritative design ready for human review; 08B/08C/08D-P/08D-S/08D-R/08D-T implemented
 
 Details:
 
@@ -35,6 +35,7 @@ Planned tasks:
 - 08D-P: durable model continuation intent contract and checkpoint schema v2. Status: implemented / ready for human review.
 - 08D-S: SessionStore/tool-result correlation evidence integration. Status: implemented / ready for human review.
 - 08D-R: explicit approval/tool-boundary resume execution. Status: implemented / ready for human review.
+- 08D-T: generic coding workflow terminal outcome and ordinary completion. Status: implemented / ready for human review.
 - 08E: Mission 07 validation/repair recovery integration.
 - 08F: CLI inspect/resume/cancel.
 - 08G: doctor, release gate, documentation, and closeout.
@@ -69,6 +70,19 @@ Hard stops:
 - PendingActionStore remains the only authority for staged action and approval lifecycle.
 - Mission 07 validation, repair, and re-validation recovery remain deferred to 08E.
 - CLI and doctor integration remain deferred to 08F/08G.
+
+08D-T implementation note:
+
+- CHECKPOINT SCHEMA V1: FROZEN.
+- CHECKPOINT SCHEMA V2: FROZEN.
+- CHECKPOINT SCHEMA V3: GENERIC TERMINAL OUTCOME CAPABLE.
+- `session_committed` is continuation completion evidence only; it is not workflow terminality.
+- Workflow completion authority remains the `pp_agent.coding` checkpoint.
+- Ordinary completion requires schema v3, exact SessionStore model-continuation completion evidence, typed ordinary terminal outcome, no active pending action, a completion marker, and checkpoint CAS.
+- Completed checkpoint is immutable.
+- V1/V2 checkpoints are not automatically migrated to v3.
+- Validation terminal contract is defined, but Mission 07 validation/repair/re-validation recovery remains not implemented.
+- CLI and doctor integration remain not implemented.
 
 ## Mission 07: Bounded Validation and Repair Loop
 

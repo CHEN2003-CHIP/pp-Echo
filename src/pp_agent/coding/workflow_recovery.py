@@ -10,9 +10,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pp_agent.coding.workflow_checkpoint import (
-    CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2,
+    CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3,
     CodingWorkflowCheckpoint,
+    CodingWorkflowCompletion,
     CodingWorkflowPhase,
+    CodingWorkflowTerminalKind,
+    CodingWorkflowTerminalOutcome,
     ModelContinuationIntent,
     ModelContinuationState,
     PendingActionReference,
@@ -198,6 +201,15 @@ def resume_coding_workflow(
             continuation_id=inspection.continuation_id,
         )
         return CodingWorkflowResumeResult(workflow_id, stale, checkpoint_revision=inspection.checkpoint_revision)
+    if inspection.decision == CodingWorkflowDecision.CONTINUATION_COMPLETED_IN_SESSION:
+        finalized = _finalize_session_committed_completion(
+            store=store,
+            workflow_id=workflow_id,
+            expected_revision=expected_revision,
+            session_store=session_store,
+            pending_action_store=pending_store,
+        )
+        return CodingWorkflowResumeResult(workflow_id, finalized, checkpoint_revision=finalized.checkpoint_revision)
     if inspection.decision != CodingWorkflowDecision.READY_FOR_CONTINUATION_INTENT:
         return CodingWorkflowResumeResult(workflow_id, inspection, checkpoint_revision=inspection.checkpoint_revision)
 
@@ -311,6 +323,26 @@ def resume_coding_workflow(
             checkpoint_revision=intent_checkpoint.revision,
         )
 
+    active_pending_action_id = _active_pending_action_id_for_session(pending_store, intent_checkpoint.session_id)
+    if active_pending_action_id is not None:
+        blocked = CodingWorkflowInspection(
+            workflow_id,
+            CodingWorkflowDecision.BLOCKED_UNCERTAIN,
+            CodingWorkflowBlockReason.ACTION_STATE_UNCERTAIN,
+            checkpoint_revision=intent_checkpoint.revision,
+            session_id=intent_checkpoint.session_id,
+            action_id=active_pending_action_id,
+            continuation_id=continuation_id,
+            completion_message_id=completion.evidence.message_id,
+        )
+        return CodingWorkflowResumeResult(
+            workflow_id,
+            blocked,
+            external_effect_count=1,
+            model_continuation_attempted=True,
+            checkpoint_revision=intent_checkpoint.revision,
+        )
+
     try:
         committed = _commit_completion(
             store=store,
@@ -356,13 +388,26 @@ def _inspect_checkpoint(
         "checkpoint_revision": checkpoint.revision,
         "session_id": checkpoint.session_id,
     }
-    if checkpoint.schema_version != CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2:
+    if checkpoint.schema_version != CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3:
         return CodingWorkflowInspection(
             **base,
             decision=CodingWorkflowDecision.LEGACY_CHECKPOINT_NOT_RESUMABLE,
             reason=CodingWorkflowBlockReason.LEGACY_NOT_RESUMABLE,
         )
     if checkpoint.phase == CodingWorkflowPhase.COMPLETED:
+        if (
+            checkpoint.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3
+            and checkpoint.terminal_outcome is not None
+            and checkpoint.terminal_outcome.terminal_kind == CodingWorkflowTerminalKind.ORDINARY_COMPLETION
+        ):
+            evidence = checkpoint.terminal_outcome.session_completion_evidence_ref
+            return CodingWorkflowInspection(
+                **base,
+                decision=CodingWorkflowDecision.ORDINARY_COMPLETED,
+                action_id=evidence.source_action_id if evidence else None,
+                continuation_id=evidence.continuation_id if evidence else None,
+                completion_message_id=evidence.committed_turn_id if evidence else None,
+            )
         return CodingWorkflowInspection(**base, decision=CodingWorkflowDecision.COMPLETED)
     if checkpoint.phase in _MISSION_07_PHASES or checkpoint.validation_execution_count > 0 or checkpoint.repair_attempted or checkpoint.revalidation_attempted:
         return CodingWorkflowInspection(
@@ -376,9 +421,20 @@ def _inspect_checkpoint(
     if intent is not None:
         completion = session_store.lookup_model_continuation_completion_evidence(checkpoint.session_id, continuation_id=intent.continuation_id)
         if intent.state == ModelContinuationState.SESSION_COMMITTED:
+            if checkpoint.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3:
+                return CodingWorkflowInspection(
+                    **base,
+                    decision=CodingWorkflowDecision.CONTINUATION_COMPLETED_IN_SESSION,
+                    action_id=intent.source_action_ref.action_id,
+                    continuation_id=intent.continuation_id,
+                    completion_message_id=(
+                        intent.completed_session_evidence_ref.committed_turn_id if intent.completed_session_evidence_ref else None
+                    ),
+                )
             return CodingWorkflowInspection(
                 **base,
-                decision=CodingWorkflowDecision.CONTINUATION_COMPLETED_IN_SESSION,
+                decision=CodingWorkflowDecision.LEGACY_CHECKPOINT_NOT_RESUMABLE,
+                reason=CodingWorkflowBlockReason.LEGACY_NOT_RESUMABLE,
                 action_id=intent.source_action_ref.action_id,
                 continuation_id=intent.continuation_id,
                 completion_message_id=(
@@ -624,6 +680,23 @@ def _pending_action_state(item: dict[str, Any]) -> str:
     return state
 
 
+def _active_pending_action_id_for_session(pending_action_store: PendingActionReader, session_id: str) -> str | None:
+    try:
+        actions = pending_action_store.list()
+    except (FileNotFoundError, ValueError, TypeError):
+        return None
+    for action in actions:
+        if _action_session_id(action) != session_id:
+            continue
+        if _pending_action_state(action) in _ACTIVE_ACTION_STATES:
+            return str(action.get("token") or "")
+    return None
+
+
+def _action_session_id(action: dict[str, Any]) -> str:
+    return str(action.get("session_id") or (action.get("details") or {}).get("session_id") or "")
+
+
 def _commit_completion(
     *,
     store: CodingWorkflowCheckpointStore,
@@ -641,6 +714,7 @@ def _commit_completion(
         source_result_digest=intent.source_result_digest,
         committed_turn_id=completion_message_id,
     )
+    completed_at = datetime.now(timezone.utc)
     committed_intent = ModelContinuationIntent(
         continuation_id=intent.continuation_id,
         source_action_ref=intent.source_action_ref,
@@ -654,8 +728,130 @@ def _commit_completion(
     replacement = _replace_checkpoint_fields(
         checkpoint,
         revision=checkpoint.revision + 1,
-        updated_at=datetime.now(timezone.utc),
+        phase=CodingWorkflowPhase.COMPLETED,
+        pending_action_ref=None,
+        final_outcome_summary=None,
+        completion_marker=CodingWorkflowCompletion(completed_at=completed_at),
         model_continuation_intent=committed_intent,
+        terminal_outcome=CodingWorkflowTerminalOutcome(
+            terminal_kind=CodingWorkflowTerminalKind.ORDINARY_COMPLETION,
+            completed_at=completed_at,
+            reason_code="ordinary_model_stop",
+            session_completion_evidence_ref=evidence,
+        ),
+        updated_at=completed_at,
+    )
+    return store.replace_checkpoint(replacement, expected_revision=expected_revision)
+
+
+def _finalize_session_committed_completion(
+    *,
+    store: CodingWorkflowCheckpointStore,
+    workflow_id: str,
+    expected_revision: int,
+    session_store: SessionEvidenceStore,
+    pending_action_store: PendingActionReader,
+) -> CodingWorkflowInspection:
+    try:
+        checkpoint = store.load_checkpoint(workflow_id)
+    except CheckpointStorageError:
+        return _blocked(workflow_id, CodingWorkflowBlockReason.CHECKPOINT_CORRUPT)
+    if checkpoint.revision != expected_revision:
+        return CodingWorkflowInspection(
+            workflow_id,
+            CodingWorkflowDecision.STALE_REVISION,
+            CodingWorkflowBlockReason.CHECKPOINT_STALE,
+            checkpoint_revision=checkpoint.revision,
+            session_id=checkpoint.session_id,
+        )
+    if checkpoint.schema_version != CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3:
+        return CodingWorkflowInspection(
+            workflow_id,
+            CodingWorkflowDecision.LEGACY_CHECKPOINT_NOT_RESUMABLE,
+            CodingWorkflowBlockReason.LEGACY_NOT_RESUMABLE,
+            checkpoint_revision=checkpoint.revision,
+            session_id=checkpoint.session_id,
+        )
+    intent = checkpoint.model_continuation_intent
+    if intent is None or intent.state != ModelContinuationState.SESSION_COMMITTED or intent.completed_session_evidence_ref is None:
+        return _inspect_checkpoint(checkpoint, session_store=session_store, pending_action_store=pending_action_store)
+    completion = session_store.lookup_model_continuation_completion_evidence(checkpoint.session_id, continuation_id=intent.continuation_id)
+    if completion.status != SessionEvidenceLookupStatus.FOUND or completion.evidence is None:
+        return CodingWorkflowInspection(
+            workflow_id,
+            CodingWorkflowDecision.BLOCKED_UNCERTAIN,
+            CodingWorkflowBlockReason.CONTINUATION_MISSING,
+            checkpoint_revision=checkpoint.revision,
+            session_id=checkpoint.session_id,
+            action_id=intent.source_action_ref.action_id,
+            continuation_id=intent.continuation_id,
+        )
+    evidence = intent.completed_session_evidence_ref
+    if completion.evidence.message_id != evidence.committed_turn_id:
+        return CodingWorkflowInspection(
+            workflow_id,
+            CodingWorkflowDecision.BLOCKED_UNCERTAIN,
+            CodingWorkflowBlockReason.CONTINUATION_AMBIGUOUS,
+            checkpoint_revision=checkpoint.revision,
+            session_id=checkpoint.session_id,
+            action_id=intent.source_action_ref.action_id,
+            continuation_id=intent.continuation_id,
+            completion_message_id=completion.evidence.message_id,
+        )
+    active_pending_action_id = _active_pending_action_id_for_session(pending_action_store, checkpoint.session_id)
+    if active_pending_action_id is not None:
+        return CodingWorkflowInspection(
+            workflow_id,
+            CodingWorkflowDecision.BLOCKED_UNCERTAIN,
+            CodingWorkflowBlockReason.ACTION_STATE_UNCERTAIN,
+            checkpoint_revision=checkpoint.revision,
+            session_id=checkpoint.session_id,
+            action_id=active_pending_action_id,
+            continuation_id=intent.continuation_id,
+            completion_message_id=completion.evidence.message_id,
+        )
+    try:
+        completed = _write_ordinary_completion(
+            store=store,
+            checkpoint=checkpoint,
+            evidence=evidence,
+            expected_revision=expected_revision,
+        )
+    except CheckpointStaleRevision:
+        return CodingWorkflowInspection(
+            workflow_id,
+            CodingWorkflowDecision.STALE_REVISION,
+            CodingWorkflowBlockReason.CHECKPOINT_STALE,
+            checkpoint_revision=checkpoint.revision,
+            session_id=checkpoint.session_id,
+            action_id=intent.source_action_ref.action_id,
+            continuation_id=intent.continuation_id,
+        )
+    return _inspect_checkpoint(completed, session_store=session_store, pending_action_store=pending_action_store)
+
+
+def _write_ordinary_completion(
+    *,
+    store: CodingWorkflowCheckpointStore,
+    checkpoint: CodingWorkflowCheckpoint,
+    evidence: SessionCompletionEvidenceReference,
+    expected_revision: int,
+) -> CodingWorkflowCheckpoint:
+    completed_at = datetime.now(timezone.utc)
+    replacement = _replace_checkpoint_fields(
+        checkpoint,
+        revision=checkpoint.revision + 1,
+        phase=CodingWorkflowPhase.COMPLETED,
+        pending_action_ref=None,
+        final_outcome_summary=None,
+        completion_marker=CodingWorkflowCompletion(completed_at=completed_at),
+        terminal_outcome=CodingWorkflowTerminalOutcome(
+            terminal_kind=CodingWorkflowTerminalKind.ORDINARY_COMPLETION,
+            completed_at=completed_at,
+            reason_code="ordinary_model_stop",
+            session_completion_evidence_ref=evidence,
+        ),
+        updated_at=completed_at,
     )
     return store.replace_checkpoint(replacement, expected_revision=expected_revision)
 
@@ -678,6 +874,7 @@ def _replace_checkpoint_fields(checkpoint: CodingWorkflowCheckpoint, **overrides
         "final_outcome_summary": checkpoint.final_outcome_summary,
         "completion_marker": checkpoint.completion_marker,
         "model_continuation_intent": checkpoint.model_continuation_intent,
+        "terminal_outcome": checkpoint.terminal_outcome,
         "created_at": checkpoint.created_at,
         "updated_at": checkpoint.updated_at,
         "integrity_digest": None,

@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION = 1
 CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2 = 2
+CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3 = 3
 CODING_WORKFLOW_CHECKPOINT_DIGEST_ALGORITHM = "sha256"
 CODING_WORKFLOW_CHECKPOINT_KIND = "controlled_coding"
 CODING_WORKFLOW_CHECKPOINT_INITIAL_REVISION = 0
@@ -84,6 +85,11 @@ class ValidationFinalStatus(str, Enum):
     FAILED = "failed"
     BLOCKED = "blocked"
     VALIDATION_NONZERO = "validation_nonzero"
+
+
+class CodingWorkflowTerminalKind(str, Enum):
+    ORDINARY_COMPLETION = "ordinary_completion"
+    VALIDATION_COMPLETION = "validation_completion"
 
 
 @dataclass(frozen=True)
@@ -263,6 +269,82 @@ class SessionCompletionEvidenceReference:
 
 
 @dataclass(frozen=True)
+class CodingWorkflowTerminalOutcome:
+    """Bounded terminal workflow outcome for schema v3 completed checkpoints."""
+
+    terminal_kind: CodingWorkflowTerminalKind
+    completed_at: datetime
+    reason_code: str
+    session_completion_evidence_ref: SessionCompletionEvidenceReference | None = None
+    validation_outcome_summary: ValidationOutcomeSummary | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.terminal_kind, CodingWorkflowTerminalKind):
+            raise CheckpointValidationError("terminal_outcome.terminal_kind must be CodingWorkflowTerminalKind")
+        _validate_utc_datetime(self.completed_at, "terminal_outcome.completed_at")
+        _validate_bounded_text(self.reason_code, "terminal_outcome.reason_code", MAX_FAILURE_CODE_LENGTH)
+        if self.session_completion_evidence_ref is not None and not isinstance(
+            self.session_completion_evidence_ref, SessionCompletionEvidenceReference
+        ):
+            raise CheckpointValidationError("terminal_outcome.session_completion_evidence_ref must be SessionCompletionEvidenceReference")
+        if self.validation_outcome_summary is not None and not isinstance(self.validation_outcome_summary, ValidationOutcomeSummary):
+            raise CheckpointValidationError("terminal_outcome.validation_outcome_summary must be ValidationOutcomeSummary")
+        if self.terminal_kind == CodingWorkflowTerminalKind.ORDINARY_COMPLETION:
+            if self.session_completion_evidence_ref is None:
+                raise CheckpointValidationError("ordinary terminal outcome requires session completion evidence")
+            if self.validation_outcome_summary is not None:
+                raise CheckpointValidationError("ordinary terminal outcome must not include validation summary")
+        if self.terminal_kind == CodingWorkflowTerminalKind.VALIDATION_COMPLETION:
+            if self.validation_outcome_summary is None:
+                raise CheckpointValidationError("validation terminal outcome requires validation summary")
+            if self.session_completion_evidence_ref is not None:
+                raise CheckpointValidationError("validation terminal outcome must not include session completion evidence")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "terminal_kind": self.terminal_kind.value,
+            "completed_at": _format_utc(self.completed_at),
+            "reason_code": self.reason_code,
+            "session_completion_evidence_ref": (
+                self.session_completion_evidence_ref.to_dict() if self.session_completion_evidence_ref is not None else None
+            ),
+            "validation_outcome_summary": (
+                self.validation_outcome_summary.to_dict() if self.validation_outcome_summary is not None else None
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "CodingWorkflowTerminalOutcome":
+        _reject_forbidden_payload_keys(data, "terminal_outcome")
+        _reject_unknown_fields(
+            data,
+            {
+                "terminal_kind",
+                "completed_at",
+                "reason_code",
+                "session_completion_evidence_ref",
+                "validation_outcome_summary",
+            },
+            "terminal_outcome",
+        )
+        return cls(
+            terminal_kind=_enum_value(CodingWorkflowTerminalKind, data.get("terminal_kind"), "terminal_outcome.terminal_kind"),
+            completed_at=_parse_utc_datetime(data.get("completed_at"), "terminal_outcome.completed_at"),
+            reason_code=_required_str(data, "reason_code"),
+            session_completion_evidence_ref=_optional_nested(
+                SessionCompletionEvidenceReference,
+                data.get("session_completion_evidence_ref"),
+                "terminal_outcome.session_completion_evidence_ref",
+            ),
+            validation_outcome_summary=_optional_nested(
+                ValidationOutcomeSummary,
+                data.get("validation_outcome_summary"),
+                "terminal_outcome.validation_outcome_summary",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class ModelContinuationIntent:
     """Durable at-most-one model continuation intent without storing prompts or responses."""
 
@@ -376,6 +458,7 @@ class CodingWorkflowCheckpoint:
     final_outcome_summary: ValidationOutcomeSummary | None = None
     completion_marker: CodingWorkflowCompletion | None = None
     model_continuation_intent: ModelContinuationIntent | None = None
+    terminal_outcome: CodingWorkflowTerminalOutcome | None = None
     integrity_digest: str | None = None
 
     def __post_init__(self) -> None:
@@ -403,10 +486,15 @@ class CodingWorkflowCheckpoint:
         }
         if include_integrity:
             payload["integrity_digest"] = self.integrity_digest
-        if self.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2:
+        if self.schema_version in {
+            CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2,
+            CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3,
+        }:
             payload["model_continuation_intent"] = (
                 self.model_continuation_intent.to_dict() if self.model_continuation_intent is not None else None
             )
+        if self.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3:
+            payload["terminal_outcome"] = self.terminal_outcome.to_dict() if self.terminal_outcome is not None else None
         return payload
 
     @classmethod
@@ -456,6 +544,29 @@ class CodingWorkflowCheckpoint:
                 "updated_at",
                 "integrity_digest",
             }
+        elif schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3:
+            allowed = {
+                "schema_version",
+                "workflow_id",
+                "session_id",
+                "workflow_kind",
+                "revision",
+                "phase",
+                "selected_validation_command_digest",
+                "selected_validation_command_digest_algorithm",
+                "validation_execution_count",
+                "repair_attempted",
+                "revalidation_attempted",
+                "pending_action_ref",
+                "last_completed_action_ref",
+                "final_outcome_summary",
+                "completion_marker",
+                "model_continuation_intent",
+                "terminal_outcome",
+                "created_at",
+                "updated_at",
+                "integrity_digest",
+            }
         else:
             raise CheckpointValidationError("unsupported checkpoint schema_version")
         _reject_unknown_fields(
@@ -483,6 +594,7 @@ class CodingWorkflowCheckpoint:
             final_outcome_summary=_optional_nested(ValidationOutcomeSummary, data.get("final_outcome_summary"), "final_outcome_summary"),
             completion_marker=_optional_nested(CodingWorkflowCompletion, data.get("completion_marker"), "completion_marker"),
             model_continuation_intent=_optional_nested(ModelContinuationIntent, data.get("model_continuation_intent"), "model_continuation_intent"),
+            terminal_outcome=_optional_nested(CodingWorkflowTerminalOutcome, data.get("terminal_outcome"), "terminal_outcome"),
             created_at=_parse_utc_datetime(data.get("created_at"), "created_at"),
             updated_at=_parse_utc_datetime(data.get("updated_at"), "updated_at"),
             integrity_digest=_optional_str(data.get("integrity_digest"), "integrity_digest"),
@@ -492,7 +604,11 @@ class CodingWorkflowCheckpoint:
 def validate_checkpoint(checkpoint: CodingWorkflowCheckpoint) -> CodingWorkflowCheckpoint:
     """Validate contract-local checkpoint facts without I/O or external stores."""
 
-    if checkpoint.schema_version not in {CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION, CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2}:
+    if checkpoint.schema_version not in {
+        CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION,
+        CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2,
+        CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3,
+    }:
         raise CheckpointValidationError("unsupported checkpoint schema_version")
     _validate_identifier(checkpoint.workflow_id, "workflow_id")
     _validate_identifier(checkpoint.session_id, "session_id")
@@ -554,6 +670,8 @@ def _validate_selected_command_digest(checkpoint: CodingWorkflowCheckpoint) -> N
             raise CheckpointValidationError("selected_validation_command_digest_algorithm must be sha256")
     if checkpoint.validation_execution_count > 0 and digest is None:
         raise CheckpointValidationError("selected command digest is required once validation has executed")
+    if _is_v3_ordinary_completed(checkpoint):
+        return
     if checkpoint.phase in _PHASES_REQUIRING_SELECTED_COMMAND and digest is None:
         raise CheckpointValidationError("selected command digest is required for validation and repair phases")
 
@@ -570,6 +688,8 @@ def _validate_phase_action_ref(checkpoint: CodingWorkflowCheckpoint) -> None:
 
 
 def _validate_mission_07_invariants(checkpoint: CodingWorkflowCheckpoint) -> None:
+    if _is_v3_ordinary_completed(checkpoint):
+        return
     if checkpoint.revalidation_attempted and not checkpoint.repair_attempted:
         raise CheckpointValidationError("revalidation_attempted requires repair_attempted")
     if checkpoint.validation_execution_count == 2 and not checkpoint.revalidation_attempted:
@@ -587,6 +707,11 @@ def _validate_mission_07_invariants(checkpoint: CodingWorkflowCheckpoint) -> Non
 
 
 def _validate_completion_contract(checkpoint: CodingWorkflowCheckpoint) -> None:
+    if checkpoint.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3:
+        _validate_v3_completion_contract(checkpoint)
+        return
+    if checkpoint.terminal_outcome is not None:
+        raise CheckpointValidationError("terminal_outcome is only allowed for schema v3")
     if checkpoint.final_outcome_summary is not None:
         if checkpoint.validation_execution_count == 0:
             raise CheckpointValidationError("final outcome requires validation_execution_count > 0")
@@ -611,6 +736,68 @@ def _validate_completion_contract(checkpoint: CodingWorkflowCheckpoint) -> None:
         raise CheckpointValidationError("final_outcome_summary is only allowed for finalized or completed phase")
 
 
+def _validate_v3_completion_contract(checkpoint: CodingWorkflowCheckpoint) -> None:
+    terminal = checkpoint.terminal_outcome
+    if checkpoint.final_outcome_summary is not None:
+        if checkpoint.validation_execution_count == 0:
+            raise CheckpointValidationError("final outcome requires validation_execution_count > 0")
+        if checkpoint.final_outcome_summary.repair_attempted != checkpoint.repair_attempted:
+            raise CheckpointValidationError("final outcome repair flag must match checkpoint")
+        if checkpoint.final_outcome_summary.revalidation_attempted != checkpoint.revalidation_attempted:
+            raise CheckpointValidationError("final outcome revalidation flag must match checkpoint")
+    if checkpoint.phase == CodingWorkflowPhase.COMPLETED:
+        if checkpoint.completion_marker is None:
+            raise CheckpointValidationError("completed checkpoint requires completion_marker")
+        if terminal is None:
+            raise CheckpointValidationError("completed schema v3 checkpoint requires terminal_outcome")
+        if terminal.completed_at != checkpoint.completion_marker.completed_at:
+            raise CheckpointValidationError("terminal outcome completed_at must match completion_marker")
+        if checkpoint.pending_action_ref is not None:
+            raise CheckpointValidationError("completed checkpoint must not have active pending action reference")
+        if (
+            checkpoint.model_continuation_intent is not None
+            and checkpoint.model_continuation_intent.state != ModelContinuationState.SESSION_COMMITTED
+        ):
+            raise CheckpointValidationError("completed checkpoint must not have active continuation intent")
+        if terminal.terminal_kind == CodingWorkflowTerminalKind.ORDINARY_COMPLETION:
+            if checkpoint.final_outcome_summary is not None:
+                raise CheckpointValidationError("ordinary completed checkpoint must not have final_outcome_summary")
+            if checkpoint.validation_execution_count != 0 or checkpoint.repair_attempted or checkpoint.revalidation_attempted:
+                raise CheckpointValidationError("ordinary completed checkpoint must not have validation lifecycle facts")
+            evidence = terminal.session_completion_evidence_ref
+            if checkpoint.model_continuation_intent is not None:
+                intent = checkpoint.model_continuation_intent
+                if evidence is None:
+                    raise CheckpointValidationError("ordinary terminal outcome requires session completion evidence")
+                if evidence.continuation_id != intent.continuation_id:
+                    raise CheckpointValidationError("terminal outcome continuation must match intent")
+                if evidence.session_id != checkpoint.session_id:
+                    raise CheckpointValidationError("terminal outcome session must match checkpoint")
+                if evidence.source_action_id != intent.source_action_ref.action_id:
+                    raise CheckpointValidationError("terminal outcome source action must match intent")
+                if evidence.source_result_digest != intent.source_result_digest:
+                    raise CheckpointValidationError("terminal outcome source result must match intent")
+        if terminal.terminal_kind == CodingWorkflowTerminalKind.VALIDATION_COMPLETION:
+            if terminal.validation_outcome_summary is None:
+                raise CheckpointValidationError("validation terminal outcome requires validation summary")
+            if checkpoint.final_outcome_summary is None:
+                raise CheckpointValidationError("validation completed checkpoint requires final_outcome_summary")
+            if terminal.validation_outcome_summary != checkpoint.final_outcome_summary:
+                raise CheckpointValidationError("validation terminal outcome must match final_outcome_summary")
+            if checkpoint.validation_execution_count < 1:
+                raise CheckpointValidationError("validation completed checkpoint requires validation execution")
+        return
+    if terminal is not None:
+        raise CheckpointValidationError("terminal_outcome is only allowed for completed phase")
+    if checkpoint.completion_marker is not None:
+        raise CheckpointValidationError("completion_marker is only allowed for completed phase")
+    if checkpoint.phase == CodingWorkflowPhase.FINALIZED:
+        if checkpoint.final_outcome_summary is None:
+            raise CheckpointValidationError("finalized phase requires final_outcome_summary")
+    elif checkpoint.final_outcome_summary is not None:
+        raise CheckpointValidationError("final_outcome_summary is only allowed for finalized or completed phase")
+
+
 def _validate_continuation_contract(checkpoint: CodingWorkflowCheckpoint) -> None:
     intent = checkpoint.model_continuation_intent
     if checkpoint.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION:
@@ -620,7 +807,10 @@ def _validate_continuation_contract(checkpoint: CodingWorkflowCheckpoint) -> Non
     if intent is None:
         return
     if checkpoint.phase == CodingWorkflowPhase.COMPLETED:
-        raise CheckpointValidationError("completed checkpoint must not have active continuation intent")
+        if checkpoint.schema_version != CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3:
+            raise CheckpointValidationError("completed checkpoint must not have active continuation intent")
+        if intent.state != ModelContinuationState.SESSION_COMMITTED:
+            raise CheckpointValidationError("completed checkpoint must not have active continuation intent")
     if checkpoint.pending_action_ref is not None:
         raise CheckpointValidationError("continuation intent cannot coexist with active pending action reference")
     if checkpoint.last_completed_action_ref is None:
@@ -665,6 +855,7 @@ def _validate_integrity_digest(checkpoint: CodingWorkflowCheckpoint) -> None:
             final_outcome_summary=checkpoint.final_outcome_summary,
             completion_marker=checkpoint.completion_marker,
             model_continuation_intent=checkpoint.model_continuation_intent,
+            terminal_outcome=checkpoint.terminal_outcome,
             created_at=checkpoint.created_at,
             updated_at=checkpoint.updated_at,
             integrity_digest=None,
@@ -672,6 +863,15 @@ def _validate_integrity_digest(checkpoint: CodingWorkflowCheckpoint) -> None:
     )
     if checkpoint.integrity_digest != expected:
         raise CheckpointValidationError("integrity_digest mismatch")
+
+
+def _is_v3_ordinary_completed(checkpoint: CodingWorkflowCheckpoint) -> bool:
+    return (
+        checkpoint.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3
+        and checkpoint.phase == CodingWorkflowPhase.COMPLETED
+        and checkpoint.terminal_outcome is not None
+        and checkpoint.terminal_outcome.terminal_kind == CodingWorkflowTerminalKind.ORDINARY_COMPLETION
+    )
 
 
 def _required_str(data: Mapping[str, Any], key: str) -> str:
@@ -876,11 +1076,14 @@ __all__ = [
     "CODING_WORKFLOW_CHECKPOINT_KIND",
     "CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION",
     "CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2",
+    "CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3",
     "CheckpointValidationError",
     "CodingWorkflowCheckpoint",
     "CodingWorkflowCompletion",
     "CodingWorkflowKind",
     "CodingWorkflowPhase",
+    "CodingWorkflowTerminalKind",
+    "CodingWorkflowTerminalOutcome",
     "ModelContinuationIntent",
     "ModelContinuationState",
     "PendingActionReference",

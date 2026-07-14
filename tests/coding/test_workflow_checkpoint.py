@@ -13,11 +13,14 @@ from pp_agent.coding import (
     CODING_WORKFLOW_CHECKPOINT_INITIAL_REVISION,
     CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION,
     CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2,
+    CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3,
     CheckpointValidationError,
     CodingWorkflowCheckpoint,
     CodingWorkflowCompletion,
     CodingWorkflowKind,
     CodingWorkflowPhase,
+    CodingWorkflowTerminalKind,
+    CodingWorkflowTerminalOutcome,
     ModelContinuationIntent,
     ModelContinuationState,
     PendingActionReference,
@@ -86,6 +89,7 @@ def _with_integrity(checkpoint: CodingWorkflowCheckpoint) -> CodingWorkflowCheck
             "final_outcome_summary": checkpoint.final_outcome_summary,
             "completion_marker": checkpoint.completion_marker,
             "model_continuation_intent": checkpoint.model_continuation_intent,
+            "terminal_outcome": checkpoint.terminal_outcome,
             "created_at": checkpoint.created_at,
             "updated_at": checkpoint.updated_at,
             "integrity_digest": checkpoint_integrity_digest(checkpoint),
@@ -151,7 +155,7 @@ def test_revision_helper_rejects_bool_and_negative_values() -> None:
         next_checkpoint_revision(True)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("version", [None, "1", 0, 3])
+@pytest.mark.parametrize("version", [None, "1", 0, 999])
 def test_schema_version_must_be_current_integer(version: object) -> None:
     payload = _minimal().to_dict()
     if version is None:
@@ -347,8 +351,60 @@ def _intent(**overrides: object) -> ModelContinuationIntent:
     return ModelContinuationIntent(**values)  # type: ignore[arg-type]
 
 
+def _completion_evidence(**overrides: object) -> SessionCompletionEvidenceReference:
+    values: dict[str, object] = {
+        "session_id": "session-1",
+        "continuation_id": "cont-1",
+        "source_action_id": "effect-1",
+        "source_result_digest": OTHER_DIGEST,
+        "committed_turn_id": "turn-2",
+    }
+    values.update(overrides)
+    return SessionCompletionEvidenceReference(**values)  # type: ignore[arg-type]
+
+
+def _session_committed_intent(**overrides: object) -> ModelContinuationIntent:
+    values: dict[str, object] = {
+        "state": ModelContinuationState.SESSION_COMMITTED,
+        "completed_session_evidence_ref": _completion_evidence(),
+    }
+    values.update(overrides)
+    return _intent(**values)
+
+
+def _ordinary_terminal(**overrides: object) -> CodingWorkflowTerminalOutcome:
+    values: dict[str, object] = {
+        "terminal_kind": CodingWorkflowTerminalKind.ORDINARY_COMPLETION,
+        "completed_at": _now(),
+        "reason_code": "ordinary_model_stop",
+        "session_completion_evidence_ref": _completion_evidence(),
+    }
+    values.update(overrides)
+    return CodingWorkflowTerminalOutcome(**values)  # type: ignore[arg-type]
+
+
+def _validation_terminal(summary: ValidationOutcomeSummary | None = None, **overrides: object) -> CodingWorkflowTerminalOutcome:
+    values: dict[str, object] = {
+        "terminal_kind": CodingWorkflowTerminalKind.VALIDATION_COMPLETION,
+        "completed_at": _now(),
+        "reason_code": "validation_passed",
+        "validation_outcome_summary": summary
+        or ValidationOutcomeSummary(
+            final_status=ValidationFinalStatus.PASSED,
+            repair_attempted=False,
+            revalidation_attempted=False,
+        ),
+    }
+    values.update(overrides)
+    return CodingWorkflowTerminalOutcome(**values)  # type: ignore[arg-type]
+
+
 def _minimal_v2(**overrides: object) -> CodingWorkflowCheckpoint:
     return _minimal(schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2, **overrides)
+
+
+def _minimal_v3(**overrides: object) -> CodingWorkflowCheckpoint:
+    return _minimal(schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3, **overrides)
 
 
 def test_v1_canonical_serialization_is_frozen_without_v2_fields() -> None:
@@ -381,6 +437,20 @@ def test_v2_minimal_round_trip_and_integrity() -> None:
     assert restored.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2
     assert "model_continuation_intent" in restored.to_dict()
     assert checkpoint_to_canonical_json(restored) == checkpoint_to_canonical_json(checkpoint)
+
+
+def test_v2_canonical_serialization_is_frozen_without_v3_fields() -> None:
+    checkpoint = _minimal_v2()
+
+    assert checkpoint_to_canonical_json(checkpoint) == (
+        '{"completion_marker":null,"created_at":"2026-01-02T03:04:05Z",'
+        '"final_outcome_summary":null,"integrity_digest":null,"last_completed_action_ref":null,'
+        '"model_continuation_intent":null,"pending_action_ref":null,"phase":"prepared",'
+        '"repair_attempted":false,"revalidation_attempted":false,"revision":0,"schema_version":2,'
+        '"selected_validation_command_digest":null,"selected_validation_command_digest_algorithm":null,'
+        '"session_id":"session-1","updated_at":"2026-01-02T03:04:05Z",'
+        '"validation_execution_count":0,"workflow_id":"workflow-1","workflow_kind":"controlled_coding"}'
+    )
 
 
 def test_v2_minimal_continuation_intent_round_trip() -> None:
@@ -489,6 +559,137 @@ def test_v2_rejects_sensitive_continuation_payload_fields() -> None:
     intent = payload["model_continuation_intent"]
     assert isinstance(intent, dict)
     intent["stdout"] = "secret output"
+
+    with pytest.raises(CheckpointValidationError):
+        checkpoint_from_dict(payload)
+
+
+def test_v1_and_v2_reject_v3_terminal_outcome_without_migration() -> None:
+    for checkpoint in (_minimal(), _minimal_v2()):
+        payload = checkpoint.to_dict()
+        payload["terminal_outcome"] = None
+
+        with pytest.raises(CheckpointValidationError):
+            checkpoint_from_dict(payload)
+
+
+def test_v3_minimal_round_trip_and_integrity() -> None:
+    checkpoint = _with_integrity(_minimal_v3())
+    restored = checkpoint_from_dict(checkpoint.to_dict())
+
+    assert restored == checkpoint
+    assert restored.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3
+    assert restored.to_dict()["model_continuation_intent"] is None
+    assert restored.to_dict()["terminal_outcome"] is None
+    assert checkpoint_to_canonical_json(restored) == checkpoint_to_canonical_json(checkpoint)
+
+
+def test_v3_ordinary_terminal_round_trip_and_integrity_covers_terminal_outcome() -> None:
+    checkpoint = _with_integrity(
+        _minimal_v3(
+            phase=CodingWorkflowPhase.COMPLETED,
+            last_completed_action_ref=_action_ref(),
+            model_continuation_intent=_session_committed_intent(),
+            completion_marker=CodingWorkflowCompletion(completed_at=_now()),
+            terminal_outcome=_ordinary_terminal(),
+        )
+    )
+    payload = checkpoint.to_dict()
+    restored = checkpoint_from_dict(payload)
+
+    assert restored == checkpoint
+    assert payload["terminal_outcome"] is not None
+
+    payload["terminal_outcome"]["reason_code"] = "changed"  # type: ignore[index]
+    with pytest.raises(CheckpointValidationError):
+        checkpoint_from_dict(payload)
+
+
+def test_v3_validation_terminal_contract_round_trip() -> None:
+    summary = ValidationOutcomeSummary(
+        final_status=ValidationFinalStatus.PASSED,
+        repair_attempted=False,
+        revalidation_attempted=False,
+    )
+    checkpoint = _minimal_v3(
+        phase=CodingWorkflowPhase.COMPLETED,
+        selected_validation_command_digest=DIGEST,
+        selected_validation_command_digest_algorithm=CODING_WORKFLOW_CHECKPOINT_DIGEST_ALGORITHM,
+        validation_execution_count=1,
+        final_outcome_summary=summary,
+        completion_marker=CodingWorkflowCompletion(completed_at=_now()),
+        terminal_outcome=_validation_terminal(summary),
+    )
+
+    restored = checkpoint_from_dict(checkpoint.to_dict())
+
+    assert restored.terminal_outcome is not None
+    assert restored.terminal_outcome.terminal_kind == CodingWorkflowTerminalKind.VALIDATION_COMPLETION
+    assert restored.final_outcome_summary == summary
+
+
+def test_v3_completed_terminal_invariants_fail_closed() -> None:
+    with pytest.raises(CheckpointValidationError):
+        _minimal_v3(phase=CodingWorkflowPhase.COMPLETED, completion_marker=CodingWorkflowCompletion(completed_at=_now()))
+
+    with pytest.raises(CheckpointValidationError):
+        _minimal_v3(phase=CodingWorkflowPhase.COMPLETED, terminal_outcome=_ordinary_terminal())
+
+    with pytest.raises(CheckpointValidationError):
+        _minimal_v3(
+            phase=CodingWorkflowPhase.COMPLETED,
+            pending_action_ref=PendingActionReference(action_id="effect-1", role=PendingActionRole.TOOL),
+            completion_marker=CodingWorkflowCompletion(completed_at=_now()),
+            terminal_outcome=_ordinary_terminal(),
+        )
+
+    with pytest.raises(CheckpointValidationError):
+        _minimal_v3(
+            phase=CodingWorkflowPhase.COMPLETED,
+            last_completed_action_ref=_action_ref(),
+            model_continuation_intent=_intent(),
+            completion_marker=CodingWorkflowCompletion(completed_at=_now()),
+            terminal_outcome=_ordinary_terminal(),
+        )
+
+    with pytest.raises(CheckpointValidationError):
+        _minimal_v3(terminal_outcome=_ordinary_terminal())
+
+
+def test_v3_terminal_kind_specific_fields_are_mutually_exclusive() -> None:
+    with pytest.raises(CheckpointValidationError):
+        CodingWorkflowTerminalOutcome(
+            terminal_kind=CodingWorkflowTerminalKind.ORDINARY_COMPLETION,
+            completed_at=_now(),
+            reason_code="ordinary_model_stop",
+        )
+
+    with pytest.raises(CheckpointValidationError):
+        _ordinary_terminal(validation_outcome_summary=ValidationOutcomeSummary(
+            final_status=ValidationFinalStatus.PASSED,
+            repair_attempted=False,
+            revalidation_attempted=False,
+        ))
+
+    with pytest.raises(CheckpointValidationError):
+        CodingWorkflowTerminalOutcome(
+            terminal_kind=CodingWorkflowTerminalKind.VALIDATION_COMPLETION,
+            completed_at=_now(),
+            reason_code="validation_passed",
+        )
+
+
+def test_v3_terminal_rejects_sensitive_payload_fields() -> None:
+    payload = _minimal_v3(
+        phase=CodingWorkflowPhase.COMPLETED,
+        last_completed_action_ref=_action_ref(),
+        model_continuation_intent=_session_committed_intent(),
+        completion_marker=CodingWorkflowCompletion(completed_at=_now()),
+        terminal_outcome=_ordinary_terminal(),
+    ).to_dict()
+    terminal = payload["terminal_outcome"]
+    assert isinstance(terminal, dict)
+    terminal["prompt"] = "secret"
 
     with pytest.raises(CheckpointValidationError):
         checkpoint_from_dict(payload)

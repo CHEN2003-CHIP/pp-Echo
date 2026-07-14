@@ -15,6 +15,7 @@ from pp_agent.coding import (
     CODING_WORKFLOW_CHECKPOINT_INITIAL_REVISION,
     CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION,
     CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2,
+    CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3,
     CheckpointAlreadyExists,
     CheckpointCorrupt,
     CheckpointIdentityMismatch,
@@ -32,12 +33,15 @@ from pp_agent.coding import (
     CodingWorkflowCompletion,
     CodingWorkflowKind,
     CodingWorkflowPhase,
+    CodingWorkflowTerminalKind,
+    CodingWorkflowTerminalOutcome,
     ModelContinuationIntent,
     ModelContinuationState,
     PendingActionEvidence,
     PendingActionReference,
     PendingActionRole,
     ReconciliationDecision,
+    SessionCompletionEvidenceReference,
     ValidationFinalStatus,
     ValidationOutcomeSummary,
     checkpoint_to_canonical_json,
@@ -109,6 +113,51 @@ def _intent() -> ModelContinuationIntent:
     )
 
 
+def _completion_evidence() -> SessionCompletionEvidenceReference:
+    return SessionCompletionEvidenceReference(
+        session_id="session-1",
+        continuation_id="cont-1",
+        source_action_id="effect-1",
+        source_result_digest="b" * 64,
+        committed_turn_id="turn-2",
+    )
+
+
+def _session_committed_intent() -> ModelContinuationIntent:
+    return ModelContinuationIntent(
+        continuation_id="cont-1",
+        source_action_ref=_action_ref(),
+        source_result_digest="b" * 64,
+        pre_call_session_id="session-1",
+        pre_call_turn_id="turn-1",
+        state=ModelContinuationState.SESSION_COMMITTED,
+        created_at=_now(),
+        completed_session_evidence_ref=_completion_evidence(),
+    )
+
+
+def _ordinary_terminal() -> CodingWorkflowTerminalOutcome:
+    return CodingWorkflowTerminalOutcome(
+        terminal_kind=CodingWorkflowTerminalKind.ORDINARY_COMPLETION,
+        completed_at=_now(),
+        reason_code="ordinary_model_stop",
+        session_completion_evidence_ref=_completion_evidence(),
+    )
+
+
+def _completed_v3(**overrides: object) -> CodingWorkflowCheckpoint:
+    values: dict[str, object] = {
+        "schema_version": CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3,
+        "phase": CodingWorkflowPhase.COMPLETED,
+        "last_completed_action_ref": _action_ref(),
+        "model_continuation_intent": _session_committed_intent(),
+        "completion_marker": CodingWorkflowCompletion(completed_at=_now()),
+        "terminal_outcome": _ordinary_terminal(),
+    }
+    values.update(overrides)
+    return _checkpoint(**values)
+
+
 def _next(checkpoint: CodingWorkflowCheckpoint, **overrides: object) -> CodingWorkflowCheckpoint:
     values = {
         **checkpoint.to_dict(include_integrity=False),
@@ -119,6 +168,7 @@ def _next(checkpoint: CodingWorkflowCheckpoint, **overrides: object) -> CodingWo
         "final_outcome_summary": checkpoint.final_outcome_summary,
         "completion_marker": checkpoint.completion_marker,
         "model_continuation_intent": checkpoint.model_continuation_intent,
+        "terminal_outcome": checkpoint.terminal_outcome,
         "created_at": checkpoint.created_at,
         "updated_at": checkpoint.updated_at,
         "revision": checkpoint.revision + 1,
@@ -293,6 +343,65 @@ def test_store_loads_v2_checkpoint_and_rejects_silent_schema_upgrade(tmp_path: P
             _next(v1_current, schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2),
             expected_revision=0,
         )
+
+    with pytest.raises(CheckpointCorrupt):
+        store.replace_checkpoint(
+            _next(current, schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3),
+            expected_revision=0,
+        )
+
+
+def test_store_create_loads_v3_checkpoint_and_rejects_duplicate(tmp_path: Path) -> None:
+    store = CodingWorkflowCheckpointStore(tmp_path)
+    checkpoint = _checkpoint(schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3)
+
+    persisted = store.create_checkpoint(checkpoint)
+    loaded = store.load_checkpoint("workflow-1")
+
+    assert loaded == persisted
+    assert loaded.schema_version == CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3
+    assert loaded.to_dict()["terminal_outcome"] is None
+    with pytest.raises(CheckpointAlreadyExists):
+        store.create_checkpoint(checkpoint)
+
+
+def test_store_v3_integrity_terminal_immutability_and_schema_replace_guards(tmp_path: Path) -> None:
+    store = CodingWorkflowCheckpointStore(tmp_path)
+    terminal = store.create_checkpoint(_completed_v3())
+    path = store.checkpoint_path(terminal.workflow_id)
+    payload = terminal.to_dict()
+    terminal_payload = payload["terminal_outcome"]
+    assert isinstance(terminal_payload, dict)
+    terminal_payload["reason_code"] = "changed"
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(CheckpointIntegrityFailure):
+        store.load_checkpoint(terminal.workflow_id)
+
+    terminal_store = CodingWorkflowCheckpointStore(tmp_path / "terminal-v3")
+    terminal_current = terminal_store.create_checkpoint(_completed_v3())
+    with pytest.raises(CheckpointTerminal):
+        terminal_store.replace_checkpoint(_next(terminal_current), expected_revision=0)
+
+    v3_store = CodingWorkflowCheckpointStore(tmp_path / "v3-replace")
+    v3_current = v3_store.create_checkpoint(_checkpoint(schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3))
+    with pytest.raises(CheckpointCorrupt):
+        v3_store.replace_checkpoint(_next(v3_current, schema_version=CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2), expected_revision=0)
+
+
+def test_store_loads_v1_v2_and_v3_without_migration(tmp_path: Path) -> None:
+    for name, version in [
+        ("v1", CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION),
+        ("v2", CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V2),
+        ("v3", CODING_WORKFLOW_CHECKPOINT_SCHEMA_VERSION_V3),
+    ]:
+        store = CodingWorkflowCheckpointStore(tmp_path / name)
+        persisted = store.create_checkpoint(_checkpoint(schema_version=version))
+
+        loaded = store.load_checkpoint("workflow-1")
+
+        assert loaded.schema_version == version
+        assert loaded == persisted
 
 
 class _FailingTempStore(CodingWorkflowCheckpointStore):

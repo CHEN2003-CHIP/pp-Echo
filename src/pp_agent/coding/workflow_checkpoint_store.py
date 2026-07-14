@@ -351,6 +351,7 @@ class CodingWorkflowCheckpointStore:
             final_outcome_summary=checkpoint.final_outcome_summary,
             completion_marker=checkpoint.completion_marker,
             model_continuation_intent=checkpoint.model_continuation_intent,
+            terminal_outcome=checkpoint.terminal_outcome,
             created_at=checkpoint.created_at,
             updated_at=checkpoint.updated_at,
             integrity_digest=digest,
