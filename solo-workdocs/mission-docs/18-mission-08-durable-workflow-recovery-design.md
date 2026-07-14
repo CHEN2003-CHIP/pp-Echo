@@ -1,10 +1,10 @@
 # Mission 08: Durable Workflow Recovery and Idempotent Resume Design
 
-Status: Planning / authoritative design accepted; 08B, 08C, 08D-P, and 08D-S implemented and ready for human review
+Status: Planning / authoritative design accepted; 08B, 08C, 08D-P, 08D-S, 08D-R, and 08D-T implemented and ready for human review
 
-Scope type: AUTHORITATIVE DESIGN RECORD WITH 08B/08C/08D-P/08D-S IMPLEMENTATION RECORD
+Scope type: AUTHORITATIVE DESIGN RECORD WITH 08B/08C/08D-P/08D-S/08D-R/08D-T IMPLEMENTATION RECORD
 
-Mission 08 defines durable recovery for the existing controlled coding workflow. Mission 08B implements the checkpoint data contract described below. Mission 08C implements atomic coding-owned checkpoint persistence, revision/CAS, and read-only reconciliation foundation. Mission 08D-P freezes schema v1 and adds schema v2 continuation intent/correlation contracts only. Mission 08D-S adds generic SessionStore durable message evidence and read-only lookup plumbing. Resume commands, approval/tool-boundary resume execution, Mission 07 recovery execution, CLI, and doctor integration remain unimplemented.
+Mission 08 defines durable recovery for the existing controlled coding workflow. Mission 08B implements the checkpoint data contract described below. Mission 08C implements atomic coding-owned checkpoint persistence, revision/CAS, and read-only reconciliation foundation. Mission 08D-P freezes schema v1 and adds schema v2 continuation intent/correlation contracts only. Mission 08D-S adds generic SessionStore durable message evidence and read-only lookup plumbing. Mission 08D-R adds explicit one-boundary resume. Mission 08D-T adds schema v3 generic terminal outcome and ordinary completion terminality. Mission 07 recovery execution, CLI, and doctor integration remain unimplemented.
 
 ## Mission
 
@@ -152,9 +152,23 @@ The checkpoint must not store complete runtime objects, complete transcript, raw
 
 Schema v1 is frozen. Existing v1 fields and cross-field semantics must remain readable and unchanged. V1 checkpoints must not contain v2 continuation fields, must not be silently upgraded, and must not be used for model continuation recovery. Future v1 reconciliation should return inspect-only or not-resumable for continuation recovery.
 
-Schema v2 is continuation-intent capable. It keeps the existing Mission 07 durable fields and adds an optional `model_continuation_intent` subrecord. V2 is for newly created recoverable coding workflows after 08D-P adoption. Future schema versions fail closed until explicitly supported.
+Schema v2 is continuation-intent capable. It keeps the existing Mission 07 durable fields and adds an optional `model_continuation_intent` subrecord. V2 remains frozen after 08D-T and must not contain v3 terminal outcome fields.
 
-The store may load both v1 and v2 checkpoints, but replace must not silently change a checkpoint's schema version. Migration is deferred to a later explicit design if ever required.
+Schema v3 is generic-terminal-outcome capable. It keeps v2 continuation evidence fields and adds optional `terminal_outcome` for completed checkpoints. A completed schema v3 checkpoint must have both `completion_marker` and `terminal_outcome`, must not have active pending action evidence, and must not have an active continuation intent. Completed checkpoints are immutable.
+
+The schema v3 terminal outcome fields are:
+
+- `terminal_kind`: `ordinary_completion` or `validation_completion`;
+- `completed_at`: UTC terminal timestamp, matching the completion marker;
+- `reason_code`: bounded terminal reason;
+- `session_completion_evidence_ref`: required for ordinary completion and forbidden for validation completion;
+- `validation_outcome_summary`: required for validation completion and forbidden for ordinary completion.
+
+Ordinary completion is written only when the coding recovery layer has exact SessionStore model-continuation completion evidence, a typed `ordinary_completion` terminal outcome, a completed continuation intent whose source action/result identity matches the checkpoint, and no active pending action for the session. `session_committed` is continuation evidence only; it is not workflow terminality. Workflow completion authority remains the `pp_agent.coding` checkpoint.
+
+Validation terminal contract is defined in schema v3, but Mission 07 validation/repair/re-validation recovery is not implemented in 08D-T.
+
+The store may load v1, v2, and v3 checkpoints, but replace must not silently change a checkpoint's schema version. V1/V2 checkpoints are not automatically migrated to v3. Migration is deferred to a later explicit design if ever required.
 
 ## Model Continuation Intent Contract
 
@@ -594,8 +608,8 @@ Rules:
 - read-only API: `inspect_coding_workflow(...) -> CodingWorkflowInspection`;
 - explicit resume API: `resume_coding_workflow(..., expected_revision, runtime, ...) -> CodingWorkflowResumeResult`;
 - runtime seam: existing `AgentRuntime.continue_(continuation_id=..., stop_after_model_boundary=True)`;
-- checkpoint schema: version 2 only for resumable workflows;
-- v1 checkpoints remain inspectable but are not migrated or resumed.
+- checkpoint schema: version 3 only for ordinary terminal completion workflows after 08D-T;
+- v1/v2 checkpoints remain loadable but are not migrated or resumed by 08D-T recovery.
 
 Action lifecycle recovery map:
 
@@ -615,16 +629,16 @@ Action lifecycle recovery map:
 Resume sequence:
 
 1. Load checkpoint and authoritative SessionStore/PendingActionStore evidence.
-2. Require schema v2, exact action identity, consumed action state, and exact durable SessionStore external-result evidence.
+2. Require schema v3, exact action identity, consumed action state, and exact durable SessionStore external-result evidence.
 3. CAS the checkpoint from the caller-provided expected revision to an `intent_committed` continuation intent.
 4. Release checkpoint/workspace lock before provider I/O.
 5. Dispatch at most one existing runtime continuation with the durable continuation id.
 6. Confirm SessionStore model-continuation completion evidence after runtime persistence.
-7. CAS checkpoint to `session_committed` when completion evidence exists.
+7. CAS checkpoint to `completed` with schema v3 `ordinary_completion` terminal outcome when exact completion evidence exists and no active pending action remains.
 
 The runtime boundary deliberately stops after one model response. If that response contains tool calls, the existing runtime planner approval owner stages one pending action and the resume call stops. Recovery does not execute those tools and does not create a second action state.
 
-Ordinary non-Mission-07 completion is represented as a session-committed continuation boundary. The current checkpoint final outcome contract remains validation-oriented, so 08D-R does not invent a new terminal final-outcome shape for non-validation completion. Mission 07 validation/repair/re-validation recovery remains deferred to 08E.
+08D-R originally stopped at the session-committed continuation boundary. 08D-T supersedes that stopping point for ordinary completion: `session_committed` remains evidence, while schema v3 `terminal_outcome` plus `completion_marker` is the workflow terminality record. Mission 07 validation/repair/re-validation recovery remains deferred to 08E.
 
 Failure and crash windows:
 
@@ -634,6 +648,7 @@ Failure and crash windows:
 - missing completion evidence after model return returns blocked uncertain;
 - post-call CAS failure does not retry the model; later inspect can see SessionStore completion evidence;
 - duplicate concurrent resume with the same revision allows only one intent CAS winner.
+- active pending action after model continuation blocks ordinary completion and does not write completed.
 
 Scope protection:
 
@@ -648,6 +663,45 @@ Scope protection:
 - no new dependency;
 - no SessionStore or PendingActionStore schema migration.
 
+## Mission 08D-T Generic Terminal Outcome and Ordinary Completion
+
+08D-T adds the formal workflow terminality record that 08D-R intentionally did not invent.
+
+Implemented:
+
+- CHECKPOINT SCHEMA V1: FROZEN.
+- CHECKPOINT SCHEMA V2: FROZEN.
+- CHECKPOINT SCHEMA V3: GENERIC TERMINAL OUTCOME CAPABLE.
+- `CodingWorkflowTerminalOutcome` supports `ordinary_completion` and `validation_completion`.
+- Ordinary terminal outcome requires `session_completion_evidence_ref` and forbids validation summary fields.
+- Validation terminal outcome requires `validation_outcome_summary` and forbids session completion evidence fields.
+- Completed schema v3 checkpoint requires `completion_marker` and `terminal_outcome`.
+- Completed schema v3 checkpoint must not have active pending action evidence.
+- Completed schema v3 checkpoint must not have active continuation intent; only `session_committed` continuation evidence may remain as evidence.
+- Completed checkpoint is immutable in the checkpoint store.
+- Store create/load supports v1, v2, and v3.
+- Store replace still rejects silent schema-version changes.
+- Integrity digest covers the terminal outcome.
+- Recovery writes ordinary completion only from exact SessionStore model-continuation completion evidence, typed ordinary terminal outcome, matching source action/result identity, no active pending action, and checkpoint CAS.
+- Repeated completed inspect/resume returns `ordinary_completed` and performs no model call, tool execution, approval mutation, or checkpoint mutation.
+
+Not implemented in 08D-T:
+
+- no automatic v1/v2 to v3 migration;
+- no Mission 07 validation/repair/re-validation recovery;
+- no CLI inspect/resume/cancel;
+- no doctor integration;
+- no generic workflow engine;
+- no new dependency;
+- no model retry;
+- no tool execution or approval mutation by recovery.
+
+Authority statement:
+
+- `session_committed` is continuation completion evidence, not workflow terminality.
+- `pp_agent.coding` checkpoint remains workflow completion authority.
+- Validation terminal contract is defined only; Mission 07 recovery remains not implemented.
+
 ## Documentation Impact Decision
 
 | Document | Changed? | Why | Authoritative effect |
@@ -657,17 +711,19 @@ Scope protection:
 | `docs/adr/0004-coding-workflow-recovery-authority.md` | yes | records long-term owner boundary | authoritative architecture decision |
 | `docs/architecture/README.md` | yes | indexes storage/recovery and ADR route | supporting navigation |
 | Mission 07 design/closeout | yes | clarifies Mission 08 persistence bridge without changing Mission 07 semantics | supporting bridge |
-| source and tests | yes | 08B adds the pure versioned checkpoint contract; 08C adds atomic checkpoint storage, CAS, and read-only reconciliation tests; 08D-S adds generic SessionStore correlation evidence tests; 08D-R adds explicit coding-owned one-boundary resume tests | no CLI, doctor, or Mission 07 recovery execution integration |
+| source and tests | yes | 08B adds the pure versioned checkpoint contract; 08C adds atomic checkpoint storage, CAS, and read-only reconciliation tests; 08D-S adds generic SessionStore correlation evidence tests; 08D-R adds explicit coding-owned one-boundary resume tests; 08D-T adds schema v3 generic terminal outcome and ordinary completion tests | no CLI, doctor, or Mission 07 recovery execution integration |
 
-DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B, 08C, 08D-P, 08D-S, AND 08D-R IMPLEMENTATION RECORDS ADDED
+DOCUMENTATION IMPACT DECISION: REQUIRED AND COMPLETED FOR SCHEMA V3 AND ORDINARY TERMINALITY
+
+DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B, 08C, 08D-P, 08D-S, 08D-R, AND 08D-T IMPLEMENTATION RECORDS ADDED
 
 ## Final Design Decision
 
-Mission 08D-R is implemented and ready for human review. Mission 08E may add Mission 07 validation/repair/re-validation recovery only after explicit one-boundary resume is accepted.
+Mission 08D-T is implemented and ready for human review. Mission 08E may add Mission 07 validation/repair/re-validation recovery only after schema v3 terminality and ordinary completion are accepted.
 
-PRODUCTION CODE CHANGED: YES, CONTRACT, CHECKPOINT STORE, SESSION EVIDENCE, RUNTIME CORRELATION PLUMBING, AND CODING-OWNED EXPLICIT RESUME ORCHESTRATION
+PRODUCTION CODE CHANGED: YES, CONTRACT, CHECKPOINT STORE, SESSION EVIDENCE, RUNTIME CORRELATION PLUMBING, CODING-OWNED EXPLICIT RESUME ORCHESTRATION, SCHEMA V3 TERMINAL OUTCOME, AND ORDINARY COMPLETION
 
-TEST CODE CHANGED: YES, FOCUSED CONTRACT, STORAGE, CAS, ATOMICITY, RECONCILIATION, SESSION CORRELATION, AND EXPLICIT RESUME TESTS
+TEST CODE CHANGED: YES, FOCUSED CONTRACT, STORAGE, CAS, ATOMICITY, RECONCILIATION, SESSION CORRELATION, EXPLICIT RESUME, SCHEMA V3 TERMINAL OUTCOME, AND ORDINARY COMPLETION TESTS
 
 PERSISTENCE IMPLEMENTED: YES, CHECKPOINT-ONLY ATOMIC PERSISTENCE
 
@@ -675,7 +731,27 @@ REVISION/CAS IMPLEMENTED: YES, CHECKPOINT-ONLY
 
 RECONCILIATION IMPLEMENTED: YES, READ-ONLY ONLY
 
-RESUME IMPLEMENTED: YES, EXPLICIT ONE-BOUNDARY ONLY
+RESUME IMPLEMENTED: YES, EXPLICIT ONE-BOUNDARY WITH SCHEMA V3 ORDINARY COMPLETION ONLY
+
+CHECKPOINT SCHEMA V1: FROZEN
+
+CHECKPOINT SCHEMA V2: FROZEN
+
+CHECKPOINT SCHEMA V3: GENERIC TERMINAL OUTCOME CAPABLE
+
+SESSION_COMMITTED: CONTINUATION EVIDENCE, NOT WORKFLOW TERMINALITY
+
+WORKFLOW COMPLETION AUTHORITY: PP_AGENT.CODING CHECKPOINT
+
+ORDINARY COMPLETION: IMPLEMENTED
+
+VALIDATION TERMINAL CONTRACT: DEFINED ONLY
+
+MISSION 07 RECOVERY: NOT IMPLEMENTED
+
+COMPLETED CHECKPOINT: IMMUTABLE
+
+REPEATED COMPLETED RESUME: NO EXTERNAL EFFECT
 
 MISSION 07 RUNTIME SEMANTICS: UNCHANGED
 
