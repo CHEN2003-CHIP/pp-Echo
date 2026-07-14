@@ -84,7 +84,15 @@ from pp_agent.runtime.lifecycle import (
 from pp_agent.domain import PlanStep, QueuedMessage
 from pp_agent.runtime.state import AgentEvent, AgentState
 from pp_agent.domain import ChatMessage, TextPart, ToolCall, ToolCallPart
-from pp_agent.storage.sessions import SessionRecord, SessionStore
+from pp_agent.storage.sessions import (
+    SESSION_CORRELATION_KEY,
+    build_external_tool_result_correlation,
+    build_model_continuation_completion_correlation,
+    build_session_result_digest,
+    ensure_session_message_id,
+    SessionRecord,
+    SessionStore,
+)
 from pp_agent.storage.settings import Settings
 from pp_agent.subagents.contract import explicit_orchestrated_edit_request
 from pp_agent.storage.timeline import TimelineStore
@@ -143,6 +151,7 @@ class _TurnPersistContext:
     new_message_start_index: int
     turn_id: str
     turn_started_at: float
+    continuation_id: str | None = None
 
 
 class AgentRuntime:
@@ -330,6 +339,7 @@ class AgentRuntime:
         self._cancellation_token.clear()
         run_id = self._begin_run("prompt")
         user_message = ChatMessage(role="user", content=[TextPart(text=text)], timestamp=time.time())
+        ensure_session_message_id(user_message)
         self.state.messages.append(user_message)
         context = _TurnPersistContext(
             new_message_start_index=len(self.state.messages) - 1,
@@ -399,9 +409,11 @@ class AgentRuntime:
             )
         )
 
-    def continue_(self) -> list[AgentEvent]:
+    def continue_(self, continuation_id: str | None = None) -> list[AgentEvent]:
         """如果当前没有挂起的 tool calls,并且没有挂起的 planner approval token,那才允许从 queued_messages 里取下一条消息出来；"""
         self._cancellation_token.clear()
+        if continuation_id is not None:
+            build_model_continuation_completion_correlation(continuation_id=continuation_id, completed_at=time.time())
         next_message = self._dequeue_next_message() if not self.state.pending_tool_calls and not self.state.pending_plan_token else None
         """
         有挂起流程 → 继续当前流程
@@ -417,6 +429,7 @@ class AgentRuntime:
             new_message_start_index=len(self.state.messages),
             turn_id=f"turn-{self.state.turn.turn_id + 1}",
             turn_started_at=time.time(),
+            continuation_id=continuation_id,
         )
         self.observability.start_run(
             run_id=run_id,
@@ -530,14 +543,36 @@ class AgentRuntime:
             "rejected": rejected,
             "timestamp": result.get("timestamp") or time.time(),
         }
+        result_digest = build_session_result_digest(
+            {
+                "result": result.get("result"),
+                "details": details,
+                "success": success,
+                "approval_action": approval_action or None,
+                "action_type": action_type,
+                "source_tool_name": source_tool_name,
+            }
+        )
+        completed_at = float(payload["timestamp"])
         message = ChatMessage(
             role="tool",
             tool_call_id=tool_call_id or None,
             tool_name=source_tool_name,
             content=[TextPart(text=str(result.get("result") or ""))],
-            metadata={"tool_details": payload, "is_error": not success},
-            timestamp=float(payload["timestamp"]),
+            metadata={
+                "tool_details": payload,
+                "is_error": not success,
+                SESSION_CORRELATION_KEY: build_external_tool_result_correlation(
+                    action_id=token or tool_call_id,
+                    result_digest=result_digest,
+                    tool_name=source_tool_name,
+                    completed_at=completed_at,
+                    turn_id=self.state.turn.turn_id,
+                ),
+            },
+            timestamp=completed_at,
         )
+        ensure_session_message_id(message)
         self.state.messages.append(message)
         self._persist()
         return message
@@ -680,7 +715,15 @@ class AgentRuntime:
                 #模型这次输出的东西，无论是文字还是 tool call，都会被记进会话历史
                 assistant_parts = [TextPart(text=assistant_text)] if assistant_text else []
                 assistant_parts.extend(ToolCallPart(id=call.id, name=call.name, arguments=call.arguments) for call in tool_calls)
-                self.state.messages.append(ChatMessage(role="assistant", content=assistant_parts, timestamp=time.time()))
+                assistant_message = ChatMessage(role="assistant", content=assistant_parts, timestamp=time.time())
+                ensure_session_message_id(assistant_message)
+                if turn_persist_context.continuation_id is not None and not tool_calls:
+                    assistant_message.metadata[SESSION_CORRELATION_KEY] = build_model_continuation_completion_correlation(
+                        continuation_id=turn_persist_context.continuation_id,
+                        completed_at=assistant_message.timestamp,
+                        turn_id=turn_persist_context.turn_id,
+                    )
+                self.state.messages.append(assistant_message)
                 #如果模型给了工具，而且这些工具需要审批，就先暂停
                 if tool_calls and self._should_pause_for_plan(tool_calls):
                     #把工具调用转成“计划步骤”

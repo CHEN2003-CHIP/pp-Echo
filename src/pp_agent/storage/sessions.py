@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -13,6 +15,46 @@ from pp_agent.storage.models import StoredModelConfig
 
 
 SNAPSHOT_EVENT = "session_snapshot"
+SESSION_MESSAGE_ID_KEY = "session_message_id"
+SESSION_CORRELATION_KEY = "session_correlation"
+SESSION_CORRELATION_VERSION = 1
+SESSION_CORRELATION_MAX_TEXT = 512
+SESSION_CORRELATION_MAX_ID = 160
+SESSION_CORRELATION_DIGEST_ALGORITHM = "sha256"
+_SAFE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,160}$")
+
+
+class SessionCorrelationKind:
+    EXTERNAL_TOOL_RESULT = "external_tool_result"
+    MODEL_CONTINUATION_COMPLETION = "model_continuation_completion"
+
+
+class SessionEvidenceLookupStatus:
+    FOUND = "found"
+    NOT_FOUND = "not_found"
+    AMBIGUOUS = "ambiguous"
+    SESSION_MISSING = "session_missing"
+    SESSION_CORRUPT = "session_corrupt"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    LEGACY_INSUFFICIENT = "legacy_insufficient"
+
+
+class SessionEvidenceReference(BaseModel):
+    session_id: str
+    message_id: str
+    turn_id: Optional[str] = None
+    correlation_kind: str
+    correlation_id: str
+    action_id: Optional[str] = None
+    result_digest: Optional[str] = None
+    tool_name: Optional[str] = None
+    completed_at: float
+
+
+class SessionEvidenceLookupResult(BaseModel):
+    status: str
+    evidence: Optional[SessionEvidenceReference] = None
+    reason: str = ""
 
 #数据面
 class SessionTurnNode(BaseModel):
@@ -381,6 +423,40 @@ class SessionStore:
             "children": [self._turn_entry_for_node(record, child).model_dump(mode="json") for child in sorted(children, key=lambda item: item.created_at, reverse=True)],
         }
 
+    def lookup_external_tool_result_evidence(
+        self,
+        session_id: str,
+        *,
+        action_id: str,
+        result_digest: str | None = None,
+    ) -> SessionEvidenceLookupResult:
+        action_id = _validate_correlation_id(action_id, field="action_id")
+        if result_digest is not None:
+            result_digest = _validate_result_digest(result_digest)
+        return self._lookup_correlation_evidence(
+            session_id,
+            kind=SessionCorrelationKind.EXTERNAL_TOOL_RESULT,
+            matcher=lambda payload: payload.get("action_id") == action_id
+            and (result_digest is None or payload.get("result_digest") == result_digest),
+            mismatch_detector=lambda payload: payload.get("action_id") == action_id
+            and result_digest is not None
+            and payload.get("result_digest") != result_digest,
+        )
+
+    def lookup_model_continuation_completion_evidence(
+        self,
+        session_id: str,
+        *,
+        continuation_id: str,
+    ) -> SessionEvidenceLookupResult:
+        continuation_id = _validate_correlation_id(continuation_id, field="continuation_id")
+        return self._lookup_correlation_evidence(
+            session_id,
+            kind=SessionCorrelationKind.MODEL_CONTINUATION_COMPLETION,
+            matcher=lambda payload: payload.get("continuation_id") == continuation_id,
+            mismatch_detector=lambda _payload: False,
+        )
+
     def set_active_head(self, session_id: str, head_id: Optional[str]) -> SessionRecord:
         """
         切换当前活跃版本节点（Git checkout 功能）
@@ -410,6 +486,92 @@ class SessionStore:
                 continue
             branch.extend(message.model_copy(deep=True) for message in record.messages[node.start_message_index:node.end_message_index])
         return branch
+
+    def _lookup_correlation_evidence(
+        self,
+        session_id: str,
+        *,
+        kind: str,
+        matcher,
+        mismatch_detector,
+    ) -> SessionEvidenceLookupResult:
+        try:
+            record = self.load(session_id)
+        except FileNotFoundError:
+            return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.SESSION_MISSING, reason="session_missing")
+        except (ValueError, TypeError) as exc:
+            return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.SESSION_CORRUPT, reason=str(exc))
+
+        saw_kind = False
+        saw_invalid = False
+        saw_legacy_role = False
+        saw_mismatch = False
+        matches: list[SessionEvidenceReference] = []
+        for message in record.messages:
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            if not metadata.get(SESSION_MESSAGE_ID_KEY):
+                if message.role in {"assistant", "tool"}:
+                    saw_legacy_role = True
+                continue
+            correlation = metadata.get(SESSION_CORRELATION_KEY)
+            if not isinstance(correlation, dict):
+                continue
+            if correlation.get("kind") != kind:
+                continue
+            saw_kind = True
+            if mismatch_detector(correlation):
+                saw_mismatch = True
+            if not matcher(correlation):
+                continue
+            evidence = self._evidence_reference_from_message(record, message, correlation)
+            if evidence is None:
+                saw_invalid = True
+                continue
+            matches.append(evidence)
+
+        if len(matches) == 1:
+            return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.FOUND, evidence=matches[0])
+        if len(matches) > 1:
+            return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.AMBIGUOUS, reason="multiple_matching_evidence_records")
+        if saw_invalid:
+            return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.IDENTITY_MISMATCH, reason="invalid_matching_correlation_metadata")
+        if saw_mismatch:
+            return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.IDENTITY_MISMATCH, reason="correlation_identity_mismatch")
+        if saw_legacy_role and not saw_kind:
+            return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.LEGACY_INSUFFICIENT, reason="legacy_messages_without_correlation_metadata")
+        return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.NOT_FOUND, reason="no_matching_correlation_evidence")
+
+    @staticmethod
+    def _evidence_reference_from_message(
+        record: SessionRecord,
+        message: ChatMessage,
+        correlation: dict[str, Any],
+    ) -> SessionEvidenceReference | None:
+        try:
+            message_id = _validate_correlation_id(str(message.metadata.get(SESSION_MESSAGE_ID_KEY) or ""), field="message_id")
+            kind = str(correlation.get("kind") or "")
+            correlation_id = str(correlation.get("correlation_id") or correlation.get("continuation_id") or correlation.get("action_id") or "")
+            correlation_id = _validate_correlation_id(correlation_id, field="correlation_id")
+            completed_at = float(correlation.get("completed_at"))
+        except (TypeError, ValueError):
+            return None
+        if kind not in {SessionCorrelationKind.EXTERNAL_TOOL_RESULT, SessionCorrelationKind.MODEL_CONTINUATION_COMPLETION}:
+            return None
+        turn_id = str(correlation.get("turn_id") or record.active_head_id or "").strip() or None
+        action_id = correlation.get("action_id")
+        result_digest = correlation.get("result_digest")
+        tool_name = correlation.get("tool_name")
+        return SessionEvidenceReference(
+            session_id=record.id,
+            message_id=message_id,
+            turn_id=turn_id,
+            correlation_kind=kind,
+            correlation_id=correlation_id,
+            action_id=str(action_id) if action_id else None,
+            result_digest=str(result_digest) if result_digest else None,
+            tool_name=str(tool_name)[:SESSION_CORRELATION_MAX_ID] if tool_name else None,
+            completed_at=completed_at,
+        )
 
     def turn_path(self, record: SessionRecord, head_id: Optional[str] = None) -> list[SessionTurnNode]:
         """
@@ -979,11 +1141,130 @@ class SessionStore:
         record._turn_index = {node.id: node for node in record.turn_nodes}
 
 
+def ensure_session_message_id(message: ChatMessage) -> str:
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    existing = metadata.get(SESSION_MESSAGE_ID_KEY)
+    if isinstance(existing, str) and _SAFE_CORRELATION_ID_RE.match(existing):
+        return existing
+    message_id = f"msg-{uuid.uuid4().hex}"
+    metadata[SESSION_MESSAGE_ID_KEY] = message_id
+    message.metadata = metadata
+    return message_id
+
+
+def build_external_tool_result_correlation(
+    *,
+    action_id: str,
+    result_digest: str,
+    tool_name: str | None,
+    completed_at: float,
+    turn_id: str | int | None = None,
+) -> dict[str, Any]:
+    action_id = _validate_correlation_id(action_id, field="action_id")
+    result_digest = _validate_result_digest(result_digest)
+    payload: dict[str, Any] = {
+        "version": SESSION_CORRELATION_VERSION,
+        "kind": SessionCorrelationKind.EXTERNAL_TOOL_RESULT,
+        "correlation_id": action_id,
+        "action_id": action_id,
+        "result_digest": result_digest,
+        "completed_at": float(completed_at),
+    }
+    if tool_name:
+        payload["tool_name"] = _bounded_text(tool_name, limit=SESSION_CORRELATION_MAX_ID)
+    if turn_id is not None:
+        payload["turn_id"] = _bounded_text(str(turn_id), limit=SESSION_CORRELATION_MAX_ID)
+    return payload
+
+
+def build_model_continuation_completion_correlation(
+    *,
+    continuation_id: str,
+    completed_at: float,
+    source_action_id: str | None = None,
+    source_result_digest: str | None = None,
+    turn_id: str | int | None = None,
+) -> dict[str, Any]:
+    continuation_id = _validate_correlation_id(continuation_id, field="continuation_id")
+    payload: dict[str, Any] = {
+        "version": SESSION_CORRELATION_VERSION,
+        "kind": SessionCorrelationKind.MODEL_CONTINUATION_COMPLETION,
+        "correlation_id": continuation_id,
+        "continuation_id": continuation_id,
+        "completed_at": float(completed_at),
+    }
+    if source_action_id is not None:
+        payload["source_action_id"] = _validate_correlation_id(source_action_id, field="source_action_id")
+    if source_result_digest is not None:
+        payload["source_result_digest"] = _validate_result_digest(source_result_digest)
+    if turn_id is not None:
+        payload["turn_id"] = _bounded_text(str(turn_id), limit=SESSION_CORRELATION_MAX_ID)
+    return payload
+
+
+def build_session_result_digest(value: object) -> str:
+    canonical = _canonical_bounded_value(value)
+    raw = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"{SESSION_CORRELATION_DIGEST_ALGORITHM}:{hashlib.sha256(raw).hexdigest()}"
+
+
+def _canonical_bounded_value(value: object) -> object:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _bounded_text(value)
+    if isinstance(value, list):
+        return [_canonical_bounded_value(item) for item in value[:20]]
+    if isinstance(value, tuple):
+        return [_canonical_bounded_value(item) for item in value[:20]]
+    if isinstance(value, dict):
+        blocked = {"token", "approval_token", "raw_approval_token", "secret", "api_key", "authorization"}
+        result: dict[str, object] = {}
+        for key in sorted(value):
+            key_text = str(key)
+            if key_text.lower() in blocked:
+                continue
+            result[_bounded_text(key_text, limit=SESSION_CORRELATION_MAX_ID)] = _canonical_bounded_value(value[key])
+            if len(result) >= 40:
+                break
+        return result
+    return _bounded_text(str(value))
+
+
+def _bounded_text(value: str, *, limit: int = SESSION_CORRELATION_MAX_TEXT) -> str:
+    clean = " ".join(str(value).replace("\r", " ").replace("\n", " ").split())
+    return clean[:limit]
+
+
+def _validate_correlation_id(value: str, *, field: str) -> str:
+    text = str(value or "").strip()
+    if not _SAFE_CORRELATION_ID_RE.match(text):
+        raise ValueError(f"Invalid {field}")
+    return text
+
+
+def _validate_result_digest(value: str) -> str:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", text):
+        raise ValueError("Invalid result_digest")
+    return text
+
+
 __all__ = [
+    "SESSION_CORRELATION_KEY",
+    "SESSION_MESSAGE_ID_KEY",
+    "SessionCorrelationKind",
+    "SessionEvidenceLookupResult",
+    "SessionEvidenceLookupStatus",
+    "SessionEvidenceReference",
     "SessionMetadata",
     "SessionRecord",
     "SessionStore",
     "SessionTreeEntry",
     "SessionTurnEntry",
     "SessionTurnNode",
+    "build_external_tool_result_correlation",
+    "build_model_continuation_completion_correlation",
+    "build_session_result_digest",
+    "ensure_session_message_id",
 ]

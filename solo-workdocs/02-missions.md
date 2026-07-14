@@ -2,7 +2,7 @@
 
 ## Mission 08: Durable Workflow Recovery and Idempotent Resume
 
-Status: Planning / authoritative design ready for human review; 08B/08C implemented; 08D-P in progress
+Status: Planning / authoritative design ready for human review; 08B/08C/08D-P/08D-S implemented
 
 Details:
 
@@ -16,7 +16,7 @@ Make the existing single-task controlled coding workflow recoverable across proc
 Official direction:
 
 - Workflow recovery checkpoint is owned by `src/pp_agent/coding`.
-- `SessionStore` remains responsible for transcript and runtime/session snapshots only.
+- `SessionStore` remains responsible for transcript, runtime/session snapshots, and generic durable message evidence only.
 - `PendingActionStore` remains the only owner of staged action and approval lifecycle.
 - Checkpoint stores safe pending action references only; it never copies approval state.
 - `TraceStore` is diagnostic and is not a recovery fact source.
@@ -33,7 +33,7 @@ Planned tasks:
 - 08C: atomic storage, revision/CAS, and read-only reconciliation. Status: implemented / ready for human review.
 - 08D preflight: approval/tool-boundary resume audit. Status: stopped for human review because model continuation lacked a durable intent/correlation boundary.
 - 08D-P: durable model continuation intent contract and checkpoint schema v2. Status: implemented / ready for human review.
-- 08D-S: future SessionStore/tool-result correlation evidence integration.
+- 08D-S: SessionStore/tool-result correlation evidence integration. Status: implemented / ready for human review.
 - 08D-R: future explicit approval/tool-boundary resume execution.
 - 08E: Mission 07 validation/repair recovery integration.
 - 08F: CLI inspect/resume/cancel.
