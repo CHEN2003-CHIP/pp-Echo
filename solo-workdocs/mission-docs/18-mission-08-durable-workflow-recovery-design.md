@@ -1,10 +1,10 @@
 # Mission 08: Durable Workflow Recovery and Idempotent Resume Design
 
-Status: Planning / authoritative design accepted; 08B and 08C implemented and ready for human review
+Status: Planning / authoritative design accepted; 08B, 08C, and 08D-P implemented and ready for human review
 
-Scope type: AUTHORITATIVE DESIGN RECORD WITH 08B IMPLEMENTATION RECORD
+Scope type: AUTHORITATIVE DESIGN RECORD WITH 08B/08C/08D-P IMPLEMENTATION RECORD
 
-Mission 08 defines durable recovery for the existing controlled coding workflow. Mission 08B implements the checkpoint data contract described below. Mission 08C implements atomic coding-owned checkpoint persistence, revision/CAS, and read-only reconciliation foundation. Resume commands, runtime integration, approval/tool-boundary resume, Mission 07 recovery execution, CLI, and doctor integration remain unimplemented.
+Mission 08 defines durable recovery for the existing controlled coding workflow. Mission 08B implements the checkpoint data contract described below. Mission 08C implements atomic coding-owned checkpoint persistence, revision/CAS, and read-only reconciliation foundation. Mission 08D-P freezes schema v1 and adds schema v2 continuation intent/correlation contracts only. Resume commands, runtime integration, approval/tool-boundary resume execution, Mission 07 recovery execution, CLI, and doctor integration remain unimplemented.
 
 ## Mission
 
@@ -41,6 +41,8 @@ The design is based on these current pp-Echo behaviors:
 - `validation_execution.py`, `validation_repair.py`, `validation_outcome.py`, and `pytest_provenance.py` define Mission 07 validation and repair contracts. The repair and re-validation counters are run-local today.
 - pytest provenance artifacts are trusted, bounded, and consumed during verification. They are not retained as durable final workflow proof.
 - `runtime_loop.py` owns controlled coding execution but does not persist coding workflow phase or terminal completion.
+- Mission 08D preflight confirmed that `PendingActionStore` is not a complete durable bounded tool-result authority. A consumed grant without a SessionStore external approval result message is not resumable and must fail closed.
+- Mission 08D preflight confirmed that `AgentRuntime.continue_()` does not persist a durable model-continuation intent before provider request. pp-Echo does not claim provider model request exactly-once.
 - `TraceStore` is append-only observability. It is useful for audit and explanation, but no recovery path treats trace as authoritative state.
 - `WorkspaceApplyLock` and current storage locks cover narrower mutation paths. Mission 08 needs a coding workflow single-writer rule without a distributed lock system.
 
@@ -113,6 +115,8 @@ OPENCODE ADOPTION DECISION: PARTIAL TARGETED REFERENCE ONLY; NO FRAMEWORK PORT
 | selected logical command | coding checkpoint | digest/identity only | authoritative identity, command details from validation plan/proposal | missing digest blocks repair/revalidation |
 | final `ValidationOutcome` | coding checkpoint | bounded final summary | authoritative summary | phase/outcome mismatch fails closed |
 | completion | coding checkpoint | terminal marker | authoritative | completed is terminal and repeatable |
+| model continuation intent | coding checkpoint schema v2 | checkpoint | authoritative intent only | committed intent prevents retry unless durable session evidence proves completion |
+| model continuation completion evidence | future `SessionStore` generic correlation metadata | session snapshot/messages | authoritative session fact, not workflow owner | missing or mismatched evidence fails closed |
 | trace | `TraceStore` | trace JSONL | diagnostic-only | never resolves state conflict |
 | CLI status | CLI serializer | stdout/report only | derived | never persisted as authority |
 
@@ -143,6 +147,56 @@ Conceptual name: `CodingWorkflowCheckpoint`.
 | `integrity_digest` | required when persisted in 08C | checkpoint | canonical JSON digest excluding digest field | every future write | digest only | no | yes in the 08B in-memory contract | present-but-bad digest fails closed |
 
 The checkpoint must not store complete runtime objects, complete transcript, raw approval token, raw provenance nonce, raw attestation, full stdout/stderr, full patch, environment variables, secrets, or pickle data.
+
+## Checkpoint Schema Versioning
+
+Schema v1 is frozen. Existing v1 fields and cross-field semantics must remain readable and unchanged. V1 checkpoints must not contain v2 continuation fields, must not be silently upgraded, and must not be used for model continuation recovery. Future v1 reconciliation should return inspect-only or not-resumable for continuation recovery.
+
+Schema v2 is continuation-intent capable. It keeps the existing Mission 07 durable fields and adds an optional `model_continuation_intent` subrecord. V2 is for newly created recoverable coding workflows after 08D-P adoption. Future schema versions fail closed until explicitly supported.
+
+The store may load both v1 and v2 checkpoints, but replace must not silently change a checkpoint's schema version. Migration is deferred to a later explicit design if ever required.
+
+## Model Continuation Intent Contract
+
+Schema v2 adds a single orthogonal continuation subrecord instead of expanding the phase list:
+
+- `continuation_id`: opaque, bounded, non-empty identity. It is not a path, provider request id, approval token, provenance nonce, task text digest, or workflow id.
+- `source_action_ref`: safe pending-action reference for the completed action/result that permits continuation.
+- `source_result_digest`: stable bounded digest for the durable result evidence.
+- `pre_call_session_id` and optional `pre_call_turn_id`: safe pre-call session identity markers.
+- `state`: one of `intent_committed`, `session_committed`, or `blocked_uncertain`.
+- `created_at`: UTC timestamp.
+- optional `completed_session_evidence_ref`: future SessionStore generic correlation evidence for `session_committed`.
+- optional `blocked_reason_code`: bounded reason for `blocked_uncertain`.
+
+The contract implements durable at-most-one continuation intent. It does not claim exactly-once provider calls. After an intent is committed, automatic model retry is forbidden unless future reconciliation finds exact durable SessionStore completion evidence. If evidence is absent or mismatched, the continuation is `blocked_uncertain` and must fail closed.
+
+`session_committed` means SessionStore contains generic durable evidence tied to the exact session id, continuation id, source action/result identity, durable response/turn identity, and completion marker. SessionStore may store only generic runtime correlation facts; it must not own coding phase, repair/re-validation counters, checkpoint revision, or workflow completion.
+
+`grant_consumed + no durable SessionStore external approval result = blocked_uncertain = no model continuation = no tool re-execution`.
+
+## Mission 08D-P Implementation Record
+
+Mission 08D-P implements schema v2 continuation-intent contracts in `src/pp_agent/coding/workflow_checkpoint.py` and minimal store compatibility in `src/pp_agent/coding/workflow_checkpoint_store.py`.
+
+Implemented:
+
+- schema v1 remains `schema_version=1`, with frozen canonical serialization and no v2 fields;
+- schema v2 is `schema_version=2` and can serialize/validate `ModelContinuationIntent`;
+- continuation states are `intent_committed`, `session_committed`, and `blocked_uncertain`;
+- session completion evidence is a bounded reference contract only, not a SessionStore implementation;
+- v2 validates continuation identity, source action/result binding, session evidence correlation, active pending-action conflicts, completed checkpoint conflicts, and sensitive payload rejection;
+- integrity digest includes v2 fields;
+- store load supports v1 and v2;
+- store replace rejects silent schema-version changes.
+
+Not implemented in 08D-P:
+
+- no model call, `runtime.continue_()`, resume execution, SessionStore read/write, PendingActionStore read/write, tool execution, staging, approval, CLI, doctor, Mission 07 recovery, storage migration, generic workflow engine, or new dependency.
+
+OPENCODE REFERENCE LEVEL FOR 08D-P: LIGHT TARGETED
+
+OPENCODE ADOPTION DECISION FOR 08D-P: ADAPT NARROW CORRELATION AND TERMINALITY PRINCIPLES ONLY; NO FRAMEWORK PORT
 
 ## Mission 08B Implementation Record
 
@@ -444,7 +498,10 @@ Rules:
 | 08A-D | targeted comparison and authoritative design | solo-workdocs + ADR | this document, mission index, ADR | LIGHT TARGETED | authoritative design created | production code | unpinned OpenCode | doc diff/check | required before 08B |
 | 08B | checkpoint contract | `src/pp_agent/coding` | coding recovery contract, tests | no further unless blocked | update design if contract changes | storage engine | second approval/tool state | contract/unit tests | required |
 | 08C | atomic storage, revision, reconciliation | coding storage helper | coding recovery storage tests | no further unless blocked | storage docs update | database | DB/new dependency | atomic/corruption/CAS tests | required |
-| 08D | approval/tool-boundary resume | coding + pending action integration | coding recovery, approval refs | no further unless blocked | boundary notes | approval rewrite | approval semantic change | crash-window/reconcile tests | required |
+| 08D preflight | approval/tool-boundary resume audit | coding architecture | no committed source changes | no further unless blocked | blocker notes | resume execution | unsafe continuation boundary | source audit | completed with STOP |
+| 08D-P | durable model continuation intent contract | coding checkpoint contract | checkpoint contract/store tests | LIGHT TARGETED pinned comparison | schema v2 docs | resume execution | unsafe version evolution | v1/v2 contract tests | required |
+| 08D-S | SessionStore/tool-result correlation evidence | session/runtime integration | future session correlation tests | no further unless blocked | session evidence docs | coding phase in SessionStore | session rewrite | correlation tests | required |
+| 08D-R | explicit approval/tool-boundary resume execution | coding recovery orchestration | future resume tests | no further unless blocked | resume docs | auto approval | duplicate tool/model side effects | crash-window tests | required |
 | 08E | Mission 07 recovery integration | coding validation/repair | validation recovery tests | no further unless blocked | Mission 07 bridge update | new validation attempts | Mission 07 semantic change | invariant tests | required |
 | 08F | CLI inspect/resume/cancel | existing coding CLI owner | CLI commands/serializers | no further unless blocked | CLI docs | auto approval | second CLI system | CLI read-only/resume tests | required |
 | 08G | doctor, release gate, docs, closeout | workflow doctor + docs | doctor/report docs/closeout | no further unless blocked | closeout and release docs | auto repair | doctor mutating state | doctor/readiness tests | final human review |

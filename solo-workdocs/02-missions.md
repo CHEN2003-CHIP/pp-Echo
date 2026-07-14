@@ -2,7 +2,7 @@
 
 ## Mission 08: Durable Workflow Recovery and Idempotent Resume
 
-Status: Planning / authoritative design ready for human review
+Status: Planning / authoritative design ready for human review; 08B/08C implemented; 08D-P in progress
 
 Details:
 
@@ -31,7 +31,10 @@ Planned tasks:
 - 08A-D: targeted OpenCode comparison and authoritative durable recovery design. Status: design ready for human review.
 - 08B: versioned coding workflow checkpoint contract. Status: implemented / ready for human review.
 - 08C: atomic storage, revision/CAS, and read-only reconciliation. Status: implemented / ready for human review.
-- 08D: approval/tool-boundary resume.
+- 08D preflight: approval/tool-boundary resume audit. Status: stopped for human review because model continuation lacked a durable intent/correlation boundary.
+- 08D-P: durable model continuation intent contract and checkpoint schema v2. Status: implemented / ready for human review.
+- 08D-S: future SessionStore/tool-result correlation evidence integration.
+- 08D-R: future explicit approval/tool-boundary resume execution.
 - 08E: Mission 07 validation/repair recovery integration.
 - 08F: CLI inspect/resume/cancel.
 - 08G: doctor, release gate, documentation, and closeout.
