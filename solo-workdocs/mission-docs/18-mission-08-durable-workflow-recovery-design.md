@@ -586,6 +586,68 @@ Rules:
 - no Mission 07 semantic change;
 - no Mission 09.
 
+## Mission 08D-R Explicit One-Boundary Resume
+
+08D-R adds a coding-owned inspection and explicit resume layer:
+
+- owner: `src/pp_agent/coding/workflow_recovery.py`;
+- read-only API: `inspect_coding_workflow(...) -> CodingWorkflowInspection`;
+- explicit resume API: `resume_coding_workflow(..., expected_revision, runtime, ...) -> CodingWorkflowResumeResult`;
+- runtime seam: existing `AgentRuntime.continue_(continuation_id=..., stop_after_model_boundary=True)`;
+- checkpoint schema: version 2 only for resumable workflows;
+- v1 checkpoints remain inspectable but are not migrated or resumed.
+
+Action lifecycle recovery map:
+
+| PendingActionStore state | Inspect result | Resume behavior | Checkpoint behavior |
+| --- | --- | --- | --- |
+| `staged_not_granted` / active | awaiting approval | no model, no tool execution | no mutation |
+| `grant_attached` | awaiting approval | no model, no tool execution | no mutation |
+| `execution_in_progress` / `execution_succeeded` | execution uncertain | fail closed | no mutation |
+| `execution_failed` | execution failed | no retry | terminal/blocked decision only |
+| `rejected` / `denied` | rejected | no restage | terminal/blocked decision only |
+| `expired` | expired | no restage | terminal/blocked decision only |
+| `grant_invalidated` / orphan/quarantine | invalidated or inconsistent | no restage | terminal/blocked decision only |
+| `grant_consumed` without exact SessionStore result evidence | durable result unavailable | no model retry | no mutation |
+| `grant_consumed` with exact SessionStore result evidence | ready for continuation intent | one pre-call CAS, then at most one model continuation | write intent and clear pending safe reference |
+| missing/corrupt/mismatch | corrupt/inconsistent | fail closed | no blind overwrite |
+
+Resume sequence:
+
+1. Load checkpoint and authoritative SessionStore/PendingActionStore evidence.
+2. Require schema v2, exact action identity, consumed action state, and exact durable SessionStore external-result evidence.
+3. CAS the checkpoint from the caller-provided expected revision to an `intent_committed` continuation intent.
+4. Release checkpoint/workspace lock before provider I/O.
+5. Dispatch at most one existing runtime continuation with the durable continuation id.
+6. Confirm SessionStore model-continuation completion evidence after runtime persistence.
+7. CAS checkpoint to `session_committed` when completion evidence exists.
+
+The runtime boundary deliberately stops after one model response. If that response contains tool calls, the existing runtime planner approval owner stages one pending action and the resume call stops. Recovery does not execute those tools and does not create a second action state.
+
+Ordinary non-Mission-07 completion is represented as a session-committed continuation boundary. The current checkpoint final outcome contract remains validation-oriented, so 08D-R does not invent a new terminal final-outcome shape for non-validation completion. Mission 07 validation/repair/re-validation recovery remains deferred to 08E.
+
+Failure and crash windows:
+
+- pre-call CAS failure returns stale or blocked; no model call happens;
+- crash after intent CAS and before provider call leaves `intent_committed`; repeated resume does not retry the model;
+- provider/runtime failure after intent returns blocked uncertain; repeated resume does not retry;
+- missing completion evidence after model return returns blocked uncertain;
+- post-call CAS failure does not retry the model; later inspect can see SessionStore completion evidence;
+- duplicate concurrent resume with the same revision allows only one intent CAS winner.
+
+Scope protection:
+
+- no auto approval;
+- no auto rejection;
+- no tool execution by recovery;
+- no duplicate staging by recovery;
+- no trace/stdout/audit recovery authority;
+- no CLI implementation;
+- no doctor integration;
+- no Mission 07 recovery execution;
+- no new dependency;
+- no SessionStore or PendingActionStore schema migration.
+
 ## Documentation Impact Decision
 
 | Document | Changed? | Why | Authoritative effect |
@@ -595,17 +657,17 @@ Rules:
 | `docs/adr/0004-coding-workflow-recovery-authority.md` | yes | records long-term owner boundary | authoritative architecture decision |
 | `docs/architecture/README.md` | yes | indexes storage/recovery and ADR route | supporting navigation |
 | Mission 07 design/closeout | yes | clarifies Mission 08 persistence bridge without changing Mission 07 semantics | supporting bridge |
-| source and tests | yes | 08B adds the pure versioned checkpoint contract; 08C adds atomic checkpoint storage, CAS, and read-only reconciliation tests; 08D-S adds generic SessionStore correlation evidence tests | no resume, CLI, doctor, or Mission 07 recovery execution integration |
+| source and tests | yes | 08B adds the pure versioned checkpoint contract; 08C adds atomic checkpoint storage, CAS, and read-only reconciliation tests; 08D-S adds generic SessionStore correlation evidence tests; 08D-R adds explicit coding-owned one-boundary resume tests | no CLI, doctor, or Mission 07 recovery execution integration |
 
-DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B, 08C, 08D-P, AND 08D-S IMPLEMENTATION RECORDS ADDED
+DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B, 08C, 08D-P, 08D-S, AND 08D-R IMPLEMENTATION RECORDS ADDED
 
 ## Final Design Decision
 
-Mission 08D-S is implemented and ready for human review. Mission 08D-R may add explicit approval/tool-boundary resume only after the checkpoint contract, storage foundation, continuation intent contract, and SessionStore evidence plumbing are accepted.
+Mission 08D-R is implemented and ready for human review. Mission 08E may add Mission 07 validation/repair/re-validation recovery only after explicit one-boundary resume is accepted.
 
-PRODUCTION CODE CHANGED: YES, CONTRACT, CHECKPOINT STORE, SESSION EVIDENCE, AND RUNTIME CORRELATION PLUMBING ONLY
+PRODUCTION CODE CHANGED: YES, CONTRACT, CHECKPOINT STORE, SESSION EVIDENCE, RUNTIME CORRELATION PLUMBING, AND CODING-OWNED EXPLICIT RESUME ORCHESTRATION
 
-TEST CODE CHANGED: YES, FOCUSED CONTRACT, STORAGE, CAS, ATOMICITY, RECONCILIATION, AND SESSION CORRELATION TESTS
+TEST CODE CHANGED: YES, FOCUSED CONTRACT, STORAGE, CAS, ATOMICITY, RECONCILIATION, SESSION CORRELATION, AND EXPLICIT RESUME TESTS
 
 PERSISTENCE IMPLEMENTED: YES, CHECKPOINT-ONLY ATOMIC PERSISTENCE
 
@@ -613,6 +675,10 @@ REVISION/CAS IMPLEMENTED: YES, CHECKPOINT-ONLY
 
 RECONCILIATION IMPLEMENTED: YES, READ-ONLY ONLY
 
-RESUME IMPLEMENTED: NO
+RESUME IMPLEMENTED: YES, EXPLICIT ONE-BOUNDARY ONLY
 
 MISSION 07 RUNTIME SEMANTICS: UNCHANGED
+
+CLI: NOT IMPLEMENTED
+
+DOCTOR INTEGRATION: NOT IMPLEMENTED

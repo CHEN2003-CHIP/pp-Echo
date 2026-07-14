@@ -170,6 +170,14 @@ from pp_agent.coding.workflow_checkpoint_store import (
     ReconciliationDecision,
     reconcile_checkpoint,
 )
+from pp_agent.coding.workflow_recovery import (
+    CodingWorkflowBlockReason,
+    CodingWorkflowDecision,
+    CodingWorkflowInspection,
+    CodingWorkflowResumeResult,
+    inspect_coding_workflow,
+    resume_coding_workflow,
+)
 
 __all__ = [
     "ChangeImpact",
@@ -182,6 +190,10 @@ __all__ = [
     "CodingWorkflowPhase",
     "CodingRecoveryEvidence",
     "CodingWorkflowCheckpointStore",
+    "CodingWorkflowBlockReason",
+    "CodingWorkflowDecision",
+    "CodingWorkflowInspection",
+    "CodingWorkflowResumeResult",
     "CheckpointAlreadyExists",
     "CheckpointCorrupt",
     "CheckpointIdentityMismatch",
@@ -291,6 +303,8 @@ __all__ = [
     "resolve_scoped_instructions",
     "reject_staged_validation_cycle",
     "reconcile_checkpoint",
+    "inspect_coding_workflow",
+    "resume_coding_workflow",
     "run_controlled_coding_loop",
     "run_one_bounded_validation_repair_cycle",
     "scope_enforcement_to_context_item",
