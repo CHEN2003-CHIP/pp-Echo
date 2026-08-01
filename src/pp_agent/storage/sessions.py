@@ -21,6 +21,10 @@ SESSION_CORRELATION_VERSION = 1
 SESSION_CORRELATION_MAX_TEXT = 512
 SESSION_CORRELATION_MAX_ID = 160
 SESSION_CORRELATION_DIGEST_ALGORITHM = "sha256"
+SESSION_EXTERNAL_RESULT_DETAILS_MAX_TEXT = 4000
+SESSION_PYTEST_PROVENANCE_DIR = ".pp-agent/validation-provenance"
+SESSION_VALIDATION_EVIDENCE_KEY = "session_validation_evidence"
+SESSION_VALIDATION_EVIDENCE_SCHEMA_VERSION = 1
 _SAFE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,160}$")
 
 
@@ -37,6 +41,7 @@ class SessionEvidenceLookupStatus:
     SESSION_CORRUPT = "session_corrupt"
     IDENTITY_MISMATCH = "identity_mismatch"
     LEGACY_INSUFFICIENT = "legacy_insufficient"
+    INVALID_PROVENANCE_REQUEST = "invalid_provenance_request"
 
 
 class SessionEvidenceReference(BaseModel):
@@ -54,6 +59,75 @@ class SessionEvidenceReference(BaseModel):
 class SessionEvidenceLookupResult(BaseModel):
     status: str
     evidence: Optional[SessionEvidenceReference] = None
+    reason: str = ""
+
+
+class ExternalResultEvidenceDetails(BaseModel):
+    session_id: str
+    action_id: str
+    message_id: str
+    result_digest: str
+    correlation_kind: str
+    tool_name: Optional[str] = None
+    action_type: Optional[str] = None
+    logical_command_digest: Optional[str] = None
+    result: str = ""
+    success: Optional[bool] = None
+    lifecycle: dict[str, object] = Field(default_factory=dict)
+    details: dict[str, object] = Field(default_factory=dict)
+    provenance_request: dict[str, object] = Field(default_factory=dict)
+    completed_at: float
+
+
+class ExternalResultDetailsLookupResult(BaseModel):
+    status: str
+    details: Optional[ExternalResultEvidenceDetails] = None
+    reason: str = ""
+
+
+class PytestProvenanceRequestEvidence(BaseModel):
+    session_id: str
+    action_id: str
+    message_id: str
+    result_digest: str
+    schema_version: Optional[int] = None
+    plugin_id: Optional[str] = None
+    plugin_version: Optional[str] = None
+    nonce: str
+    logical_command_digest: str
+    artifact_relative_path: str
+    completed_at: float
+
+
+class PytestProvenanceRequestLookupResult(BaseModel):
+    status: str
+    request: Optional[PytestProvenanceRequestEvidence] = None
+    reason: str = ""
+
+
+class SessionValidationEvidenceConflict(ValueError):
+    """Raised when a validation evidence identity is reused with different facts."""
+
+
+class SessionValidationEvidence(BaseModel):
+    schema_version: int = SESSION_VALIDATION_EVIDENCE_SCHEMA_VERSION
+    session_id: str
+    action_id: str
+    external_result_digest: str
+    logical_command_digest: str
+    execution_status: str
+    validation_status: str
+    pytest_provenance_status: str
+    pytest_completion_category: Optional[str] = None
+    pytest_exit_status: Optional[int] = None
+    failure_reason_code: Optional[str] = None
+    completed_at: float
+    evidence_message_id: str
+
+
+class ValidationEvidenceLookupResult(BaseModel):
+    status: str
+    evidence: Optional[SessionValidationEvidence] = None
     reason: str = ""
 
 #数据面
@@ -443,6 +517,102 @@ class SessionStore:
             and payload.get("result_digest") != result_digest,
         )
 
+    def lookup_external_result_details(
+        self,
+        evidence_reference: SessionEvidenceReference,
+    ) -> ExternalResultDetailsLookupResult:
+        """Return bounded typed details for one exact external tool-result evidence reference."""
+
+        try:
+            reference = _normalize_external_result_reference(evidence_reference)
+            record = self.load(reference.session_id)
+        except FileNotFoundError:
+            return ExternalResultDetailsLookupResult(status=SessionEvidenceLookupStatus.SESSION_MISSING, reason="session_missing")
+        except (TypeError, ValueError) as exc:
+            return ExternalResultDetailsLookupResult(status=SessionEvidenceLookupStatus.SESSION_CORRUPT, reason=str(exc))
+
+        matches: list[ExternalResultEvidenceDetails] = []
+        saw_same_message_mismatch = False
+        saw_same_action_digest_different_message = False
+        saw_invalid_exact = False
+        for message in record.messages:
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            message_id = metadata.get(SESSION_MESSAGE_ID_KEY)
+            correlation = metadata.get(SESSION_CORRELATION_KEY)
+            if not isinstance(message_id, str) or not isinstance(correlation, dict):
+                continue
+            if message_id == reference.message_id and not _external_result_correlation_matches_reference(correlation, reference):
+                saw_same_message_mismatch = True
+                continue
+            if message_id != reference.message_id:
+                if _external_result_action_digest_match(correlation, reference):
+                    saw_same_action_digest_different_message = True
+                continue
+            details = _external_result_details_from_message(record, message, correlation, reference)
+            if details is None:
+                saw_invalid_exact = True
+                continue
+            matches.append(details)
+
+        if len(matches) == 1:
+            return ExternalResultDetailsLookupResult(status=SessionEvidenceLookupStatus.FOUND, details=matches[0])
+        if len(matches) > 1:
+            return ExternalResultDetailsLookupResult(status=SessionEvidenceLookupStatus.AMBIGUOUS, reason="multiple_matching_external_result_records")
+        if saw_same_message_mismatch or saw_same_action_digest_different_message:
+            return ExternalResultDetailsLookupResult(status=SessionEvidenceLookupStatus.IDENTITY_MISMATCH, reason="external_result_identity_mismatch")
+        if saw_invalid_exact:
+            return ExternalResultDetailsLookupResult(status=SessionEvidenceLookupStatus.SESSION_CORRUPT, reason="invalid_external_result_record")
+        return ExternalResultDetailsLookupResult(status=SessionEvidenceLookupStatus.NOT_FOUND, reason="no_matching_external_result_record")
+
+    def lookup_pytest_provenance_request(
+        self,
+        evidence_reference: SessionEvidenceReference,
+    ) -> PytestProvenanceRequestLookupResult:
+        """Return verifier-only pytest provenance input for one exact external result."""
+
+        try:
+            reference = _normalize_external_result_reference(evidence_reference)
+            record = self.load(reference.session_id)
+        except FileNotFoundError:
+            return PytestProvenanceRequestLookupResult(status=SessionEvidenceLookupStatus.SESSION_MISSING, reason="session_missing")
+        except (TypeError, ValueError) as exc:
+            return PytestProvenanceRequestLookupResult(status=SessionEvidenceLookupStatus.SESSION_CORRUPT, reason=str(exc))
+
+        matches: list[PytestProvenanceRequestEvidence] = []
+        saw_same_message_mismatch = False
+        saw_same_action_digest_different_message = False
+        saw_invalid_exact = False
+        invalid_reason = "invalid_pytest_provenance_request"
+        for message in record.messages:
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            message_id = metadata.get(SESSION_MESSAGE_ID_KEY)
+            correlation = metadata.get(SESSION_CORRELATION_KEY)
+            if not isinstance(message_id, str) or not isinstance(correlation, dict):
+                continue
+            if message_id == reference.message_id and not _external_result_correlation_matches_reference(correlation, reference):
+                saw_same_message_mismatch = True
+                continue
+            if message_id != reference.message_id:
+                if _external_result_action_digest_match(correlation, reference):
+                    saw_same_action_digest_different_message = True
+                continue
+            request, reason = _pytest_provenance_request_from_message(record, message, correlation, reference)
+            if request is None:
+                saw_invalid_exact = True
+                invalid_reason = reason
+                continue
+            matches.append(request)
+
+        if len(matches) == 1:
+            return PytestProvenanceRequestLookupResult(status=SessionEvidenceLookupStatus.FOUND, request=matches[0])
+        if len(matches) > 1:
+            return PytestProvenanceRequestLookupResult(status=SessionEvidenceLookupStatus.AMBIGUOUS, reason="multiple_matching_pytest_provenance_requests")
+        if saw_same_message_mismatch or saw_same_action_digest_different_message:
+            return PytestProvenanceRequestLookupResult(status=SessionEvidenceLookupStatus.IDENTITY_MISMATCH, reason="external_result_identity_mismatch")
+        if saw_invalid_exact:
+            return PytestProvenanceRequestLookupResult(status=SessionEvidenceLookupStatus.INVALID_PROVENANCE_REQUEST, reason=invalid_reason)
+        return PytestProvenanceRequestLookupResult(status=SessionEvidenceLookupStatus.NOT_FOUND, reason="no_matching_external_result_record")
+
     def lookup_model_continuation_completion_evidence(
         self,
         session_id: str,
@@ -456,6 +626,109 @@ class SessionStore:
             matcher=lambda payload: payload.get("continuation_id") == continuation_id,
             mismatch_detector=lambda _payload: False,
         )
+
+    def append_validation_evidence(self, evidence: SessionValidationEvidence) -> SessionValidationEvidence:
+        """Append one bounded verifier result to the existing session event stream."""
+
+        evidence = _normalize_validation_evidence(evidence)
+        result_ref = self.lookup_external_tool_result_evidence(
+            evidence.session_id,
+            action_id=evidence.action_id,
+            result_digest=evidence.external_result_digest,
+        )
+        if result_ref.status != SessionEvidenceLookupStatus.FOUND:
+            raise SessionValidationEvidenceConflict(f"external result evidence is not uniquely available: {result_ref.status}")
+        record = self.load(evidence.session_id)
+        existing: list[SessionValidationEvidence] = []
+        for message in record.messages:
+            candidate = _validation_evidence_from_message(record.id, message)
+            if candidate is not None:
+                existing.append(candidate)
+                continue
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            if SESSION_VALIDATION_EVIDENCE_KEY in metadata:
+                raise SessionValidationEvidenceConflict("existing validation evidence is corrupt")
+        identity = _validation_evidence_identity(evidence)
+        for candidate in existing:
+            candidate_identity = _validation_evidence_identity(candidate)
+            if candidate_identity == identity:
+                candidate_facts = candidate.model_dump(mode="json", exclude={"evidence_message_id", "completed_at"})
+                evidence_facts = evidence.model_dump(mode="json", exclude={"evidence_message_id", "completed_at"})
+                if candidate_facts != evidence_facts:
+                    raise SessionValidationEvidenceConflict("validation evidence identity has conflicting typed facts")
+                return candidate
+            if candidate.action_id == evidence.action_id and candidate.external_result_digest != evidence.external_result_digest:
+                raise SessionValidationEvidenceConflict("action_id is associated with a different external result digest")
+            if candidate.external_result_digest == evidence.external_result_digest and candidate.logical_command_digest != evidence.logical_command_digest:
+                raise SessionValidationEvidenceConflict("result evidence is associated with a different command digest")
+
+        message = ChatMessage(
+            role="tool",
+            tool_name="validation_evidence",
+            content=[TextPart(text="bounded validation evidence recorded")],
+            metadata={
+                SESSION_MESSAGE_ID_KEY: evidence.evidence_message_id,
+                SESSION_VALIDATION_EVIDENCE_KEY: evidence.model_dump(mode="json"),
+            },
+            timestamp=evidence.completed_at,
+        )
+        branch_messages = self.branch_messages(record, record.active_head_id)
+        record = self.sync_branch_state(
+            record,
+            base_head_id=record.active_head_id,
+            branch_messages=[*branch_messages, message],
+            pending_plan_token=record.pending_plan_token,
+            pending_tool_calls=record.pending_tool_calls,
+        )
+        self.save(record)
+        return evidence
+
+    def lookup_validation_evidence(
+        self,
+        session_id: str,
+        *,
+        action_id: str,
+        external_result_digest: str,
+        logical_command_digest: str,
+    ) -> ValidationEvidenceLookupResult:
+        try:
+            action_id = _validate_correlation_id(action_id, field="action_id")
+            external_result_digest = _validate_result_digest(external_result_digest)
+            logical_command_digest = _validate_command_digest(logical_command_digest)
+            record = self.load(session_id)
+        except FileNotFoundError:
+            return ValidationEvidenceLookupResult(status=SessionEvidenceLookupStatus.SESSION_MISSING, reason="session_missing")
+        except (ValueError, TypeError) as exc:
+            return ValidationEvidenceLookupResult(status=SessionEvidenceLookupStatus.SESSION_CORRUPT, reason=str(exc))
+
+        matches: list[SessionValidationEvidence] = []
+        saw_identity_mismatch = False
+        saw_invalid = False
+        for message in record.messages:
+            candidate = _validation_evidence_from_message(record.id, message)
+            if candidate is None:
+                metadata = message.metadata if isinstance(message.metadata, dict) else {}
+                if SESSION_VALIDATION_EVIDENCE_KEY in metadata:
+                    saw_invalid = True
+                continue
+            if (
+                candidate.action_id == action_id
+                and candidate.external_result_digest == external_result_digest
+                and candidate.logical_command_digest == logical_command_digest
+            ):
+                matches.append(candidate)
+            elif candidate.action_id == action_id or candidate.external_result_digest == external_result_digest:
+                saw_identity_mismatch = True
+
+        if saw_invalid:
+            return ValidationEvidenceLookupResult(status=SessionEvidenceLookupStatus.SESSION_CORRUPT, reason="invalid_validation_evidence")
+        if len(matches) == 1:
+            return ValidationEvidenceLookupResult(status=SessionEvidenceLookupStatus.FOUND, evidence=matches[0])
+        if len(matches) > 1:
+            return ValidationEvidenceLookupResult(status=SessionEvidenceLookupStatus.AMBIGUOUS, reason="multiple_matching_validation_evidence_records")
+        if saw_identity_mismatch:
+            return ValidationEvidenceLookupResult(status=SessionEvidenceLookupStatus.IDENTITY_MISMATCH, reason="validation_evidence_identity_mismatch")
+        return ValidationEvidenceLookupResult(status=SessionEvidenceLookupStatus.NOT_FOUND, reason="no_matching_validation_evidence")
 
     def set_active_head(self, session_id: str, head_id: Optional[str]) -> SessionRecord:
         """
@@ -1250,13 +1523,390 @@ def _validate_result_digest(value: str) -> str:
     return text
 
 
+def _validate_command_digest(value: str) -> str:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", text):
+        raise ValueError("Invalid logical_command_digest")
+    return text
+
+
+def _normalize_external_result_reference(reference: SessionEvidenceReference) -> SessionEvidenceReference:
+    if reference.correlation_kind != SessionCorrelationKind.EXTERNAL_TOOL_RESULT:
+        raise ValueError("Evidence reference is not an external tool result")
+    if reference.action_id is None or reference.result_digest is None:
+        raise ValueError("External result reference requires action_id and result_digest")
+    return reference.model_copy(
+        update={
+            "session_id": _validate_correlation_id(reference.session_id, field="session_id"),
+            "message_id": _validate_correlation_id(reference.message_id, field="message_id"),
+            "correlation_id": _validate_correlation_id(reference.correlation_id, field="correlation_id"),
+            "action_id": _validate_correlation_id(reference.action_id, field="action_id"),
+            "result_digest": _validate_result_digest(reference.result_digest),
+        }
+    )
+
+
+def _external_result_correlation_matches_reference(
+    correlation: dict[str, Any],
+    reference: SessionEvidenceReference,
+) -> bool:
+    return (
+        correlation.get("kind") == SessionCorrelationKind.EXTERNAL_TOOL_RESULT
+        and correlation.get("action_id") == reference.action_id
+        and correlation.get("result_digest") == reference.result_digest
+    )
+
+
+def _external_result_action_digest_match(
+    correlation: dict[str, Any],
+    reference: SessionEvidenceReference,
+) -> bool:
+    return (
+        correlation.get("kind") == SessionCorrelationKind.EXTERNAL_TOOL_RESULT
+        and correlation.get("action_id") == reference.action_id
+        and correlation.get("result_digest") == reference.result_digest
+    )
+
+
+def _external_result_details_from_message(
+    record: SessionRecord,
+    message: ChatMessage,
+    correlation: dict[str, Any],
+    reference: SessionEvidenceReference,
+) -> ExternalResultEvidenceDetails | None:
+    evidence = SessionStore._evidence_reference_from_message(record, message, correlation)
+    if evidence is None:
+        return None
+    if (
+        evidence.session_id != reference.session_id
+        or evidence.message_id != reference.message_id
+        or evidence.action_id != reference.action_id
+        or evidence.result_digest != reference.result_digest
+    ):
+        return None
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    tool_details = metadata.get("tool_details") if isinstance(metadata.get("tool_details"), dict) else {}
+    result_details = tool_details.get("result_details") if isinstance(tool_details.get("result_details"), dict) else tool_details
+    provenance_request = _bounded_provenance_request(result_details.get("pytest_provenance_request"))
+    logical_command_digest = _external_result_logical_command_digest(result_details, provenance_request)
+    return ExternalResultEvidenceDetails(
+        session_id=evidence.session_id,
+        action_id=reference.action_id or "",
+        message_id=evidence.message_id,
+        result_digest=reference.result_digest or "",
+        correlation_kind=evidence.correlation_kind,
+        tool_name=evidence.tool_name,
+        action_type=_optional_bounded_text(tool_details.get("action_type")),
+        logical_command_digest=logical_command_digest,
+        result=_message_text(message),
+        success=_optional_bool(tool_details.get("success")),
+        lifecycle=_bounded_public_mapping(tool_details.get("lifecycle")),
+        details=_bounded_result_details(result_details),
+        provenance_request=provenance_request,
+        completed_at=evidence.completed_at,
+    )
+
+
+def _pytest_provenance_request_from_message(
+    record: SessionRecord,
+    message: ChatMessage,
+    correlation: dict[str, Any],
+    reference: SessionEvidenceReference,
+) -> tuple[PytestProvenanceRequestEvidence | None, str]:
+    evidence = SessionStore._evidence_reference_from_message(record, message, correlation)
+    if evidence is None:
+        return None, "invalid_external_result_record"
+    if (
+        evidence.session_id != reference.session_id
+        or evidence.message_id != reference.message_id
+        or evidence.action_id != reference.action_id
+        or evidence.result_digest != reference.result_digest
+    ):
+        return None, "external_result_identity_mismatch"
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    tool_details = metadata.get("tool_details") if isinstance(metadata.get("tool_details"), dict) else {}
+    result_details = tool_details.get("result_details") if isinstance(tool_details.get("result_details"), dict) else tool_details
+    raw = result_details.get("pytest_provenance_request")
+    if not isinstance(raw, dict):
+        return None, "pytest_provenance_request_missing"
+    try:
+        nonce = _validate_provenance_nonce(raw.get("nonce"))
+        logical_command_digest = _validate_command_digest(str(raw.get("logical_command_digest") or ""))
+        artifact_relative_path = _validate_pytest_provenance_locator(raw.get("artifact_relative_path"))
+        _validate_provenance_digest_consistency(result_details, logical_command_digest)
+    except (TypeError, ValueError) as exc:
+        return None, str(exc)
+    schema_version = _optional_int(raw.get("schema_version"))
+    plugin_id = _optional_bounded_text(raw.get("plugin_id"))
+    plugin_version = _optional_bounded_text(raw.get("plugin_version"))
+    return (
+        PytestProvenanceRequestEvidence(
+            session_id=evidence.session_id,
+            action_id=reference.action_id or "",
+            message_id=evidence.message_id,
+            result_digest=reference.result_digest or "",
+            schema_version=schema_version,
+            plugin_id=plugin_id,
+            plugin_version=plugin_version,
+            nonce=nonce,
+            logical_command_digest=logical_command_digest,
+            artifact_relative_path=artifact_relative_path,
+            completed_at=evidence.completed_at,
+        ),
+        "",
+    )
+
+
+def _message_text(message: ChatMessage) -> str:
+    chunks: list[str] = []
+    for part in message.content:
+        text = getattr(part, "text", None)
+        if text:
+            chunks.append(str(text))
+    return _bounded_text("\n".join(chunks), limit=SESSION_EXTERNAL_RESULT_DETAILS_MAX_TEXT)
+
+
+def _external_result_logical_command_digest(
+    result_details: dict[str, Any],
+    provenance_request: dict[str, object],
+) -> str | None:
+    for candidate in (
+        provenance_request.get("logical_command_digest"),
+        result_details.get("logical_command_digest"),
+        (result_details.get("command_proposal") or {}).get("logical_command_digest")
+        if isinstance(result_details.get("command_proposal"), dict)
+        else None,
+    ):
+        if isinstance(candidate, str):
+            try:
+                return _validate_command_digest(candidate)
+            except ValueError:
+                return None
+    return None
+
+
+def _bounded_provenance_request(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "schema_version",
+        "plugin_id",
+        "plugin_version",
+        "logical_command_digest",
+    }
+    result: dict[str, object] = {}
+    for key in sorted(allowed):
+        if key not in value:
+            continue
+        item = value[key]
+        if key == "logical_command_digest" and isinstance(item, str):
+            try:
+                result[key] = _validate_command_digest(item)
+            except ValueError:
+                continue
+        elif isinstance(item, (str, int, float, bool)) or item is None:
+            result[key] = _bounded_public_value(item)
+    return result
+
+
+def _validate_provenance_nonce(value: object) -> str:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", text):
+        raise ValueError("invalid_provenance_nonce")
+    return text
+
+
+def _validate_pytest_provenance_locator(value: object) -> str:
+    raw = str(value or "").replace("\\", "/").strip()
+    if not raw:
+        raise ValueError("pytest_provenance_artifact_missing")
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        raise ValueError("pytest_provenance_artifact_absolute")
+    parts = [part for part in raw.split("/") if part]
+    if any(part in {".", ".."} for part in parts):
+        raise ValueError("pytest_provenance_artifact_traversal")
+    normalized = "/".join(parts)
+    prefix = f"{SESSION_PYTEST_PROVENANCE_DIR}/"
+    if not normalized.startswith(prefix):
+        raise ValueError("pytest_provenance_artifact_outside_root")
+    if len(normalized) > SESSION_EXTERNAL_RESULT_DETAILS_MAX_TEXT:
+        raise ValueError("pytest_provenance_artifact_unbounded")
+    return normalized
+
+
+def _validate_provenance_digest_consistency(result_details: dict[str, Any], logical_command_digest: str) -> None:
+    candidates: list[object] = [result_details.get("logical_command_digest")]
+    command_proposal = result_details.get("command_proposal")
+    if isinstance(command_proposal, dict):
+        candidates.append(command_proposal.get("logical_command_digest"))
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        digest = _validate_command_digest(str(candidate))
+        if digest != logical_command_digest:
+            raise ValueError("logical_command_digest_mismatch")
+
+
+def _bounded_result_details(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "backend",
+        "command_failed",
+        "duration_seconds",
+        "exit_code",
+        "failure_kind",
+        "failure_reason_code",
+        "lifecycle",
+        "logical_command_digest",
+        "returncode",
+        "sandbox_backend",
+        "sandbox_mode",
+        "stderr",
+        "stderr_chars",
+        "stderr_truncated",
+        "stdout",
+        "stdout_chars",
+        "stdout_truncated",
+        "timed_out",
+    }
+    result: dict[str, object] = {}
+    for key in sorted(allowed):
+        if key not in value:
+            continue
+        result[key] = _bounded_public_value(value[key])
+    return result
+
+
+def _bounded_public_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        key_text = str(key)
+        if _is_sensitive_external_result_key(key_text):
+            continue
+        result[_bounded_text(key_text, limit=SESSION_CORRELATION_MAX_ID)] = _bounded_public_value(item)
+        if len(result) >= 40:
+            break
+    return result
+
+
+def _bounded_public_value(value: object) -> object:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _bounded_text(value, limit=SESSION_EXTERNAL_RESULT_DETAILS_MAX_TEXT)
+    if isinstance(value, list):
+        return [_bounded_public_value(item) for item in value[:20]]
+    if isinstance(value, tuple):
+        return [_bounded_public_value(item) for item in value[:20]]
+    if isinstance(value, dict):
+        return _bounded_public_mapping(value)
+    return _bounded_text(str(value), limit=SESSION_EXTERNAL_RESULT_DETAILS_MAX_TEXT)
+
+
+def _is_sensitive_external_result_key(key: str) -> bool:
+    lowered = key.lower()
+    return lowered in {
+        "api_key",
+        "approval_grant",
+        "approval_token",
+        "artifact_path",
+        "artifact_relative_path",
+        "authorization",
+        "effect",
+        "nonce",
+        "patch_proposal",
+        "provenance_nonce",
+        "raw_approval_token",
+        "secret",
+        "token",
+    } or "nonce" in lowered or "secret" in lowered
+
+
+def _optional_bounded_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = _bounded_text(str(value), limit=SESSION_CORRELATION_MAX_ID)
+    return text or None
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _normalize_validation_evidence(evidence: SessionValidationEvidence) -> SessionValidationEvidence:
+    if evidence.schema_version != SESSION_VALIDATION_EVIDENCE_SCHEMA_VERSION:
+        raise ValueError("Unsupported validation evidence schema version")
+    _validate_correlation_id(evidence.session_id, field="session_id")
+    _validate_correlation_id(evidence.action_id, field="action_id")
+    _validate_result_digest(evidence.external_result_digest)
+    _validate_command_digest(evidence.logical_command_digest)
+    _validate_correlation_id(evidence.evidence_message_id, field="evidence_message_id")
+    for field_name in (
+        "execution_status",
+        "validation_status",
+        "pytest_provenance_status",
+        "pytest_completion_category",
+        "failure_reason_code",
+    ):
+        value = getattr(evidence, field_name)
+        if value is not None and _bounded_text(value) != str(value):
+            raise ValueError(f"Unbounded {field_name}")
+    return evidence
+
+
+def _validation_evidence_identity(evidence: SessionValidationEvidence) -> tuple[str, str, str, str]:
+    return (
+        evidence.session_id,
+        evidence.action_id,
+        evidence.external_result_digest,
+        evidence.logical_command_digest,
+    )
+
+
+def _validation_evidence_from_message(session_id: str, message: ChatMessage) -> SessionValidationEvidence | None:
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    payload = metadata.get(SESSION_VALIDATION_EVIDENCE_KEY)
+    if not isinstance(payload, dict):
+        return None
+    try:
+        evidence = SessionValidationEvidence.model_validate(payload)
+        if evidence.session_id != session_id:
+            return None
+        return _normalize_validation_evidence(evidence)
+    except (TypeError, ValueError):
+        return None
+
+
 __all__ = [
     "SESSION_CORRELATION_KEY",
     "SESSION_MESSAGE_ID_KEY",
+    "SESSION_VALIDATION_EVIDENCE_KEY",
+    "SESSION_VALIDATION_EVIDENCE_SCHEMA_VERSION",
+    "ExternalResultDetailsLookupResult",
+    "ExternalResultEvidenceDetails",
+    "PytestProvenanceRequestEvidence",
+    "PytestProvenanceRequestLookupResult",
     "SessionCorrelationKind",
     "SessionEvidenceLookupResult",
     "SessionEvidenceLookupStatus",
     "SessionEvidenceReference",
+    "SessionValidationEvidence",
+    "SessionValidationEvidenceConflict",
+    "ValidationEvidenceLookupResult",
     "SessionMetadata",
     "SessionRecord",
     "SessionStore",

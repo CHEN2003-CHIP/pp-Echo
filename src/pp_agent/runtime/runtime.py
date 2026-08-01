@@ -86,6 +86,9 @@ from pp_agent.runtime.state import AgentEvent, AgentState
 from pp_agent.domain import ChatMessage, TextPart, ToolCall, ToolCallPart
 from pp_agent.storage.sessions import (
     SESSION_CORRELATION_KEY,
+    SessionCorrelationKind,
+    SessionEvidenceLookupStatus,
+    SessionEvidenceReference,
     build_external_tool_result_correlation,
     build_model_continuation_completion_correlation,
     build_session_result_digest,
@@ -96,7 +99,7 @@ from pp_agent.storage.sessions import (
 from pp_agent.storage.settings import Settings
 from pp_agent.subagents.contract import explicit_orchestrated_edit_request
 from pp_agent.storage.timeline import TimelineStore
-from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.approvals import PendingActionStore, pending_action_state
 from pp_agent.tools.effects import is_protected_path
 from pp_agent.tools.base import ToolExecutionResult
 from pp_agent.tools.registry import ToolRegistry
@@ -111,6 +114,34 @@ TEXT_TOOL_CALL_FALLBACK_ALLOWLIST = {"list_files", "search_text", "grep_code", "
 TEXT_TOOL_CALL_FALLBACK_DENYLIST = {"spawn_subagent", "read_file", "write_file", "edit_file", "run_shell", "stage_test_command"}
 WEB_TOOL_NAMES = {"web.search", "web.news", "web.github_trending", "web.fetch"}
 WEB_LOOKUP_ATTEMPT_LIMIT = 2
+
+
+class ExecutePersistedActionStatus:
+    PERSISTED = "persisted"
+    APPROVAL_STILL_PENDING = "approval_still_pending"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    FAILED = "failed"
+    EXECUTION_UNCERTAIN = "execution_uncertain"
+    PERSISTENCE_FAILED = "persistence_failed"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    AMBIGUOUS_CORRUPT = "ambiguous_corrupt"
+    ALREADY_PERSISTED = "already_persisted"
+
+
+@dataclass(frozen=True)
+class ExecutePersistedActionResult:
+    status: str
+    evidence: SessionEvidenceReference | None = None
+    reason: str = ""
+    action_id: str | None = None
+    session_id: str | None = None
+    lifecycle_state: str | None = None
+    result: str = ""
+    success: bool | None = None
+    details: dict[str, object] | None = None
+    executed: bool = False
+    persisted: bool = False
 
 
 def _context_adapters():
@@ -137,6 +168,127 @@ def _context_pipeline_mode(settings: object) -> str:
     if mode in {"off", "shadow", "auto", "on"}:
         return mode
     return "on" if bool(getattr(context_settings, "use_context_pipeline_messages", False)) else "shadow"
+
+
+def _pending_session_id(payload: dict[str, object]) -> str:
+    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    return str(payload.get("session_id") or details.get("session_id") or "").strip()
+
+
+def _pending_lifecycle_state(payload: dict[str, object]) -> str | None:
+    lifecycle = payload.get("lifecycle") if isinstance(payload.get("lifecycle"), dict) else {}
+    state = str(lifecycle.get("state") or "").strip()
+    return state or None
+
+
+def _result_lifecycle_state(details: dict[str, object]) -> str | None:
+    lifecycle = details.get("lifecycle") if isinstance(details.get("lifecycle"), dict) else {}
+    state = str(lifecycle.get("state") or "").strip()
+    return state or None
+
+
+def _execute_persist_status_from_lifecycle(state: str) -> str:
+    if state == "expired":
+        return ExecutePersistedActionStatus.EXPIRED
+    if state in {"rejected", "denied"}:
+        return ExecutePersistedActionStatus.REJECTED
+    if state in {"execution_failed", "grant_invalidated"}:
+        return ExecutePersistedActionStatus.FAILED
+    if state == "active":
+        return ExecutePersistedActionStatus.APPROVAL_STILL_PENDING
+    return ExecutePersistedActionStatus.EXECUTION_UNCERTAIN
+
+
+def _status_from_evidence_lookup(
+    status: str,
+    *,
+    missing_status: str = ExecutePersistedActionStatus.AMBIGUOUS_CORRUPT,
+) -> str:
+    if status == SessionEvidenceLookupStatus.NOT_FOUND:
+        return missing_status
+    if status in {SessionEvidenceLookupStatus.IDENTITY_MISMATCH, SessionEvidenceLookupStatus.LEGACY_INSUFFICIENT}:
+        return ExecutePersistedActionStatus.IDENTITY_MISMATCH
+    return ExecutePersistedActionStatus.AMBIGUOUS_CORRUPT
+
+
+def _external_approval_result_payload(
+    *,
+    payload: dict[str, object],
+    token: str,
+    action: str,
+    result: ToolExecutionResult,
+    session_id: str,
+) -> dict[str, object]:
+    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    result_details = dict(result.details or {})
+    if "exit_code" not in result_details and isinstance(result_details.get("returncode"), int):
+        result_details["exit_code"] = result_details["returncode"]
+    lifecycle = result_details.get("lifecycle") if isinstance(result_details.get("lifecycle"), dict) else None
+    if lifecycle is None:
+        lifecycle = payload.get("lifecycle") if isinstance(payload.get("lifecycle"), dict) else {}
+    return {
+        "token": token,
+        "action_type": payload.get("action_type"),
+        "session_id": session_id,
+        "turn_id": payload.get("turn_id") or details.get("turn_id"),
+        "tool_call_id": payload.get("tool_call_id") or details.get("tool_call_id"),
+        "source_tool_name": details.get("tool_name") or result.tool_name or payload.get("action_type"),
+        "result": result.content,
+        "success": not result.is_error,
+        "lifecycle": lifecycle,
+        "details": result_details,
+        "approval_action": action,
+        "approved": action == "approve" and not result.is_error,
+        "rejected": action == "reject",
+        "timestamp": time.time(),
+    }
+
+
+def _bounded_approval_display_details(details: dict[str, object]) -> dict[str, object]:
+    allowed_keys = {
+        "path",
+        "absolute_path",
+        "workspace_root",
+        "persisted",
+        "applied",
+        "atomic",
+        "changed_files",
+        "changed_paths",
+        "exit_code",
+        "returncode",
+        "command_failed",
+        "timed_out",
+        "duration_seconds",
+        "tool_name",
+        "lifecycle",
+        "stdout",
+        "stderr",
+    }
+    safe: dict[str, object] = {}
+    for key, value in details.items():
+        if key not in allowed_keys:
+            continue
+        if key in {"stdout", "stderr"} and isinstance(value, str):
+            safe[key] = safe_preview(value, 2000)
+            continue
+        safe[key] = value
+    return safe
+
+
+def _message_text(message: ChatMessage) -> str:
+    chunks: list[str] = []
+    for part in message.content:
+        text = getattr(part, "text", None)
+        if text:
+            chunks.append(str(text))
+    return "\n".join(chunks)
+
+
+def _approval_display_text(text: str, action_id: str) -> str:
+    rendered = safe_preview(str(text or ""), 4000)
+    if action_id:
+        rendered = rendered.replace(action_id, "[REDACTED]")
+    return rendered
 
 
 def _pending_parent_run_id(payload: dict[str, object]) -> str | None:
@@ -578,6 +730,232 @@ class AgentRuntime:
         self.state.messages.append(message)
         self._persist()
         return message
+
+    def execute_and_persist_approved_action(
+        self,
+        *,
+        session_id: str,
+        approval_token: str,
+        expected_action_id: str | None = None,
+    ) -> ExecutePersistedActionResult:
+        """Execute an approved pending action once and return durable session evidence."""
+
+        action_id = str(approval_token or "").strip()
+        if session_id != self.session_id:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.IDENTITY_MISMATCH,
+                reason="session_id_mismatch",
+                action_id=action_id or None,
+                session_id=session_id,
+            )
+        if expected_action_id is not None and expected_action_id != action_id:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.IDENTITY_MISMATCH,
+                reason="expected_action_id_mismatch",
+                action_id=action_id or None,
+                session_id=session_id,
+            )
+        if not action_id:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.IDENTITY_MISMATCH,
+                reason="approval_token_missing",
+                session_id=session_id,
+            )
+
+        store = self._pending_action_store()
+        try:
+            payload = store.load(action_id)
+        except FileNotFoundError:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.AMBIGUOUS_CORRUPT,
+                reason="pending_action_missing",
+                action_id=action_id,
+                session_id=session_id,
+            )
+
+        payload_session_id = _pending_session_id(payload)
+        if payload_session_id and payload_session_id != session_id:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.IDENTITY_MISMATCH,
+                reason="pending_action_session_id_mismatch",
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=_pending_lifecycle_state(payload),
+            )
+        if expected_action_id is not None and str(payload.get("token") or "") != expected_action_id:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.IDENTITY_MISMATCH,
+                reason="pending_action_token_mismatch",
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=_pending_lifecycle_state(payload),
+            )
+        if payload.get("effect") is None:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.AMBIGUOUS_CORRUPT,
+                reason="pending_action_missing_effect",
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=_pending_lifecycle_state(payload),
+            )
+
+        state = pending_action_state(payload)
+        if state == "grant_consumed":
+            return self._existing_persisted_action_result(action_id=action_id, session_id=session_id, lifecycle_state=state)
+        if state == "expired":
+            return ExecutePersistedActionResult(status=ExecutePersistedActionStatus.EXPIRED, reason="approval_expired", action_id=action_id, session_id=session_id, lifecycle_state=state)
+        if state in {"rejected", "denied"}:
+            return ExecutePersistedActionResult(status=ExecutePersistedActionStatus.REJECTED, reason=f"approval_{state}", action_id=action_id, session_id=session_id, lifecycle_state=state)
+        if state in {"execution_failed", "grant_invalidated"}:
+            return ExecutePersistedActionResult(status=ExecutePersistedActionStatus.FAILED, reason=f"action_{state}", action_id=action_id, session_id=session_id, lifecycle_state=state)
+        if state in {"execution_in_progress", "orphaned", "quarantined", "unknown", "archived"}:
+            return ExecutePersistedActionResult(status=ExecutePersistedActionStatus.EXECUTION_UNCERTAIN, reason=f"action_{state}", action_id=action_id, session_id=session_id, lifecycle_state=state)
+        if state != "active":
+            return ExecutePersistedActionResult(status=ExecutePersistedActionStatus.AMBIGUOUS_CORRUPT, reason=f"unsupported_lifecycle_state:{state}", action_id=action_id, session_id=session_id, lifecycle_state=state)
+
+        try:
+            approved = self.tool_registry.host_execute("approve_pending_action", {"token": action_id})
+        except Exception as exc:  # noqa: BLE001
+            try:
+                refreshed = store.load(action_id)
+                refreshed_state = pending_action_state(refreshed)
+            except Exception:  # noqa: BLE001
+                refreshed_state = "unknown"
+            status = _execute_persist_status_from_lifecycle(refreshed_state)
+            return ExecutePersistedActionResult(
+                status=status,
+                reason=f"approval_execution_error:{exc.__class__.__name__}",
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=refreshed_state,
+                executed=refreshed_state in {"execution_failed", "grant_consumed"},
+        )
+
+        details = dict(approved.details or {})
+        display_details = _bounded_approval_display_details(details)
+        display_result = _approval_display_text(approved.content, action_id)
+        result_payload = _external_approval_result_payload(
+            payload=payload,
+            token=action_id,
+            action="approve",
+            result=approved,
+            session_id=session_id,
+        )
+        try:
+            message = self.record_external_approval_result(result_payload)
+        except Exception as exc:  # noqa: BLE001
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.PERSISTENCE_FAILED,
+                reason=f"session_persistence_failed:{exc.__class__.__name__}",
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=_result_lifecycle_state(details),
+                result=display_result,
+                success=not approved.is_error,
+                details=display_details,
+                executed=True,
+            )
+
+        correlation = message.metadata.get(SESSION_CORRELATION_KEY) if isinstance(message.metadata, dict) else None
+        result_digest = correlation.get("result_digest") if isinstance(correlation, dict) else None
+        if not isinstance(result_digest, str) or not result_digest:
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.AMBIGUOUS_CORRUPT,
+                reason="persisted_correlation_missing_result_digest",
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=_result_lifecycle_state(details),
+                result=_approval_display_text(_message_text(message), action_id),
+                success=not approved.is_error,
+                details=display_details,
+                executed=True,
+                persisted=True,
+            )
+        evidence_lookup = self.session_store.lookup_external_tool_result_evidence(
+            session_id,
+            action_id=action_id,
+            result_digest=result_digest,
+        )
+        if evidence_lookup.status != SessionEvidenceLookupStatus.FOUND or evidence_lookup.evidence is None:
+            return ExecutePersistedActionResult(
+                status=_status_from_evidence_lookup(evidence_lookup.status),
+                reason=evidence_lookup.reason or evidence_lookup.status,
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=_result_lifecycle_state(details),
+                result=_approval_display_text(_message_text(message), action_id),
+                success=not approved.is_error,
+                details=display_details,
+                executed=True,
+                persisted=True,
+            )
+        return ExecutePersistedActionResult(
+            status=ExecutePersistedActionStatus.FAILED if approved.is_error else ExecutePersistedActionStatus.PERSISTED,
+            evidence=evidence_lookup.evidence,
+            action_id=action_id,
+            session_id=session_id,
+            lifecycle_state=_result_lifecycle_state(details),
+            result=_approval_display_text(_message_text(message), action_id),
+            success=not approved.is_error,
+            details=display_details,
+            executed=True,
+            persisted=True,
+        )
+
+    def _existing_persisted_action_result(
+        self,
+        *,
+        action_id: str,
+        session_id: str,
+        lifecycle_state: str,
+    ) -> ExecutePersistedActionResult:
+        lookup = self.session_store._lookup_correlation_evidence(
+            session_id,
+            kind=SessionCorrelationKind.EXTERNAL_TOOL_RESULT,
+            matcher=lambda correlation: correlation.get("action_id") == action_id,
+            mismatch_detector=lambda _correlation: False,
+        )
+        if lookup.status == SessionEvidenceLookupStatus.FOUND and lookup.evidence is not None:
+            message = self._load_evidence_message(session_id, lookup.evidence.message_id)
+            details = self._approval_display_details_from_message(message)
+            return ExecutePersistedActionResult(
+                status=ExecutePersistedActionStatus.ALREADY_PERSISTED,
+                evidence=lookup.evidence,
+                action_id=action_id,
+                session_id=session_id,
+                lifecycle_state=lifecycle_state,
+                result=_approval_display_text(_message_text(message), action_id) if message is not None else "",
+                success=not bool(message.metadata.get("is_error")) if message is not None else None,
+                details=details,
+                persisted=True,
+            )
+        if lookup.status in {SessionEvidenceLookupStatus.NOT_FOUND, SessionEvidenceLookupStatus.LEGACY_INSUFFICIENT}:
+            status = ExecutePersistedActionStatus.EXECUTION_UNCERTAIN
+        else:
+            status = _status_from_evidence_lookup(lookup.status)
+        return ExecutePersistedActionResult(
+            status=status,
+            reason=lookup.reason or lookup.status,
+            action_id=action_id,
+            session_id=session_id,
+            lifecycle_state=lifecycle_state,
+        )
+
+    def _load_evidence_message(self, session_id: str, message_id: str) -> ChatMessage | None:
+        record = self.session_store.load(session_id)
+        for message in record.messages:
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            if metadata.get("session_message_id") == message_id:
+                return message
+        return None
+
+    def _approval_display_details_from_message(self, message: ChatMessage | None) -> dict[str, object] | None:
+        if message is None:
+            return None
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        tool_details = metadata.get("tool_details") if isinstance(metadata.get("tool_details"), dict) else {}
+        result_details = tool_details.get("result_details") if isinstance(tool_details.get("result_details"), dict) else tool_details
+        return _bounded_approval_display_details(dict(result_details))
 
     def request_cancel(self, reason: str = "cancel_requested") -> None:
         self._cancellation_token.cancel(reason)

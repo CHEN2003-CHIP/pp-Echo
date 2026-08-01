@@ -230,10 +230,12 @@ def run_one_bounded_validation_repair_cycle(
 
 def complete_revalidation_after_approval(
     state: ValidationRepairCycleState,
-    registry: Any,
-    approval_token: str,
+    *,
+    evidence_reference: Any,
+    session_store: Any,
+    workspace: Any,
 ) -> ValidationRepairCycleState:
-    """Approve exactly one same-command re-validation and finalize the repair cycle."""
+    """Interpret one runtime-persisted same-command re-validation result and finalize the repair cycle."""
 
     if state.revalidation_attempted:
         return _state(
@@ -267,7 +269,12 @@ def complete_revalidation_after_approval(
             validation_executions=state.validation_executions,
             details={**state.details, "failure_kind": "revalidation_not_staged"},
         )
-    result = approve_staged_validation_cycle(state.selection, registry, approval_token)
+    result = approve_staged_validation_cycle(
+        state.selection,
+        evidence_reference=evidence_reference,
+        session_store=session_store,
+        workspace=workspace,
+    )
     status = "completed" if result.status in {"executed", "blocked"} else "revalidation_pending"
     final_status = _final_status_after_revalidation(result)
     return _state(

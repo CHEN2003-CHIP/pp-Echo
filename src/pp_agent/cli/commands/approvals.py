@@ -9,8 +9,8 @@ from pp_agent.app.bootstrap import create_tool_registry, pending_action_store_fo
 from pp_agent.cli.render.approvals import approvals_summary_payload, render_approval_panel
 from pp_agent.cli.render.runtime import console, render_event
 from pp_agent.runtime import AgentRuntime
+from pp_agent.runtime.runtime import ExecutePersistedActionResult, ExecutePersistedActionStatus
 from pp_agent.tools.base import ToolExecutionResult
-from pp_agent.tools.file_tools import ApprovePendingActionTool
 
 
 def load_pending_action(workspace: Path, token: str) -> dict:
@@ -88,6 +88,64 @@ def _record_and_maybe_resume(
     return {**result, "resumed": resume, "event_count": len(events)}
 
 
+def _runtime_for_payload(workspace: Path, payload: dict, runtime: AgentRuntime | None, *, render: bool) -> AgentRuntime:
+    session_id = _payload_session_id(payload)
+    if not session_id:
+        agent = runtime if runtime is not None else sdk.create_session(workspace)
+        if runtime is None and render:
+            agent.subscribe(render_event)
+        return agent
+    agent = runtime if runtime is not None and runtime.session_id == session_id else sdk.restore_session(workspace, session_id)
+    if runtime is None and render:
+        agent.subscribe(render_event)
+    return agent
+
+
+def _approval_result_payload(result: ExecutePersistedActionResult, *, action_type: str, resumed: bool, event_count: int) -> dict:
+    payload: dict[str, object] = {
+        "action_type": action_type,
+        "session_id": result.session_id,
+        "status": result.status,
+        "result": result.result or result.reason or result.status,
+        "success": result.success,
+        "details": result.details or {},
+        "resumed": resumed,
+        "event_count": event_count,
+    }
+    if result.evidence is not None:
+        payload["evidence"] = {
+            "session_id": result.evidence.session_id,
+            "message_id": result.evidence.message_id,
+            "result_digest": result.evidence.result_digest,
+        }
+    return payload
+
+
+def _render_approval_execution_result(result: ExecutePersistedActionResult) -> None:
+    if result.result:
+        console.print(result.result)
+    elif result.status == ExecutePersistedActionStatus.ALREADY_PERSISTED:
+        console.print("Approval action was already executed and persisted.")
+    elif result.status == ExecutePersistedActionStatus.APPROVAL_STILL_PENDING:
+        console.print("Approval is still pending.")
+    elif result.status == ExecutePersistedActionStatus.REJECTED:
+        console.print("Approval was rejected.")
+    elif result.status == ExecutePersistedActionStatus.EXPIRED:
+        console.print("Approval has expired.")
+    elif result.status == ExecutePersistedActionStatus.FAILED:
+        console.print("Approved action failed.")
+    elif result.status == ExecutePersistedActionStatus.EXECUTION_UNCERTAIN:
+        console.print("Approved action execution is uncertain; no retry was attempted.")
+    elif result.status == ExecutePersistedActionStatus.PERSISTENCE_FAILED:
+        console.print("Approved action ran, but result persistence failed; no retry was attempted.")
+    elif result.status == ExecutePersistedActionStatus.IDENTITY_MISMATCH:
+        console.print("Approval identity mismatch; no action was executed.")
+    else:
+        console.print("Approval state is ambiguous or corrupt; no action was executed.")
+    if result.details:
+        console.print(json.dumps(result.details, ensure_ascii=False, indent=2, default=str))
+
+
 def approve_or_execute_pending_action(workspace: Path, token: str, render: bool = True, *, runtime: AgentRuntime | None = None) -> dict:
     payload = load_pending_action_or_user_error(workspace, token)
     if payload["action_type"] == "planner_approval":
@@ -108,39 +166,26 @@ def approve_or_execute_pending_action(workspace: Path, token: str, render: bool 
             "result": "approved_and_executed",
             "resumed": True,
         }
-    registry = create_tool_registry(workspace, include_dynamic_extensions=True)
-    try:
-        result = registry.host_execute("approve_pending_action", {"token": token})
-    except Exception as exc:  # noqa: BLE001
-        lifecycle = {"state": "execution_failed", "updated_at": time.time(), "failure_reason_code": "approval_execution_error", "failure_reason_detail": str(exc)}
-        details = payload.get("details", {}) if isinstance(payload.get("details"), dict) else {}
-        failure_details = {"error": str(exc), "token": token, "action_type": payload["action_type"], "lifecycle": lifecycle}
-        if payload["action_type"] == "run_shell":
-            failure_details.update(ApprovePendingActionTool._shell_failure_details(str(exc)))
-        failure_result = ToolExecutionResult(
-            tool_call_id=str(payload.get("tool_call_id") or details.get("tool_call_id") or token or ""),
-            tool_name="approve_pending_action",
-            content=str(exc),
-            is_error=True,
-            details=failure_details,
-        )
-        response = _external_approval_base_result(payload, token, "approve", failure_result, session_id=_payload_session_id(payload))
-        response["success"] = False
-        response["lifecycle"] = lifecycle
-        response["details"] = failure_result.details
-        if render:
-            console.print(failure_result.content)
-        return _record_and_maybe_resume(workspace, runtime, response, resume=False, render=render)
-    finally:
-        extension_runtime = getattr(registry, "_extension_runtime", None)
-        if extension_runtime is not None:
-            extension_runtime.close()
+    agent = _runtime_for_payload(workspace, payload, runtime, render=render)
+    result = agent.execute_and_persist_approved_action(
+        session_id=agent.session_id,
+        approval_token=token,
+        expected_action_id=token,
+    )
     if render:
-        console.print(result.content)
-        if result.details:
-            console.print(json.dumps(result.details, ensure_ascii=False, indent=2))
-    response = _external_approval_base_result(payload, token, "approve", result, session_id=_payload_session_id(payload))
-    return _record_and_maybe_resume(workspace, runtime, response, resume=True, render=render)
+        _render_approval_execution_result(result)
+    should_resume = bool(_payload_session_id(payload)) and result.status in {
+        ExecutePersistedActionStatus.PERSISTED,
+        ExecutePersistedActionStatus.ALREADY_PERSISTED,
+        ExecutePersistedActionStatus.FAILED,
+    }
+    events = agent.continue_() if should_resume else []
+    return _approval_result_payload(
+        result,
+        action_type=str(payload["action_type"]),
+        resumed=should_resume,
+        event_count=len(events),
+    )
 
 
 def reject_pending_action(workspace: Path, token: str, render: bool = True, *, runtime: AgentRuntime | None = None) -> dict:

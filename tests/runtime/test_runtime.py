@@ -6,7 +6,7 @@ from pp_agent.domain import ChatMessage, TextPart, ToolCall
 from pp_agent.llm import ModelConfig
 from pp_agent.runtime.events import RuntimeMonitor
 from pp_agent.runtime.hooks import AfterToolCallDecision, BeforeToolCallDecision, RuntimeHooks
-from pp_agent.runtime.runtime import AgentSession
+from pp_agent.runtime.runtime import AgentSession, ExecutePersistedActionStatus
 from pp_agent.runtime.state import AgentEvent
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.storage.sessions import (
@@ -431,6 +431,168 @@ def test_external_approval_result_records_durable_session_evidence(tmp_path: Pat
     assert result.status == SessionEvidenceLookupStatus.FOUND
     assert result.evidence is not None
     assert result.evidence.message_id == message.metadata[SESSION_MESSAGE_ID_KEY]
+
+
+def test_execute_and_persist_approved_action_returns_exact_reference(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+
+    result = agent.execute_and_persist_approved_action(
+        session_id=agent.session_id,
+        approval_token=pending["token"],
+        expected_action_id=pending["token"],
+    )
+    loaded = agent.session_store.load(agent.session_id)
+    persisted = next(
+        message
+        for message in loaded.messages
+        if message.role == "tool" and message.metadata.get(SESSION_CORRELATION_KEY, {}).get("action_id") == pending["token"]
+    )
+
+    assert result.status == ExecutePersistedActionStatus.PERSISTED
+    assert result.evidence is not None
+    assert result.evidence.session_id == agent.session_id
+    assert result.evidence.action_id == pending["token"]
+    assert result.evidence.message_id == persisted.metadata[SESSION_MESSAGE_ID_KEY]
+    assert result.evidence.result_digest == persisted.metadata[SESSION_CORRELATION_KEY]["result_digest"]
+    assert pending["token"] not in result.result
+    assert "token" not in (result.details or {})
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hi"
+    assert not any(message.metadata.get("session_validation_evidence") for message in loaded.messages)
+
+
+def test_execute_and_persist_approved_action_repeated_call_is_noop(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+    calls = 0
+    original = agent.tool_registry.host_execute
+
+    def counted(name: str, arguments: dict) -> ToolExecutionResult:
+        nonlocal calls
+        calls += 1
+        return original(name, arguments)
+
+    agent.tool_registry.host_execute = counted  # type: ignore[method-assign]
+
+    first = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+    second = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+
+    assert first.status == ExecutePersistedActionStatus.PERSISTED
+    assert second.status == ExecutePersistedActionStatus.ALREADY_PERSISTED
+    assert second.evidence is not None
+    assert second.evidence.action_id == pending["token"]
+    assert calls == 1
+
+
+def test_execute_and_persist_approved_action_consumed_missing_result_fails_closed(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+    PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").set_lifecycle(pending["token"], "grant_consumed")
+
+    result = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+
+    assert result.status == ExecutePersistedActionStatus.EXECUTION_UNCERTAIN
+    assert result.evidence is None
+    assert (tmp_path / "a.txt").exists() is False
+
+
+def test_execute_and_persist_approved_action_terminal_lifecycle_does_not_execute(tmp_path: Path) -> None:
+    for lifecycle_state, expected in [
+        ("rejected", ExecutePersistedActionStatus.REJECTED),
+        ("expired", ExecutePersistedActionStatus.EXPIRED),
+        ("execution_failed", ExecutePersistedActionStatus.FAILED),
+    ]:
+        agent = build_agent(tmp_path / lifecycle_state, NoopLLMClient(), require_plan_approval=False)
+        pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+        PendingActionStore(agent.tool_registry.workspace / ".pp-agent" / "pending-edits").set_lifecycle(
+            pending["token"],
+            lifecycle_state,
+        )
+
+        def fail_if_called(_name: str, _arguments: dict) -> ToolExecutionResult:
+            raise AssertionError("host_execute must not be called for terminal lifecycle states")
+
+        agent.tool_registry.host_execute = fail_if_called  # type: ignore[method-assign]
+
+        result = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+
+        assert result.status == expected
+        assert result.evidence is None
+        assert (agent.tool_registry.workspace / "a.txt").exists() is False
+
+
+def test_execute_and_persist_approved_action_identity_mismatch_does_not_execute(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+
+    def fail_if_called(_name: str, _arguments: dict) -> ToolExecutionResult:
+        raise AssertionError("host_execute must not be called for identity mismatch")
+
+    agent.tool_registry.host_execute = fail_if_called  # type: ignore[method-assign]
+
+    result = agent.execute_and_persist_approved_action(
+        session_id=agent.session_id,
+        approval_token=pending["token"],
+        expected_action_id="different-action",
+    )
+
+    assert result.status == ExecutePersistedActionStatus.IDENTITY_MISMATCH
+    assert (tmp_path / "a.txt").exists() is False
+
+
+def test_execute_and_persist_approved_action_persistence_failure_does_not_retry(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+    calls = 0
+    original_execute = agent.tool_registry.host_execute
+
+    def counted(name: str, arguments: dict) -> ToolExecutionResult:
+        nonlocal calls
+        calls += 1
+        return original_execute(name, arguments)
+
+    def fail_record(_payload: dict[str, object]) -> ChatMessage:
+        raise RuntimeError("boom")
+
+    agent.tool_registry.host_execute = counted  # type: ignore[method-assign]
+    agent.record_external_approval_result = fail_record  # type: ignore[method-assign]
+
+    first = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+    second = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+
+    assert first.status == ExecutePersistedActionStatus.PERSISTENCE_FAILED
+    assert second.status == ExecutePersistedActionStatus.EXECUTION_UNCERTAIN
+    assert calls == 1
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hi"
+
+
+def test_execute_and_persist_approved_action_reference_lookup_failure_does_not_retry(tmp_path: Path) -> None:
+    agent = build_agent(tmp_path, NoopLLMClient(), require_plan_approval=False)
+    pending = stage_runtime_action(agent, "write_file", {"path": "a.txt", "content": "hi"})
+    calls = 0
+    original_execute = agent.tool_registry.host_execute
+    original_lookup = agent.session_store.lookup_external_tool_result_evidence
+
+    def counted(name: str, arguments: dict) -> ToolExecutionResult:
+        nonlocal calls
+        calls += 1
+        return original_execute(name, arguments)
+
+    def ambiguous(*args, **kwargs):
+        from pp_agent.storage.sessions import SessionEvidenceLookupResult
+
+        return SessionEvidenceLookupResult(status=SessionEvidenceLookupStatus.AMBIGUOUS, reason="test_ambiguous")
+
+    agent.tool_registry.host_execute = counted  # type: ignore[method-assign]
+    agent.session_store.lookup_external_tool_result_evidence = ambiguous  # type: ignore[method-assign]
+
+    first = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+    agent.session_store.lookup_external_tool_result_evidence = original_lookup  # type: ignore[method-assign]
+    second = agent.execute_and_persist_approved_action(session_id=agent.session_id, approval_token=pending["token"])
+
+    assert first.status == ExecutePersistedActionStatus.AMBIGUOUS_CORRUPT
+    assert second.status == ExecutePersistedActionStatus.ALREADY_PERSISTED
+    assert calls == 1
 
 
 def test_continue_with_continuation_id_records_completion_after_persist(tmp_path: Path) -> None:

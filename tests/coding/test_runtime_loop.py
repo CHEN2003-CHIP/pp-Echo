@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from pp_agent.coding import (
     ControlledLoopOptions,
     ControlledToolLoopResult,
+    ValidationCommand,
+    ValidationPlan,
     collect_pending_approvals,
     controlled_loop_result_to_block,
     controlled_loop_result_to_context_item,
@@ -17,11 +19,15 @@ from pp_agent.coding import (
 )
 from pp_agent.coding.scope import TaskScope
 from pp_agent.coding.orchestrator import CodingWorkflow, prepare_coding_workflow
+from pp_agent.coding.workflow_checkpoint import CodingWorkflowPhase, PendingActionRole
+from pp_agent.coding.workflow_checkpoint_store import CodingWorkflowCheckpointStore
+from pp_agent.coding.workflow_recovery import CodingWorkflowDecision, inspect_coding_workflow
 from pp_agent.domain import ChatMessage, TextPart, ToolCall
 from pp_agent.llm import ModelConfig
-from pp_agent.runtime.runtime import AgentRuntime
+from pp_agent.runtime.runtime import AgentRuntime, ExecutePersistedActionStatus
 from pp_agent.runtime.execution_context import RuntimeExecutionContext
 from pp_agent.runtime.hooks import RuntimeHooks
+from pp_agent.sandbox.base import SandboxRunRequest, SandboxRunResult
 from pp_agent.storage.sessions import SessionStore
 from pp_agent.storage.approvals import PendingActionStore
 from pp_agent.tools.effects import build_shell_effect
@@ -94,6 +100,38 @@ class ScopedContextRecordingLLMClient:
         yield {"text": "done", "tool_calls": [], "finish_reason": "stop", "raw": {}}
 
 
+class ProvenanceWritingSandboxExecutor:
+    def __init__(self, workspace: Path, *, returncode: int = 0) -> None:
+        self.workspace = workspace
+        self.returncode = returncode
+        self.requests: list[SandboxRunRequest] = []
+
+    def run(self, request: SandboxRunRequest) -> SandboxRunResult:
+        from pp_agent.coding.pytest_provenance import write_pytest_provenance_attestation
+
+        self.requests.append(request)
+        parts = request.command.split()
+        artifact = parts[parts.index("--pp-echo-pytest-provenance-file") + 1]
+        nonce = parts[parts.index("--pp-echo-pytest-provenance-nonce") + 1]
+        digest = parts[parts.index("--pp-echo-pytest-logical-command-digest") + 1]
+        write_pytest_provenance_attestation(
+            artifact_path=self.workspace / artifact,
+            nonce=nonce,
+            logical_command_digest=digest,
+            pytest_exit_status=self.returncode,
+        )
+        return SandboxRunResult(
+            stdout="ok\n" if self.returncode == 0 else "FAILED\n",
+            stderr="",
+            returncode=self.returncode,
+            timed_out=False,
+            backend="fake",
+            sandbox_mode="test",
+            network_access=False,
+            writable_roots=[str(self.workspace)],
+        )
+
+
 def _workspace(tmp_path: Path) -> Path:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
     (tmp_path / "src" / "pp_agent" / "coding").mkdir(parents=True)
@@ -102,12 +140,12 @@ def _workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _real_runtime(workspace: Path, llm_client: ScopedContextRecordingLLMClient) -> AgentRuntime:
+def _real_runtime(workspace: Path, llm_client: ScopedContextRecordingLLMClient, *, sandbox_executor=None) -> AgentRuntime:
     store = SessionStore(workspace / "sessions")
     record = store.create("system", ModelConfig())
     runtime = AgentRuntime(
         llm_client=llm_client,
-        tool_registry=ToolRegistry(workspace),
+        tool_registry=ToolRegistry(workspace, sandbox_executor=sandbox_executor),
         session_store=store,
         session_id=record.id,
         system_prompt=record.system_prompt,
@@ -405,3 +443,145 @@ def test_controlled_loop_result_to_block(tmp_path: Path) -> None:
 
     assert block.type == "controlled_tool_loop"
     assert block.details["stop_reason"] == "completed"
+
+
+def test_controlled_loop_completion_stages_initial_validation_checkpoint(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    llm = ScopedContextRecordingLLMClient()
+    runtime = _real_runtime(workspace, llm)
+    workflow = prepare_coding_workflow("stage initial validation", workspace=workspace)
+    workflow.validation_plan = ValidationPlan(commands=[ValidationCommand(command="python -m pytest tests/coding -q")])
+    store = CodingWorkflowCheckpointStore(workspace)
+
+    result = run_controlled_coding_loop(
+        "stage initial validation",
+        runtime,
+        workspace=workspace,
+        workflow=workflow,
+        options=ControlledLoopOptions(1, True, True, True, False),
+        checkpoint_store=store,
+    )
+    checkpoint = store.load_checkpoint(result.session.id)
+
+    assert result.status == "awaiting_approval"
+    assert result.stop_reason == "validation_approval_required"
+    assert result.validation_staging is not None
+    assert result.validation_staging.status == "staged"
+    assert result.validation_staging.pending_action_ref is not None
+    assert result.validation_staging.pending_action_ref.role == PendingActionRole.VALIDATION
+    assert result.validation_staging.pending_action_ref.action_type == "run_shell"
+    assert len(result.pending_approvals) == 1
+    assert checkpoint.phase == CodingWorkflowPhase.AWAITING_VALIDATION_APPROVAL
+    assert checkpoint.validation_execution_count == 0
+    assert checkpoint.repair_attempted is False
+    assert checkpoint.revalidation_attempted is False
+    assert checkpoint.final_outcome_summary is None
+    assert checkpoint.terminal_outcome is None
+    assert llm.calls == 1
+
+
+def test_controlled_loop_does_not_stage_validation_when_ordinary_approval_pending(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    runtime = FakeRuntime(workspace)
+    _stage_shell_pending(runtime)
+    store = CodingWorkflowCheckpointStore(workspace)
+
+    result = run_controlled_coding_loop(
+        "needs approval first",
+        runtime,
+        workspace=workspace,
+        options=ControlledLoopOptions(1, True, True, True, False),
+        checkpoint_store=store,
+    )
+
+    assert result.status == "awaiting_approval"
+    assert result.validation_staging is None
+    assert store.checkpoint_exists(result.session.id) is False
+    assert len(_store := PendingActionStore(workspace / ".pp-agent" / "pending-edits").list()) == 1
+    assert _store[0]["action_type"] == "run_shell"
+
+
+def test_controlled_loop_no_validation_command_blocks_without_pending_action(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    llm = ScopedContextRecordingLLMClient()
+    runtime = _real_runtime(workspace, llm)
+    workflow = prepare_coding_workflow("no pytest", workspace=workspace)
+    workflow.validation_plan = ValidationPlan(commands=[ValidationCommand(command="cd web && npm test")])
+    store = CodingWorkflowCheckpointStore(workspace)
+
+    result = run_controlled_coding_loop(
+        "no pytest",
+        runtime,
+        workspace=workspace,
+        workflow=workflow,
+        options=ControlledLoopOptions(1, True, True, True, False),
+        checkpoint_store=store,
+    )
+
+    assert result.status == "validation_staging_blocked"
+    assert result.stop_reason == "blocked_no_command"
+    assert result.validation_staging is not None
+    assert result.validation_staging.status == "blocked_no_command"
+    assert PendingActionStore(workspace / ".pp-agent" / "pending-edits").list() == []
+    assert store.checkpoint_exists(result.session.id) is False
+
+
+def test_controlled_loop_staged_validation_is_visible_to_batch_3b_inspect(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    runtime = _real_runtime(workspace, ScopedContextRecordingLLMClient())
+    workflow = prepare_coding_workflow("inspect staged validation", workspace=workspace)
+    workflow.validation_plan = ValidationPlan(commands=[ValidationCommand(command="python -m pytest tests/coding -q")])
+    store = CodingWorkflowCheckpointStore(workspace)
+    result = run_controlled_coding_loop(
+        "inspect staged validation",
+        runtime,
+        workspace=workspace,
+        workflow=workflow,
+        options=ControlledLoopOptions(1, True, True, True, False),
+        checkpoint_store=store,
+    )
+
+    inspection = inspect_coding_workflow(
+        workspace=workspace,
+        workflow_id=result.session.id,
+        session_store=runtime.session_store,
+        checkpoint_store=store,
+    )
+
+    assert inspection.decision == CodingWorkflowDecision.AWAITING_VALIDATION_APPROVAL
+    assert inspection.action_id == result.validation_staging.approval_token  # type: ignore[union-attr]
+
+
+def test_controlled_loop_consumed_validation_result_is_ready_for_batch_3b_resume(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sandbox = ProvenanceWritingSandboxExecutor(workspace)
+    runtime = _real_runtime(workspace, ScopedContextRecordingLLMClient(), sandbox_executor=sandbox)
+    workflow = prepare_coding_workflow("consume staged validation", workspace=workspace)
+    workflow.validation_plan = ValidationPlan(commands=[ValidationCommand(command="python -m pytest tests/coding -q")])
+    store = CodingWorkflowCheckpointStore(workspace)
+    result = run_controlled_coding_loop(
+        "consume staged validation",
+        runtime,
+        workspace=workspace,
+        workflow=workflow,
+        options=ControlledLoopOptions(1, True, True, True, False),
+        checkpoint_store=store,
+    )
+    assert result.validation_staging is not None
+
+    persisted = runtime.execute_and_persist_approved_action(
+        session_id=runtime.session_id,
+        approval_token=result.validation_staging.approval_token or "",
+        expected_action_id=result.validation_staging.approval_token,
+    )
+    inspection = inspect_coding_workflow(
+        workspace=workspace,
+        workflow_id=result.session.id,
+        session_store=runtime.session_store,
+        checkpoint_store=store,
+    )
+
+    assert persisted.status == ExecutePersistedActionStatus.PERSISTED
+    assert len(sandbox.requests) == 1
+    assert inspection.decision == CodingWorkflowDecision.VALIDATION_RESULT_READY
+    assert inspection.action_id == result.validation_staging.approval_token

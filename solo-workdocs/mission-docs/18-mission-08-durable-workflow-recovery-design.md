@@ -717,9 +717,56 @@ DOCUMENTATION IMPACT DECISION: REQUIRED AND COMPLETED FOR SCHEMA V3 AND ORDINARY
 
 DOCUMENTATION DECISION: AUTHORITATIVE MISSION 08 DESIGN RETAINED; 08B, 08C, 08D-P, 08D-S, 08D-R, AND 08D-T IMPLEMENTATION RECORDS ADDED
 
+## Mission 08E Mission 07 Recovery Integration Closeout
+
+08E implements durable recovery for the existing Mission 07 bounded validation and repair lifecycle without changing Mission 07 runtime semantics.
+
+Implemented:
+
+- Initial validation staging writes schema v3 coding workflow checkpoints with selected validation command digest, validation pending action reference, and `validation_execution_count=0`.
+- Validation approval/result recovery uses PendingActionStore lifecycle plus exact SessionStore external-result evidence; consumed actions without durable evidence fail closed.
+- Validation interpretation uses `SessionEvidenceReference` and `SessionStore.lookup_external_result_details()` instead of raw `ChatMessage.metadata`.
+- Initial validation pass writes schema v3 validation terminal completion with `validation_execution_count=1`.
+- Initial validation blocked writes schema v3 validation terminal completion with blocked status and does not trigger repair.
+- Trusted pytest `tests_failed` evidence with `repair_attempted=false` makes explicit resume safe to start one repair.
+- Repair explicit resume CAS-writes `repair_attempted=true` and `REPAIR_STARTED` before the model continuation.
+- Repair continuation runs at most once and uses existing runtime continuation/session evidence; repeated resume does not retry the model.
+- Missing repair continuation completion evidence returns `REPAIR_CONTINUATION_UNCERTAIN`.
+- Repair tool approval stops at `AWAITING_REPAIR_TOOL_APPROVAL`; recovery does not approve or execute tools.
+- Repair completion without a pending tool stops at `REPAIR_COMPLETED_READY_FOR_REVALIDATION`.
+- Same-command revalidation explicit resume stages exactly one revalidation action from the original selected logical command digest.
+- Revalidation approval/result recovery uses exact session/action evidence and returns `REVALIDATION_RESULT_READY` only when durable evidence exists.
+- Final revalidation interpretation persists schema v3 validation terminal completion with `validation_execution_count=2`.
+- Revalidation pass completes as passed.
+- Revalidation trusted `tests_failed` completes as failed and does not trigger a second repair.
+- Revalidation missing/invalid provenance, infrastructure failure, or evidence persistence failure completes as blocked.
+- Completed checkpoints remain immutable and repeated completed resume has no external effect.
+
+Authority and invariant results:
+
+- Checkpoint remains the authority for workflow phase, counters, flags, and terminal outcome.
+- PendingActionStore remains the authority for staged action and approval lifecycle.
+- SessionStore remains the authority for durable external-result and continuation evidence.
+- TraceStore remains diagnostic only.
+- No schema v4 was introduced.
+- Schema v1/v2 semantics were not changed and no automatic migration was added.
+- No generic workflow engine, second runtime, second approval store, second tool state, or new dependency was added.
+- Mission 07 invariants remain: max one repair continuation, max one revalidation, max two validation executions, same validation command, no stdout/stderr semantic repair trigger, and repair only from trusted pytest `tests_failed` evidence.
+
+Technical debt:
+
+- TD-1: schema v3 does not allow `model_continuation_intent` and active `pending_action_ref` to coexist. After a repair continuation has durably produced a repair-tool pending action and checkpoint reconciliation succeeds, the checkpoint uses `pending_action_ref(role=REPAIR_TOOL)` as the current recovery authority and does not retain the continuation intent. This is accepted for 08E and does not require a schema change in Mission 08.
+- TD-2: `approve_staged_validation_cycle` remains as a compatibility alias. It no longer approves or executes anything; it delegates to the pure persisted-result interpretation path. Future cleanup may rename or remove this alias.
+
+08E closeout status:
+
+- Mission 08E functionality is implemented and ready for human review.
+- No remaining Mission 08E blockers are known.
+- Remaining Mission 08 work is outside 08E: CLI inspect/resume/cancel and doctor/release-gate integration.
+
 ## Final Design Decision
 
-Mission 08D-T is implemented and ready for human review. Mission 08E may add Mission 07 validation/repair/re-validation recovery only after schema v3 terminality and ordinary completion are accepted.
+Mission 08E is implemented and ready for human review.
 
 PRODUCTION CODE CHANGED: YES, CONTRACT, CHECKPOINT STORE, SESSION EVIDENCE, RUNTIME CORRELATION PLUMBING, CODING-OWNED EXPLICIT RESUME ORCHESTRATION, SCHEMA V3 TERMINAL OUTCOME, AND ORDINARY COMPLETION
 

@@ -2,7 +2,7 @@
 
 ## Mission 08: Durable Workflow Recovery and Idempotent Resume
 
-Status: Planning / authoritative design ready for human review; 08B/08C/08D-P/08D-S/08D-R/08D-T implemented
+Status: Planning / authoritative design ready for human review; 08B/08C/08D-P/08D-S/08D-R/08D-T/08E implemented
 
 Details:
 
@@ -36,7 +36,7 @@ Planned tasks:
 - 08D-S: SessionStore/tool-result correlation evidence integration. Status: implemented / ready for human review.
 - 08D-R: explicit approval/tool-boundary resume execution. Status: implemented / ready for human review.
 - 08D-T: generic coding workflow terminal outcome and ordinary completion. Status: implemented / ready for human review.
-- 08E: Mission 07 validation/repair recovery integration.
+- 08E: Mission 07 validation/repair recovery integration. Status: implemented / closeout ready.
 - 08F: CLI inspect/resume/cancel.
 - 08G: doctor, release gate, documentation, and closeout.
 
@@ -83,6 +83,18 @@ Hard stops:
 - V1/V2 checkpoints are not automatically migrated to v3.
 - Validation terminal contract is defined, but Mission 07 validation/repair/re-validation recovery remains not implemented.
 - CLI and doctor integration remain not implemented.
+
+08E implementation note:
+
+- Mission 07 validation/repair/re-validation recovery is implemented inside the coding-owned recovery layer.
+- Initial validation staging writes schema v3 checkpoints and safe validation pending action references without executing pytest.
+- Explicit resume interprets durable validation evidence, persists terminal validation outcomes for pass/blocked, and starts repair only from trusted pytest `tests_failed` evidence.
+- Repair resume CAS-writes `repair_attempted=true` before one model continuation and stops at repair tool approval, repair completed, uncertain, or terminal blocked.
+- Same-command revalidation resume stages one revalidation approval using the original selected logical command digest.
+- Final revalidation interpretation persists schema v3 validation terminal outcomes with `validation_execution_count=2`.
+- No second repair, no second revalidation, no schema migration, no runtime/session/CLI contract change, and no generic workflow engine were added.
+- Technical debt TD-1: schema v3 does not allow `model_continuation_intent` to coexist with an active `pending_action_ref`; after repair continuation creates a repair-tool pending action, recovery uses `pending_action_ref(role=REPAIR_TOOL)` as the current recovery authority and does not retain the continuation intent in that checkpoint.
+- Technical debt TD-2: `approve_staged_validation_cycle` remains as a compatibility alias, but it is now a pure interpretation wrapper; future cleanup may rename or remove it.
 
 ## Mission 07: Bounded Validation and Repair Loop
 

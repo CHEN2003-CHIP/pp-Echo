@@ -15,9 +15,19 @@ from pp_agent.coding import (
     stage_validation_cycle,
     validation_repair_trigger_allowed,
 )
+from pp_agent.domain import ChatMessage, TextPart
 from pp_agent.coding.pytest_provenance import write_pytest_provenance_attestation
 from pp_agent.sandbox.base import SandboxRunRequest, SandboxRunResult
 from pp_agent.storage.approvals import PendingActionStore
+from pp_agent.storage.sessions import (
+    SESSION_CORRELATION_KEY,
+    SESSION_MESSAGE_ID_KEY,
+    SessionEvidenceLookupStatus,
+    SessionEvidenceReference,
+    SessionStore,
+    build_external_tool_result_correlation,
+    build_session_result_digest,
+)
 from pp_agent.tools.registry import ToolRegistry
 
 
@@ -74,12 +84,106 @@ def _initial_cycle(tmp_path: Path, *, returncode: int = 1, write_provenance: boo
     fake = SequenceSandboxExecutor([_result(tmp_path, returncode=returncode, stdout="FAILED\n")], write_provenance=write_provenance)
     registry = ToolRegistry(tmp_path, sandbox_executor=fake)
     staged = stage_validation_cycle(_plan(), registry)
+    session_store, reference = _persisted_validation_result(
+        tmp_path,
+        staged.selection,
+        action_id=staged.approval_token or "",
+        returncode=returncode,
+        stdout="FAILED\n",
+        write_artifact=write_provenance,
+    )
     approved = approve_staged_validation_cycle(
         staged.selection,
-        registry,
-        staged.approval_token or "",
+        evidence_reference=reference,
+        session_store=session_store,
+        workspace=tmp_path,
     )
     return registry, fake, approved
+
+
+def _persisted_validation_result(
+    tmp_path: Path,
+    selection,
+    *,
+    action_id: str,
+    returncode: int,
+    stdout: str = "ok\n",
+    write_artifact: bool = True,
+) -> tuple[SessionStore, SessionEvidenceReference]:
+    from pp_agent.coding.pytest_provenance import logical_command_digest
+    from pp_agent.llm import ModelConfig
+
+    session_store = SessionStore(tmp_path / "sessions")
+    try:
+        record = session_store.load("session-1")
+    except FileNotFoundError:
+        record = session_store.create("system", ModelConfig())
+        record.metadata.id = "session-1"
+    digest = logical_command_digest(selection.normalized_command or "")
+    nonce = f"{abs(hash((action_id, returncode, stdout))) % (16**32):032x}"
+    artifact = f".pp-agent/validation-provenance/{nonce}.json"
+    result_digest = build_session_result_digest({"action_id": action_id, "returncode": returncode, "stdout": stdout})
+    message = ChatMessage(
+        role="tool",
+        tool_call_id="call-validation-result",
+        tool_name="approve_pending_action",
+        content=[TextPart(text="ok")],
+        metadata={SESSION_MESSAGE_ID_KEY: f"msg-{action_id[:20]}"},
+        timestamp=1.0,
+    )
+    message.metadata[SESSION_CORRELATION_KEY] = build_external_tool_result_correlation(
+        action_id=action_id,
+        result_digest=result_digest,
+        tool_name="approve_pending_action",
+        completed_at=1.0,
+    )
+    message.metadata["tool_details"] = {
+        "action_type": "run_shell",
+        "success": True,
+        "lifecycle": {"state": "grant_consumed"},
+        "result_details": {
+            "exit_code": returncode,
+            "stdout": stdout,
+            "stderr": "",
+            "stdout_chars": len(stdout),
+            "stderr_chars": 0,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+            "logical_command_digest": digest,
+            "pytest_provenance_request": {
+                "schema_version": 1,
+                "plugin_id": "pp_agent.coding.pytest_provenance_plugin",
+                "plugin_version": "1",
+                "nonce": nonce,
+                "logical_command_digest": digest,
+                "artifact_relative_path": artifact,
+            },
+        },
+    }
+    branch_messages = session_store.branch_messages(record, record.active_head_id)
+    record = session_store.sync_branch_state(
+        record,
+        base_head_id=record.active_head_id,
+        branch_messages=[*branch_messages, message],
+        pending_plan_token=record.pending_plan_token,
+        pending_tool_calls=record.pending_tool_calls,
+    )
+    session_store.save(record)
+    if write_artifact:
+        write_pytest_provenance_attestation(
+            artifact_path=tmp_path / artifact,
+            nonce=nonce,
+            logical_command_digest=digest,
+            pytest_exit_status=returncode,
+        )
+    try:
+        PendingActionStore(tmp_path / ".pp-agent" / "pending-edits").set_lifecycle(action_id, "grant_consumed")
+    except FileNotFoundError:
+        pass
+    lookup = session_store.lookup_external_tool_result_evidence("session-1", action_id=action_id, result_digest=result_digest)
+    assert lookup.status == SessionEvidenceLookupStatus.FOUND
+    assert lookup.evidence is not None
+    return session_store, lookup.evidence
 
 
 def _write_provenance_from_request(request: SandboxRunRequest, exit_status: int) -> None:
@@ -99,7 +203,6 @@ def _write_provenance_from_request(request: SandboxRunRequest, exit_status: int)
 
 def test_trusted_tests_failed_triggers_one_repair_and_stages_same_command_revalidation(tmp_path: Path) -> None:
     registry, fake, initial = _initial_cycle(tmp_path, returncode=1)
-    fake.results.append(_result(tmp_path, returncode=0, stdout="passed\n"))
     runtime = RepairRuntime(tmp_path)
 
     state = run_one_bounded_validation_repair_cycle(
@@ -118,9 +221,21 @@ def test_trusted_tests_failed_triggers_one_repair_and_stages_same_command_revali
     assert state.revalidation_result.selection is initial.selection
     assert state.revalidation_result.selection.normalized_command == initial.selection.normalized_command
     assert state.revalidation_result.approval_token
-    assert len(fake.requests) == 1
+    assert len(fake.requests) == 0
 
-    final = complete_revalidation_after_approval(state, registry, state.revalidation_result.approval_token or "")
+    session_store, reference = _persisted_validation_result(
+        tmp_path,
+        state.selection,
+        action_id=state.revalidation_result.approval_token or "",
+        returncode=0,
+        stdout="passed\n",
+    )
+    final = complete_revalidation_after_approval(
+        state,
+        evidence_reference=reference,
+        session_store=session_store,
+        workspace=tmp_path,
+    )
 
     assert final.status == "completed"
     assert final.final_outcome is not None
@@ -128,7 +243,7 @@ def test_trusted_tests_failed_triggers_one_repair_and_stages_same_command_revali
     assert final.final_outcome.repair_attempted is True
     assert final.final_outcome.revalidation_attempted is True
     assert final.validation_executions == 2
-    assert len(fake.requests) == 2
+    assert len(fake.requests) == 0
 
 
 @pytest.mark.parametrize("returncode", [0, 2, 3, 4, 5])
@@ -199,7 +314,7 @@ def test_repair_pending_does_not_stage_revalidation_or_call_model_twice(tmp_path
     assert state.status == "repair_pending"
     assert len(runtime.prompts) == 1
     assert state.revalidation_result is None
-    assert len(fake.requests) == 1
+    assert len(fake.requests) == 0
     assert state.final_outcome is not None
     assert state.final_outcome.final_status == "approval_pending"
     assert state.final_outcome.repair_attempted is True
@@ -220,14 +335,13 @@ def test_repair_model_failure_blocks_without_revalidation(tmp_path: Path) -> Non
     assert state.status == "repair_blocked"
     assert len(runtime.prompts) == 1
     assert state.revalidation_result is None
-    assert len(fake.requests) == 1
+    assert len(fake.requests) == 0
     assert state.final_outcome is not None
     assert state.final_outcome.final_status == "blocked"
 
 
 def test_repeated_revalidation_completion_is_idempotent_and_does_not_execute_third_time(tmp_path: Path) -> None:
     registry, fake, initial = _initial_cycle(tmp_path, returncode=1)
-    fake.results.append(_result(tmp_path, returncode=1, stdout="still failing\n"))
     runtime = RepairRuntime(tmp_path)
     state = run_one_bounded_validation_repair_cycle(
         task="fix focused failure",
@@ -236,8 +350,25 @@ def test_repeated_revalidation_completion_is_idempotent_and_does_not_execute_thi
         initial_result=initial,
     )
 
-    first = complete_revalidation_after_approval(state, registry, state.revalidation_result.approval_token or "")  # type: ignore[union-attr]
-    second = complete_revalidation_after_approval(first, registry, state.revalidation_result.approval_token or "")  # type: ignore[union-attr]
+    session_store, reference = _persisted_validation_result(
+        tmp_path,
+        state.selection,
+        action_id=state.revalidation_result.approval_token or "",  # type: ignore[union-attr]
+        returncode=1,
+        stdout="still failing\n",
+    )
+    first = complete_revalidation_after_approval(
+        state,
+        evidence_reference=reference,
+        session_store=session_store,
+        workspace=tmp_path,
+    )
+    second = complete_revalidation_after_approval(
+        first,
+        evidence_reference=reference,
+        session_store=session_store,
+        workspace=tmp_path,
+    )
 
     assert first.final_outcome is not None
     assert first.final_outcome.final_status == "failed"
@@ -245,12 +376,11 @@ def test_repeated_revalidation_completion_is_idempotent_and_does_not_execute_thi
     assert first.final_outcome.revalidation_attempted is True
     assert second.details["idempotent"] is True
     assert len(runtime.prompts) == 1
-    assert len(fake.requests) == 2
+    assert len(fake.requests) == 0
 
 
 def test_revalidation_uses_new_nonce_and_approval_but_same_logical_command(tmp_path: Path) -> None:
     registry, fake, initial = _initial_cycle(tmp_path, returncode=1)
-    fake.results.append(_result(tmp_path, returncode=0))
     runtime = RepairRuntime(tmp_path)
     state = run_one_bounded_validation_repair_cycle(
         task="fix focused failure",
@@ -263,7 +393,9 @@ def test_revalidation_uses_new_nonce_and_approval_but_same_logical_command(tmp_p
 
     assert state.revalidation_result is not None
     assert state.revalidation_result.approval_token
-    initial_command = fake.requests[0].command
+    consumed = [item for item in store.list() if (item.get("lifecycle") or {}).get("state") == "grant_consumed"]
+    assert consumed
+    initial_command = consumed[0]["command"]
     revalidation_command = store.load(state.revalidation_result.approval_token)["command"]
     assert "python -m pytest tests/coding -q" in revalidation_command
     assert initial.selection.normalized_command == state.revalidation_result.selection.normalized_command

@@ -14,6 +14,8 @@ from pp_agent.coding.orchestrator import CodingWorkflow, prepare_coding_workflow
 from pp_agent.coding.scoped_activation import ScopedInstructionActivationState
 from pp_agent.coding.scoped_instruction_context import scoped_instruction_records_to_context_items
 from pp_agent.coding.testing import ValidationPlan
+from pp_agent.coding.validation_execution import InitialValidationStagingResult, stage_initial_validation_workflow
+from pp_agent.coding.workflow_checkpoint_store import CodingWorkflowCheckpointStore
 from pp_agent.runtime.execution_context import RuntimeExecutionContext, runtime_counters_to_dict, runtime_execution_context_to_dict
 from pp_agent.runtime.hooks import AfterToolCallDecision
 
@@ -54,6 +56,7 @@ class ControlledToolLoopResult:
     timeline_blocks: list[Any] = field(default_factory=list)
     pending_approvals: list[dict[str, Any]] = field(default_factory=list)
     validation_plan: ValidationPlan | None = None
+    validation_staging: InitialValidationStagingResult | None = None
     scoped_instruction_activation_state: ScopedInstructionActivationState | None = None
     summary_text: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -82,6 +85,9 @@ def run_controlled_coding_loop(
     options: ControlledLoopOptions | None = None,
     workflow: CodingWorkflow | None = None,
     session: CodingExecutionSession | None = None,
+    checkpoint_store: CodingWorkflowCheckpointStore | None = None,
+    workflow_id: str | None = None,
+    expected_checkpoint_revision: int | None = None,
 ) -> ControlledToolLoopResult:
     """Run a finite controlled coding loop through AgentRuntime.
 
@@ -140,6 +146,27 @@ def run_controlled_coding_loop(
             status = "completed"
             stop_reason = "completed" if stop_reason == "max_turns" and resolved_options.max_model_turns <= 0 else stop_reason
 
+    validation_staging = _maybe_stage_initial_validation(
+        status=status,
+        pending_approvals=pending_approvals,
+        options=resolved_options,
+        workspace=resolved_workspace,
+        workflow_id=workflow_id or resolved_session.id,
+        runtime=runtime,
+        validation_plan=resolved_workflow.validation_plan,
+        checkpoint_store=checkpoint_store,
+        expected_revision=expected_checkpoint_revision,
+    )
+    if validation_staging is not None:
+        if validation_staging.awaiting_approval:
+            pending_approvals = collect_pending_approvals(runtime)
+            status = "awaiting_approval"
+            stop_reason = "validation_approval_required"
+        elif validation_staging.status.startswith("blocked_"):
+            status = "validation_staging_blocked"
+            stop_reason = validation_staging.status
+            warnings.append(f"Initial validation staging blocked: {validation_staging.reason}")
+
     result = ControlledToolLoopResult(
         task=normalized_task,
         status=status,
@@ -149,6 +176,7 @@ def run_controlled_coding_loop(
         timeline_blocks=[*resolved_session.timeline_blocks],
         pending_approvals=pending_approvals,
         validation_plan=resolved_workflow.validation_plan,
+        validation_staging=validation_staging,
         scoped_instruction_activation_state=activation_state,
         warnings=_unique(warnings),
     )
@@ -216,6 +244,14 @@ def controlled_loop_result_to_summary(result: ControlledToolLoopResult) -> str:
         "- Validation plan:",
     ]
     lines.extend(f"  - {command}" for command in commands) if commands else lines.append("  - None")
+    if result.validation_staging is not None:
+        lines.extend(
+            [
+                "- Validation staging:",
+                f"  - status: {result.validation_staging.status}",
+                f"  - checkpoint revision: {result.validation_staging.checkpoint_revision if result.validation_staging.checkpoint_revision is not None else 'none'}",
+            ]
+        )
     if result.warnings:
         lines.append("- Warnings:")
         lines.extend(f"  - {warning}" for warning in result.warnings)
@@ -337,6 +373,35 @@ def _stop_decision(events: list[Any], pending: list[dict[str, Any]], options: Co
     return None
 
 
+def _maybe_stage_initial_validation(
+    *,
+    status: str,
+    pending_approvals: list[dict[str, Any]],
+    options: ControlledLoopOptions,
+    workspace: Path | None,
+    workflow_id: str,
+    runtime: Any,
+    validation_plan: ValidationPlan | None,
+    checkpoint_store: CodingWorkflowCheckpointStore | None,
+    expected_revision: int | None,
+) -> InitialValidationStagingResult | None:
+    if options.dry_run or status != "completed" or pending_approvals or workspace is None or validation_plan is None:
+        return None
+    session_id = _string_or_none(getattr(runtime, "session_id", None))
+    registry = getattr(runtime, "tool_registry", None)
+    if session_id is None or registry is None:
+        return None
+    return stage_initial_validation_workflow(
+        workspace=workspace,
+        workflow_id=workflow_id,
+        session_id=session_id,
+        validation_plan=validation_plan,
+        registry=registry,
+        checkpoint_store=checkpoint_store,
+        expected_revision=expected_revision,
+    )
+
+
 def _events_contain_detail(events: list[Any], key: str) -> bool:
     for event in events:
         details = _as_mapping(getattr(event, "details", None) if not isinstance(event, dict) else event.get("details"))
@@ -420,8 +485,29 @@ def _result_details(result: ControlledToolLoopResult) -> dict[str, Any]:
         "pending_approvals_count": len(result.pending_approvals),
         "pending_approvals": list(result.pending_approvals),
         "validation_commands": [command.command for command in result.validation_plan.commands] if result.validation_plan else [],
+        "validation_staging": _validation_staging_details(result.validation_staging),
         "scoped_instruction_activation": result.scoped_instruction_activation_state.summary() if result.scoped_instruction_activation_state is not None else None,
         "warnings": list(result.warnings),
+    }
+
+
+def _validation_staging_details(result: InitialValidationStagingResult | None) -> dict[str, Any] | None:
+    if result is None:
+        return None
+    ref = result.pending_action_ref
+    selection = result.selection
+    return {
+        "status": result.status,
+        "workflow_id": result.workflow_id,
+        "session_id": result.session_id,
+        "checkpoint_revision": result.checkpoint_revision,
+        "action_id": ref.action_id if ref is not None else None,
+        "action_role": ref.role.value if ref is not None else None,
+        "action_type": ref.action_type if ref is not None else None,
+        "selected": bool(selection.selected) if selection is not None else False,
+        "selected_command_index": selection.command_index if selection is not None else None,
+        "selected_command_id": selection.command_id if selection is not None else None,
+        "reason": result.reason,
     }
 
 

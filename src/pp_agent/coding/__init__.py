@@ -97,9 +97,12 @@ from pp_agent.coding.testing import (
     validation_plan_to_dict,
 )
 from pp_agent.coding.validation_execution import (
+    InitialValidationStagingResult,
     ValidationCycleResult,
     approve_staged_validation_cycle,
+    interpret_persisted_validation_result,
     reject_staged_validation_cycle,
+    stage_initial_validation_workflow,
     stage_selected_validation_cycle,
     stage_validation_cycle,
 )
@@ -266,10 +269,12 @@ __all__ = [
     "ValidationOutcome",
     "ValidationOutcomeSummary",
     "ValidationPlan",
+    "InitialValidationStagingResult",
     "analyze_change_impact",
     "analyze_repository",
     "attach_write_scope_to_patch_candidate_args",
     "approve_staged_validation_cycle",
+    "interpret_persisted_validation_result",
     "build_validation_repair_prompt",
     "build_validation_plan",
     "build_repository_summary",
@@ -319,6 +324,7 @@ __all__ = [
     "scoped_instruction_records_to_context_items",
     "start_coding_execution_session",
     "stage_selected_validation_cycle",
+    "stage_initial_validation_workflow",
     "stage_validation_cycle",
     "task_plan_to_context_item",
     "task_plan_to_dict",
